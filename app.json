@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "Folio",
+    "slug": "folio-reader",
+    "scheme": "folio",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#fdf9f2",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.folio.reader"
+    },
+    "android": {
+      "package": "com.folio.reader",
+      "backgroundColor": "#fdf9f2",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "plugins": [
+      "expo-font",
+      "expo-web-browser",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Folio needs access to your photos so you can choose custom book covers."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "19e23a4d-6420-412c-8aac-c4645d02f019"
+      }
+    }
+  }
+}
