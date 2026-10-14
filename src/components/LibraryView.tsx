@@ -2,6 +2,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import React, { useMemo, useState } from 'react';
 import {
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,10 +11,10 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import Svg, { Circle } from 'react-native-svg';
 import { parseEpubFile } from '../lib/epubParser';
 import { persistCoverImage, savePages } from '../lib/localStore';
 import { colors, F, NAV_SPACE, type } from '../theme';
+import { AppPalette, useAppTheme } from '../AppTheme';
 import { Book, BookContentPage, ReadingGoal } from '../types';
 import { BookCover, CLOTH, ClothTint } from './BookCover';
 import { Chip } from './ui/Chip';
@@ -26,9 +27,9 @@ interface LibraryViewProps {
   readingGoal: ReadingGoal;
   globalCoverStyle: 'image' | 'typographic';
   onOpenBook: (bookId: string) => void;
-  onLogReadingTime: (mins: number) => void;
   onAddEpubBook: (book: Book, pages: BookContentPage[]) => void;
   onUpdateBookCover: (bookId: string, style: 'image' | 'typographic', url?: string) => void;
+  onRemoveBook: (bookId: string) => void;
   onChangeGlobalCoverStyle: (style: 'image' | 'typographic') => void;
   showToast: (msg: string) => void;
   bottomInset: number;
@@ -56,14 +57,16 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   readingGoal,
   globalCoverStyle,
   onOpenBook,
-  onLogReadingTime,
   onAddEpubBook,
   onUpdateBookCover,
+  onRemoveBook,
   onChangeGlobalCoverStyle,
   showToast,
   bottomInset,
 }) => {
   const { width } = useWindowDimensions();
+  const colors = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [sort, setSort] = useState<Sort>('recent');
@@ -97,10 +100,11 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     return list;
   }, [books, query, filter, sort]);
 
-  const goalPct = Math.min(
-    100,
-    Math.round((readingGoal.minutesReadToday / Math.max(1, readingGoal.dailyTargetMinutes)) * 100)
-  );
+  const readingTime = readingGoal.minutesReadToday;
+  const readingTimeLabel =
+    readingTime >= 60
+      ? `${Math.floor(readingTime / 60)}h ${readingTime % 60}m`
+      : `${readingTime} min`;
 
   const handleImport = async () => {
     if (importing) return;
@@ -128,55 +132,20 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     }
   };
 
-  const renderRing = () => {
-    const r = 22;
-    const c = 2 * Math.PI * r;
-    return (
-      <Svg width={56} height={56} viewBox="0 0 56 56">
-        <Circle cx={28} cy={28} r={r} stroke={colors.surfaceHighest} strokeWidth={5} fill="none" />
-        <Circle
-          cx={28}
-          cy={28}
-          r={r}
-          stroke={colors.primaryContainer}
-          strokeWidth={5}
-          fill="none"
-          strokeLinecap="round"
-          strokeDasharray={`${c}`}
-          strokeDashoffset={c * (1 - goalPct / 100)}
-          rotation={-90}
-          origin="28, 28"
-        />
-      </Svg>
-    );
-  };
-
   return (
     <ScrollView
       contentContainerStyle={[styles.scroll, { paddingBottom: NAV_SPACE + bottomInset }]}
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
     >
-      {/* Daily goal */}
+      {/* Today's reading time */}
       <View style={styles.goalCard}>
-        <View style={styles.ringWrap}>
-          {renderRing()}
-          <View style={styles.ringLabel}>
-            <Text style={styles.ringPct}>{goalPct}%</Text>
-          </View>
+        <View style={styles.readingTimeIcon}>
+          <Icon name="schedule" size={25} color={colors.primary} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.goalTitle}>Today’s reading</Text>
-          <Text style={styles.goalSub}>
-            {readingGoal.minutesReadToday} of {readingGoal.dailyTargetMinutes} minutes
-          </Text>
-          <View style={styles.logRow}>
-            {[5, 15, 30].map((m) => (
-              <Pressable key={m} onPress={() => onLogReadingTime(m)} style={styles.logBtn}>
-                <Text style={styles.logText}>+{m}m</Text>
-              </Pressable>
-            ))}
-          </View>
+          <Text style={styles.goalSub}>{readingTimeLabel} read today</Text>
         </View>
       </View>
 
@@ -297,7 +266,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       ) : (
         <View style={styles.grid}>
           {visible.map((b) => (
-            <Pressable key={b.id} onPress={() => onOpenBook(b.id)} style={{ width: cardWidth }}>
+            <Pressable
+              key={b.id}
+              onPress={() => onOpenBook(b.id)}
+              onLongPress={() => setEditing(b)}
+              delayLongPress={400}
+              style={{ width: cardWidth }}
+            >
               <BookCover
                 book={b}
                 style={b.coverStyle || globalCoverStyle}
@@ -332,6 +307,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             showToast('Book thumbnail updated');
             setEditing(null);
           }}
+          onRemove={() => {
+            onRemoveBook(editing.id);
+            setEditing(null);
+          }}
         />
       )}
     </ScrollView>
@@ -346,13 +325,27 @@ const CoverEditor: React.FC<{
   globalStyle: 'image' | 'typographic';
   onClose: () => void;
   onSave: (style: 'image' | 'typographic', url?: string) => void;
-}> = ({ book, globalStyle, onClose, onSave }) => {
+  onRemove: () => void;
+}> = ({ book, globalStyle, onClose, onSave, onRemove }) => {
+  const colors = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [style, setStyle] = useState<'image' | 'typographic'>(book.coverStyle || globalStyle);
   const [url, setUrl] = useState(book.coverUrl?.startsWith('http') ? book.coverUrl : '');
   const [pickedUri, setPickedUri] = useState<string | undefined>(undefined);
   const [tint, setTint] = useState<ClothTint>('parchment');
 
   const previewUri = pickedUri ?? (url.trim() || book.coverUrl);
+
+  const confirmRemove = () => {
+    Alert.alert(
+      'Remove book?',
+      `“${book.title}” and its saved pages, highlights, and vocabulary cards will be removed from this app and the connected Supabase database.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Remove', style: 'destructive', onPress: onRemove },
+      ]
+    );
+  };
 
   const choosePhoto = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -442,12 +435,16 @@ const CoverEditor: React.FC<{
         <Pressable onPress={() => onSave(style, style === 'image' ? previewUri : undefined)} style={styles.saveBtn}>
           <Text style={styles.saveText}>Apply</Text>
         </Pressable>
+        <Pressable onPress={confirmRemove} style={styles.removeBtn}>
+          <Icon name="delete_outline" size={18} color={colors.danger} />
+          <Text style={styles.removeText}>Remove Book</Text>
+        </Pressable>
       </ScrollView>
     </ModalShell>
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors: AppPalette) => StyleSheet.create({
   scroll: { paddingTop: 4, gap: 18 },
   goalCard: {
     flexDirection: 'row',
@@ -459,15 +456,16 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.borderSoft,
   },
-  ringWrap: { width: 56, height: 56 },
-  ringLabel: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
-  ringPct: { fontFamily: F.sansBold, fontSize: 12, color: colors.onSurface },
+  readingTimeIcon: {
+    width: 56,
+    height: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 28,
+    backgroundColor: colors.primaryFixed,
+  },
   goalTitle: { ...type.headlineSm, fontSize: 19, lineHeight: 24, color: colors.onSurface },
   goalSub: { ...type.bodySm, color: colors.muted, marginTop: 2 },
-  logRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
-  logBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999, backgroundColor: colors.primaryFixed },
-  logText: { ...type.labelMd, color: colors.primary },
-
   sectionLabel: { ...type.labelSm, color: colors.muted, marginBottom: 8, letterSpacing: 1 },
   featured: {
     flexDirection: 'row',
@@ -486,7 +484,7 @@ const styles = StyleSheet.create({
   continueBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.primary,
+    backgroundColor: colors.primaryContainer,
     paddingLeft: 12,
     paddingRight: 6,
     paddingVertical: 6,
@@ -516,7 +514,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderStyle: 'dashed',
     borderColor: 'rgba(137,52,20,0.4)',
-    backgroundColor: 'rgba(255,219,207,0.25)',
+    backgroundColor: colors.primaryFixed,
   },
   importText: { ...type.labelLg, color: colors.primary },
 
@@ -576,6 +574,16 @@ const styles = StyleSheet.create({
   photoText: { ...type.labelMd, color: colors.primary },
   tintRow: { flexDirection: 'row', justifyContent: 'center', gap: 14 },
   tint: { width: 38, height: 38, borderRadius: 19, borderWidth: 1, borderColor: colors.border },
-  saveBtn: { backgroundColor: colors.primary, paddingVertical: 12, borderRadius: 12, alignItems: 'center' },
+  saveBtn: { backgroundColor: colors.primaryContainer, paddingVertical: 12, borderRadius: 12, alignItems: 'center' },
   saveText: { ...type.labelLg, color: '#fff' },
+  removeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceContainer,
+  },
+  removeText: { ...type.labelMd, color: colors.danger },
 });

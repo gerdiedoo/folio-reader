@@ -1,8 +1,9 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { FOLIO_LOGO_URL, USER_AVATAR_URL } from '../data/initialData';
+import { FOLIO_LOGO_URL } from '../data/initialData';
 import { colors, type } from '../theme';
+import { useAppTheme } from '../AppTheme';
 import { TabType } from '../types';
 import { Icon } from './ui/Icon';
 
@@ -37,6 +38,7 @@ export const Header: React.FC<HeaderProps> = ({
   userAvatar,
 }) => {
   const insets = useSafeAreaInsets();
+  const palette = useAppTheme();
   const total = HEADER_HEIGHT + insets.top;
   const anim = useRef(new Animated.Value(visible ? 0 : 1)).current;
 
@@ -50,7 +52,17 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <Animated.View
       pointerEvents={visible ? 'auto' : 'none'}
-      style={[styles.header, { paddingTop: insets.top, height: total, opacity, transform: [{ translateY }] }]}
+      style={[
+        styles.header,
+        {
+          backgroundColor: palette.surface,
+          borderBottomColor: palette.borderSoft,
+          paddingTop: insets.top,
+          height: total,
+          opacity,
+          transform: [{ translateY }],
+        },
+      ]}
     >
       <View style={styles.row}>
         <View style={styles.left}>
@@ -60,15 +72,15 @@ export const Header: React.FC<HeaderProps> = ({
               accessibilityLabel="Back to Library"
               style={styles.backBtn}
             >
-              <Icon name="arrow_back" size={24} color={colors.onSurface} />
+              <Icon name="arrow_back" size={24} color={palette.onSurface} />
             </Pressable>
           )}
 
           <Pressable onPress={() => onTabChange('library')} style={styles.brand}>
             <Image source={{ uri: FOLIO_LOGO_URL }} style={styles.logo} resizeMode="contain" />
             <View style={{ flexShrink: 1 }}>
-              <Text style={styles.brandLabel}>FOLIO</Text>
-              <Text style={styles.title} numberOfLines={1}>
+              <Text style={[styles.brandLabel, { color: palette.muted }]}>FOLIO</Text>
+              <Text style={[styles.title, { color: palette.onSurface }]} numberOfLines={1}>
                 {TITLES[activeTab]}
               </Text>
             </View>
@@ -80,22 +92,26 @@ export const Header: React.FC<HeaderProps> = ({
             <Pressable
               onPress={onToggleBookmark}
               accessibilityLabel="Bookmark page"
-              style={[styles.iconBtn, isBookmarked && { backgroundColor: 'rgba(255,219,207,0.5)' }]}
+              style={[styles.iconBtn, isBookmarked && { backgroundColor: palette.primaryFixed }]}
             >
               <Icon
                 name={isBookmarked ? 'bookmark' : 'bookmark_border'}
                 size={22}
-                color={isBookmarked ? colors.primary : colors.muted}
+                color={isBookmarked ? palette.primary : palette.muted}
               />
             </Pressable>
           ) : (
             <Pressable onPress={onOpenSearch} accessibilityLabel="Search Archive" style={styles.iconBtn}>
-              <Icon name="search" size={22} color={colors.muted} />
+              <Icon name="search" size={22} color={palette.muted} />
             </Pressable>
           )}
 
           <Pressable onPress={onOpenProfile} accessibilityLabel="Reader Profile" style={styles.iconBtn}>
-            <Image source={{ uri: userAvatar || USER_AVATAR_URL }} style={styles.avatar} />
+            {userAvatar ? (
+              <Image source={{ uri: userAvatar }} style={styles.avatar} />
+            ) : (
+              <Icon name="account_circle" size={32} color={palette.muted} />
+            )}
           </Pressable>
         </View>
       </View>

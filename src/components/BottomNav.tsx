@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, type } from '../theme';
+import { type } from '../theme';
+import { useAppTheme } from '../AppTheme';
 import { TabType } from '../types';
 import { Icon, IconName } from './ui/Icon';
 
@@ -20,6 +21,7 @@ const TABS: { id: TabType; label: string; icon: IconName }[] = [
 
 export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, onTabChange, visible = true }) => {
   const insets = useSafeAreaInsets();
+  const palette = useAppTheme();
   const anim = useRef(new Animated.Value(visible ? 0 : 1)).current;
 
   useEffect(() => {
@@ -34,7 +36,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, onTabChange, vi
       pointerEvents={visible ? 'box-none' : 'none'}
       style={[styles.wrap, { bottom: 20 + insets.bottom, opacity, transform: [{ translateY }] }]}
     >
-      <View style={styles.nav}>
+      <View style={[styles.nav, { backgroundColor: palette.surface, borderColor: palette.border }]}>
         {TABS.map((tab) => {
           const isActive = activeTab === tab.id;
           return (
@@ -44,14 +46,14 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, onTabChange, vi
               accessibilityState={{ selected: isActive }}
               style={styles.tab}
             >
-              <Icon name={tab.icon} size={20} color={isActive ? colors.primaryContainer : colors.muted} />
-              <Text style={[styles.label, { color: isActive ? colors.primaryContainer : colors.muted }]}>
+              <Icon name={tab.icon} size={20} color={isActive ? palette.primary : palette.muted} />
+              <Text style={[styles.label, { color: isActive ? palette.primary : palette.muted }]}>
                 {tab.label}
               </Text>
               <View
                 style={[
                   styles.dot,
-                  { backgroundColor: isActive ? colors.primaryContainer : 'transparent' },
+                  { backgroundColor: isActive ? palette.primary : 'transparent' },
                 ]}
               />
             </Pressable>
@@ -72,7 +74,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(253,249,242,0.96)',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(220,193,184,0.5)',
-    borderRadius: 999,
+    borderRadius: 18,
     paddingHorizontal: 6,
     paddingVertical: 4,
     elevation: 10,

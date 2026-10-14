@@ -4,6 +4,7 @@
     "slug": "folio-reader",
     "scheme": "folio",
     "version": "1.0.0",
+    "icon": "./assets/folio-logo.png",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "backgroundColor": "#fdf9f2",

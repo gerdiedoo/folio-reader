@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { colors, F, type } from '../theme';
+import { F, type } from '../theme';
+import { AppPalette, useAppTheme } from '../AppTheme';
 import { Book, HighlightEntry, LexiconEntry } from '../types';
 import { Icon } from './ui/Icon';
 import { ModalShell } from './ui/ModalShell';
@@ -22,6 +23,8 @@ export const SearchModal: React.FC<SearchModalProps> = ({
   onSelectBook,
   onSelectHighlight,
 }) => {
+  const colors = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [query, setQuery] = useState('');
   const q = query.toLowerCase();
 
@@ -155,7 +158,7 @@ export const SearchModal: React.FC<SearchModalProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors: AppPalette) => StyleSheet.create({
   top: {
     padding: 14,
     backgroundColor: colors.surfaceLow,

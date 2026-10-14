@@ -2,7 +2,7 @@ import * as Clipboard from 'expo-clipboard';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as Speech from 'expo-speech';
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   SUPABASE_SQL_SCHEMA,
@@ -12,6 +12,7 @@ import {
   upsertLexiconToSupabase,
 } from '../lib/supabase';
 import { colors, F, NAV_SPACE, type } from '../theme';
+import { AppPalette, useAppTheme } from '../AppTheme';
 import { Book, HighlightEntry, LexiconEntry } from '../types';
 import { HIGHLIGHT_COLORS } from './PassageSheet';
 import { Chip } from './ui/Chip';
@@ -45,6 +46,8 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   showToast,
   bottomInset,
 }) => {
+  const colors = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [selectedBookId, setSelectedBookId] = useState<string>('all');
   const [isBookPickerOpen, setIsBookPickerOpen] = useState(false);
   const [activeFilter, setActiveFilter] = useState<NotebookFilter>('all');
@@ -372,7 +375,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
         <View key={lex.id} style={styles.card}>
           <View style={styles.cardTop}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 }}>
-              <View style={[styles.tag, { backgroundColor: 'rgba(255,221,182,0.5)' }]}>
+              <View style={[styles.tag, { backgroundColor: colors.primaryFixed }]}>
                 <Icon name="translate" size={13} color={colors.tertiary} />
                 <Text style={styles.tagText}>Lexicon Card</Text>
               </View>
@@ -432,7 +435,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
         </Pressable>
 
         <View style={{ flexDirection: 'row', gap: 10 }}>
-          <Pressable onPress={handleExportAll} style={[styles.hubBtn, { backgroundColor: colors.primary }]}>
+          <Pressable onPress={handleExportAll} style={[styles.hubBtn, { backgroundColor: colors.primaryContainer }]}>
             <Icon name="output" size={18} color="#fff" />
             <Text style={[styles.hubBtnText, { color: '#fff' }]}>Export All ({bookHighlights.length})</Text>
           </Pressable>
@@ -541,7 +544,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
                 <Icon name="content_copy" size={17} color={colors.primary} />
                 <Text style={[styles.hubBtnText, { color: colors.onSurface }]}>Copy SQL</Text>
               </Pressable>
-              <Pressable onPress={() => setIsSchemaOpen(false)} style={[styles.hubBtn, { backgroundColor: colors.primary }]}>
+              <Pressable onPress={() => setIsSchemaOpen(false)} style={[styles.hubBtn, { backgroundColor: colors.primaryContainer }]}>
                 <Text style={[styles.hubBtnText, { color: '#fff' }]}>Done</Text>
               </Pressable>
             </View>
@@ -552,7 +555,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors: AppPalette) => StyleSheet.create({
   scroll: { gap: 16, paddingTop: 4 },
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   title: { ...type.headlineLg, color: colors.onSurface },
@@ -560,7 +563,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: colors.primary,
+    backgroundColor: colors.primaryContainer,
     paddingHorizontal: 14,
     paddingVertical: 9,
     borderRadius: 999,
@@ -653,7 +656,7 @@ const styles = StyleSheet.create({
   },
   noteActions: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginTop: 8 },
   cancel: { fontFamily: F.sans, fontSize: 12, color: colors.muted },
-  saveNote: { backgroundColor: colors.primary, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },
+  saveNote: { backgroundColor: colors.primaryContainer, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },
   saveNoteText: { fontFamily: F.sansSemi, fontSize: 12, color: '#fff' },
   addNote: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12 },
   addNoteText: { fontFamily: F.sans, fontSize: 12, color: colors.muted },
@@ -705,7 +708,7 @@ const styles = StyleSheet.create({
   hubHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   hubTitle: { ...type.headlineSm, fontSize: 18, lineHeight: 22, color: colors.onSurface },
   hubBody: { ...type.bodySm, lineHeight: 18, color: colors.muted },
-  configBtn: { alignSelf: 'flex-start', backgroundColor: 'rgba(255,219,207,0.5)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
+  configBtn: { alignSelf: 'flex-start', backgroundColor: colors.primaryFixed, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
   configText: { fontFamily: F.sansSemi, fontSize: 11, color: colors.primary },
   hubBtn: {
     flex: 1,

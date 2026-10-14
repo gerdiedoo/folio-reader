@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
-import { colors } from '../../theme';
+import { useAppTheme } from '../../AppTheme';
 
 interface ProgressBarProps {
   percent: number;
@@ -13,20 +13,23 @@ interface ProgressBarProps {
 export const ProgressBar: React.FC<ProgressBarProps> = ({
   percent,
   height = 4,
-  fill = colors.primaryContainer,
-  track = colors.surfaceHighest,
+  fill,
+  track,
   style,
-}) => (
-  <View style={[{ height, borderRadius: height, backgroundColor: track, overflow: 'hidden' }, style]}>
-    <View
-      style={{
-        height: '100%',
-        width: `${Math.max(0, Math.min(100, percent))}%`,
-        backgroundColor: fill,
-        borderRadius: height,
-      }}
-    />
-  </View>
-);
+}) => {
+  const palette = useAppTheme();
+  return (
+    <View style={[{ height, borderRadius: height, backgroundColor: track ?? palette.surfaceHighest, overflow: 'hidden' }, style]}>
+      <View
+        style={{
+          height: '100%',
+          width: `${Math.max(0, Math.min(100, percent))}%`,
+          backgroundColor: fill ?? palette.primary,
+          borderRadius: height,
+        }}
+      />
+    </View>
+  );
+};
 
 export const hairline = StyleSheet.hairlineWidth;

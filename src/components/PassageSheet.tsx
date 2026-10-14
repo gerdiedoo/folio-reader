@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors, F, type } from '../theme';
+import { AppPalette, useAppTheme } from '../AppTheme';
 import { HighlightColorName, HighlightEntry } from '../types';
 import { Icon } from './ui/Icon';
 import { ModalShell } from './ui/ModalShell';
@@ -48,6 +49,8 @@ export const PassageSheet: React.FC<PassageSheetProps> = ({
   onCopy,
   onDelete,
 }) => {
+  const colors = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const tokens = useMemo<Token[]>(() => {
     const out: Token[] = [];
     const re = /\S+/g;
@@ -207,22 +210,26 @@ const ActionButton: React.FC<{
   disabled?: boolean;
   active?: boolean;
   danger?: boolean;
-}> = ({ icon, label, onPress, disabled, active, danger }) => (
-  <Pressable
-    onPress={onPress}
-    disabled={disabled}
-    style={[
-      styles.action,
-      active && { backgroundColor: colors.primaryFixed },
-      disabled && { opacity: 0.4 },
-    ]}
-  >
-    <Icon name={icon} size={20} color={danger ? colors.danger : colors.primary} />
-    <Text style={[styles.actionLabel, danger && { color: colors.danger }]}>{label}</Text>
-  </Pressable>
-);
+}> = ({ icon, label, onPress, disabled, active, danger }) => {
+  const colors = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      style={[
+        styles.action,
+        active && { backgroundColor: colors.primaryFixed },
+        disabled && { opacity: 0.4 },
+      ]}
+    >
+      <Icon name={icon} size={20} color={danger ? colors.danger : colors.primary} />
+      <Text style={[styles.actionLabel, danger && { color: colors.danger }]}>{label}</Text>
+    </Pressable>
+  );
+};
 
-const styles = StyleSheet.create({
+const createStyles = (colors: AppPalette) => StyleSheet.create({
   handle: {
     width: 40,
     height: 6,
@@ -281,6 +288,6 @@ const styles = StyleSheet.create({
   },
   noteButtons: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 8 },
   cancel: { fontFamily: F.sans, fontSize: 12, color: colors.muted },
-  saveNote: { backgroundColor: colors.primary, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8 },
+  saveNote: { backgroundColor: colors.primaryContainer, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8 },
   saveNoteText: { fontFamily: F.sansSemi, fontSize: 12, color: '#fff' },
 });

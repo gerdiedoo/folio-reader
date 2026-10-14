@@ -18,10 +18,11 @@ WebBrowser.maybeCompleteAuthSession();
 
 export const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 const SUPABASE_KEY = process.env.EXPO_PUBLIC_SUPABASE_KEY ?? '';
+const hasSupabaseConfig = Boolean(SUPABASE_URL && SUPABASE_KEY);
 
-if (!SUPABASE_URL || !SUPABASE_KEY) {
+if (!hasSupabaseConfig) {
   console.warn(
-    'Supabase env vars missing. Copy .env.example to .env and restart with `npx expo start -c`.'
+    'Supabase env vars missing. Configure EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_KEY for this EAS build environment.'
   );
 }
 
@@ -49,6 +50,12 @@ export function getAuthRedirectUrl(): string {
  * in-app browser session and exchange the returned PKCE code for a session.
  */
 export async function signInWithGoogle(): Promise<void> {
+  if (!hasSupabaseConfig) {
+    throw new Error(
+      'Supabase is not configured in this app build. Add EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_KEY to the EAS preview environment, then rebuild.'
+    );
+  }
+
   const redirectTo = getAuthRedirectUrl();
 
   const { data, error } = await supabase.auth.signInWithOAuth({
@@ -288,6 +295,22 @@ export async function upsertBookToSupabase(book: Book): Promise<boolean> {
     return logIfError('book upsert', error);
   } catch (err) {
     console.warn('Supabase book upsert failed:', err);
+    return false;
+  }
+}
+
+export async function deleteBookFromSupabase(bookId: string): Promise<boolean> {
+  try {
+    const { error: highlightsError } = await supabase.from('highlights').delete().eq('book_id', bookId);
+    if (!logIfError('book highlights delete', highlightsError)) return false;
+
+    const { error: lexiconError } = await supabase.from('lexicon').delete().eq('book_id', bookId);
+    if (!logIfError('book lexicon delete', lexiconError)) return false;
+
+    const { error: bookError } = await supabase.from('books').delete().eq('id', bookId);
+    return logIfError('book delete', bookError);
+  } catch (err) {
+    console.warn('Supabase book delete failed:', err);
     return false;
   }
 }

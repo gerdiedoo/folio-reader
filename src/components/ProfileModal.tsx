@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
-import { DEFAULT_PROFILE, USER_AVATAR_URL } from '../data/initialData';
 import { getAuthRedirectUrl, SUPABASE_URL } from '../lib/supabase';
 import { colors, F, type } from '../theme';
+import { AppPalette, useAppTheme } from '../AppTheme';
 import { ReadingGoal, UserProfile } from '../types';
 import { Icon } from './ui/Icon';
 import { ModalShell } from './ui/ModalShell';
@@ -48,6 +48,8 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   onSignOut,
   showToast,
 }) => {
+  const colors = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
 
@@ -91,14 +93,20 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       <ScrollView>
         <View style={styles.userCard}>
           <View style={{ marginBottom: 12 }}>
-            <Image source={{ uri: user?.avatarUrl || USER_AVATAR_URL }} style={styles.avatar} />
+            {user?.avatarUrl ? (
+              <Image source={{ uri: user.avatarUrl }} style={styles.avatar} />
+            ) : (
+              <View style={styles.guestAvatar}>
+                <Icon name="account_circle" size={64} color={colors.muted} />
+              </View>
+            )}
             <View style={[styles.statusDot, { backgroundColor: user ? colors.emerald : colors.primary }]}>
               <Text style={styles.statusText}>{user ? '✓' : '•'}</Text>
             </View>
           </View>
 
-          <Text style={styles.name}>{user?.fullName || DEFAULT_PROFILE.fullName}</Text>
-          <Text style={styles.email}>{user?.email || DEFAULT_PROFILE.email}</Text>
+          <Text style={styles.name}>{user?.fullName || 'Guest'}</Text>
+          <Text style={styles.email}>{user?.email || 'Not signed in'}</Text>
 
           {user ? (
             <View style={styles.authRow}>
@@ -206,7 +214,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                     onUpdateDailyTarget(mins);
                     showToast(`Daily target set to ${mins} mins`);
                   }}
-                  style={[styles.minBtn, { backgroundColor: active ? colors.primary : colors.surfaceContainer }]}
+                  style={[styles.minBtn, { backgroundColor: active ? colors.primaryContainer : colors.surfaceContainer }]}
                 >
                   <Text style={[styles.minText, { color: active ? '#fff' : colors.muted }]}>{mins}m</Text>
                 </Pressable>
@@ -229,7 +237,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors: AppPalette) => StyleSheet.create({
   header: {
     padding: 16,
     backgroundColor: colors.surfaceLow,
@@ -248,7 +256,15 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.borderSoft,
   },
-  avatar: { width: 64, height: 64, borderRadius: 32, borderWidth: 2, borderColor: 'rgba(137,52,20,0.3)' },
+  avatar: { width: 64, height: 64, borderRadius: 32, borderWidth: 2, borderColor: colors.border },
+  guestAvatar: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceLow,
+  },
   statusDot: {
     position: 'absolute',
     bottom: 0,
@@ -257,7 +273,7 @@ const styles = StyleSheet.create({
     height: 16,
     borderRadius: 8,
     borderWidth: 2,
-    borderColor: '#fff',
+    borderColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -269,22 +285,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: 'rgba(209,250,229,0.7)',
+    backgroundColor: colors.surfaceContainer,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(110,231,183,0.6)',
+    borderColor: colors.border,
     paddingHorizontal: 10,
     paddingVertical: 2,
     borderRadius: 999,
   },
   authDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.emerald },
-  authBadgeText: { fontFamily: F.sansSemi, fontSize: 11, color: '#065f46' },
+  authBadgeText: { fontFamily: F.sansSemi, fontSize: 11, color: colors.emerald },
   signOut: { fontFamily: F.sansMedium, fontSize: 11, color: colors.primary },
   googleBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 10,
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 12,
@@ -296,7 +312,7 @@ const styles = StyleSheet.create({
   helpText: { fontFamily: F.sansMedium, fontSize: 11, color: colors.primary },
   guide: {
     padding: 16,
-    backgroundColor: '#f4eee4',
+    backgroundColor: colors.surfaceContainer,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
     gap: 6,
@@ -304,19 +320,19 @@ const styles = StyleSheet.create({
   guideHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   guideTitle: { fontFamily: F.sansSemi, fontSize: 12, color: colors.primary },
   guideIntro: { fontFamily: F.sans, fontSize: 11, lineHeight: 16, color: colors.muted },
-  step: { fontFamily: F.sansSemi, fontSize: 11, color: '#2e2c29', marginTop: 4 },
+  step: { fontFamily: F.sansSemi, fontSize: 11, color: colors.onSurface, marginTop: 4 },
   stepBody: { fontFamily: F.sans, fontSize: 10.5, lineHeight: 15, color: colors.muted },
   code: {
     fontFamily: F.mono,
     fontSize: 10,
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     padding: 6,
     borderRadius: 4,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
     color: colors.onSurface,
   },
-  stats: { padding: 16, flexDirection: 'row', gap: 12, backgroundColor: 'rgba(247,243,236,0.6)' },
+  stats: { padding: 16, flexDirection: 'row', gap: 12, backgroundColor: colors.surfaceLow },
   statCard: {
     flex: 1,
     padding: 12,
@@ -349,6 +365,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  doneBtn: { backgroundColor: colors.primary, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 12 },
+  doneBtn: { backgroundColor: colors.primaryContainer, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 12 },
   doneText: { fontFamily: F.sansSemi, fontSize: 12, color: '#fff' },
 });

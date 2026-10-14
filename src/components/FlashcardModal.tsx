@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, F, type } from '../theme';
+import { AppPalette, useAppTheme } from '../AppTheme';
 import { LexiconEntry } from '../types';
 import { Icon } from './ui/Icon';
 import { ModalShell } from './ui/ModalShell';
@@ -18,6 +19,8 @@ export const FlashcardModal: React.FC<FlashcardModalProps> = ({
   onUpdateMastery,
   showToast,
 }) => {
+  const colors = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [isFlipped, setIsFlipped] = useState(false);
 
   const handleRate = (level: number) => {
@@ -76,7 +79,7 @@ export const FlashcardModal: React.FC<FlashcardModalProps> = ({
           <Pressable onPress={() => handleRate(3)} style={styles.rateBtn}>
             <Text style={[styles.rateText, { color: colors.tertiary }]}>Good (3)</Text>
           </Pressable>
-          <Pressable onPress={() => handleRate(5)} style={[styles.rateBtn, { backgroundColor: colors.primary }]}>
+          <Pressable onPress={() => handleRate(5)} style={[styles.rateBtn, { backgroundColor: colors.primaryContainer }]}>
             <Text style={[styles.rateText, { color: '#fff' }]}>Mastered (5)</Text>
           </Pressable>
         </View>
@@ -85,7 +88,7 @@ export const FlashcardModal: React.FC<FlashcardModalProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors: AppPalette) => StyleSheet.create({
   header: {
     padding: 14,
     backgroundColor: colors.surfaceLow,
@@ -100,7 +103,7 @@ const styles = StyleSheet.create({
   closeBtn: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   cardBody: { padding: 24, minHeight: 260, justifyContent: 'center' },
   front: { alignItems: 'center', gap: 12 },
-  promptTag: { backgroundColor: 'rgba(255,219,207,0.5)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
+  promptTag: { backgroundColor: colors.primaryFixed, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
   promptText: { fontFamily: F.sansSemi, fontSize: 11, letterSpacing: 1.4, color: colors.primary },
   word: { fontFamily: F.serifMedium, fontSize: 32, lineHeight: 40, color: colors.onSurface, textAlign: 'center' },
   phonetic: { fontFamily: F.sans, fontSize: 14, color: colors.muted, fontStyle: 'italic' },

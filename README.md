@@ -16,13 +16,17 @@ works in Expo Go; no custom native code.
 
 ## Supabase setup
 
-1. Run the SQL from **Notebook → Supabase Config → Copy SQL** in the Supabase SQL editor.
+1. Run [`supabase/schema.sql`](./supabase/schema.sql) in the Supabase SQL editor, or copy the
+   same SQL from **Notebook → Supabase Config → Copy SQL** in the app.
    (The original script was missing `books.cover_style` and `reading_settings.default_cover_style`,
    so book and settings upserts were failing silently. This version adds both, plus `ALTER`s.)
-2. Google sign-in: Supabase → Authentication → URL Configuration → **Redirect URLs**, add:
+2. For EAS preview builds, add `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_KEY` to the
+   EAS **preview** environment. These `EXPO_PUBLIC_` values are bundled into the app; use the
+   project URL and publishable/anon key, never a `service_role` key. Then rebuild the APK.
+3. Google sign-in: Supabase → Authentication → URL Configuration → **Redirect URLs**, add:
    - `folio://auth-callback` (dev/production builds)
    - the `exp://…/--/auth-callback` URL shown in the app's profile → setup guide (Expo Go)
-3. Enable the Google provider as described in that same guide.
+4. Enable the Google provider as described in that same guide.
 
 ## What changed from the web version
 
@@ -42,18 +46,21 @@ works in Expo Go; no custom native code.
 ## Behaviour fixes made along the way
 
 - Highlights, lexicon, books, settings and goal are cached locally (AsyncStorage) and merged with Supabase on launch.
-- Imported EPUBs survive app restarts (previously the text lived only in memory).
+- Imported EPUBs survive app restarts (previously the text lived only in memory); importing adds them to the Library without automatically opening the Reader.
+- Books can be removed from Library via **Customize Thumbnail → Remove Book**; confirming removes the saved pages, highlights, and vocabulary cards locally and from Supabase.
 - Odd paragraph counts no longer duplicate the last paragraph on a page.
 - Toasts show on every tab (they were only visible in the reader).
 - Dictionary uses dictionaryapi.dev for words outside the 4 built-in entries instead of showing a fake definition; saved cards are filed under the current book (was hard-coded to `remains-of-the-day`).
 - Notebook defaults to "All Books" (it defaulted to a mock book id, so real highlights were hidden).
 - "Sync to Supabase" now actually pushes books/highlights/vocabulary.
-- Continuous mode tracks the visible page (Loc / minutes left update), and "Jump to Reader" lands on the right page.
+- “Today’s reading” tracks foreground time while the reader is visible and resets at local midnight.
+- Continuous mode tracks the visible page (Loc / minutes left update), saves per-book reading position locally and to Supabase, and "Jump to Reader" lands on the right page.
 - The straight-line (RSVP/tape) reader, unused in the web app, is reachable from the reader's "Line" mode.
 
 ## Things to know
 
-- `SHOW_SUGGESTED_HIGHLIGHT` in `ReaderView.tsx` toggles the auto-highlighted first words on each second paragraph (a leftover from the mock).
-- `src/data/initialData.ts` still holds the fallback profile name/email shown while signed out (`DEFAULT_PROFILE`).
+- Imported book text is displayed without mock/suggested highlights; only highlights you save are marked in the reader.
+- Signed-out profile and account surfaces show a Guest identity until the user signs in.
+- The selected reading theme (Parchment, White, Sepia, or Charcoal) is applied across app screens, navigation, and dialogs.
 - All tables use a shared `default_user` row / no RLS, so every install of the same Supabase project sees the same data. Add a `user_id` column and Row Level Security before shipping.
-- No app icon / splash assets are included; add them to `app.json` before building for stores.
+- `assets/folio-logo.svg` is the source logo; Expo uses its 1024×1024 PNG export as the app icon.

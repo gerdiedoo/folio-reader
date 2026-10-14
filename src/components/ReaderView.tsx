@@ -4,6 +4,7 @@ import {
   FlatList,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  PanResponder,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -35,6 +36,7 @@ export interface JumpTarget {
 interface ReaderViewProps {
   currentBook?: Book;
   customPages?: BookContentPage[];
+  onUpdateReadingPosition: (bookId: string, page: BookContentPage, totalPages: number) => void;
   settings: ReadingSettings;
   onUpdateSettings: (partial: Partial<ReadingSettings>) => void;
   onOpenSettingsSheet: () => void;
@@ -46,6 +48,7 @@ interface ReaderViewProps {
   isBookmarked: boolean;
   onToggleBookmark: () => void;
   isNavVisible: boolean;
+  isImmersiveMode: boolean;
   onToggleNavVisibility: () => void;
   setNavVisibility: (visible: boolean) => void;
   showToast: (msg: string) => void;
@@ -53,12 +56,6 @@ interface ReaderViewProps {
   /** Space to leave at the bottom (floating tab bar). */
   bottomSpace: number;
 }
-
-/**
- * The importer marks the first words of every second paragraph as a "suggested"
- * highlight (a leftover from the design mock). Flip to false to hide them.
- */
-const SHOW_SUGGESTED_HIGHLIGHT = true;
 
 const MARGINS = { narrow: 14, regular: 20, wide: 30 } as const;
 const LINE_MULT = { compact: 1.45, standard: 1.7, loose: 2.0 } as const;
@@ -72,14 +69,9 @@ interface Seg {
   start: number;
   end: number;
   hl?: HighlightEntry;
-  suggested?: boolean;
 }
 
-function buildSegments(
-  full: string,
-  hls: HighlightEntry[],
-  suggested?: { start: number; end: number } | null
-): Seg[] {
+function buildSegments(full: string, hls: HighlightEntry[]): Seg[] {
   const ranges: Seg[] = [];
   const seen = new Set<string>();
   for (const h of hls) {
@@ -97,16 +89,12 @@ function buildSegments(
     result.push(r);
     cursor = r.end;
   }
-  if (suggested && !result.some((r) => r.start < suggested.end && r.end > suggested.start)) {
-    result.push({ start: suggested.start, end: suggested.end, suggested: true });
-  }
   return result.sort((a, b) => a.start - b.start);
 }
 
 interface ParagraphProps {
   full: string;
   hls: HighlightEntry[];
-  suggested?: { start: number; end: number } | null;
   dropCap?: boolean;
   indent?: boolean;
   textStyle: object;
@@ -116,8 +104,8 @@ interface ParagraphProps {
 }
 
 const Paragraph = React.memo<ParagraphProps>(
-  ({ full, hls, suggested, dropCap, indent, textStyle, dropStyle, onTap, onOpen }) => {
-    const segs = useMemo(() => buildSegments(full, hls, suggested), [full, hls, suggested]);
+  ({ full, hls, dropCap, indent, textStyle, dropStyle, onTap, onOpen }) => {
+    const segs = useMemo(() => buildSegments(full, hls), [full, hls]);
 
     const pieces: React.ReactNode[] = [];
     let cursor = 0;
@@ -202,16 +190,6 @@ const PageBlock = React.memo<PageBlockProps>(
   ({ page, showChapterHeader, hls, textStyle, dropStyle, fg, accent, onTap, onOpen }) => {
     const p1 = page.dropCap + page.paragraph1;
     const p2 = page.paragraph2Lead + page.highlightedText + page.paragraph2Rest;
-    const suggested = useMemo(
-      () =>
-        SHOW_SUGGESTED_HIGHLIGHT && page.highlightedText
-          ? {
-              start: page.paragraph2Lead.length,
-              end: page.paragraph2Lead.length + page.highlightedText.length,
-            }
-          : null,
-      [page]
-    );
 
     const open = useCallback(
       (full: string, existing?: HighlightEntry | null, initial?: string) =>
@@ -243,7 +221,6 @@ const PageBlock = React.memo<PageBlockProps>(
             <Paragraph
               full={p2}
               hls={hls}
-              suggested={suggested}
               indent
               textStyle={textStyle}
               dropStyle={dropStyle}
@@ -253,7 +230,6 @@ const PageBlock = React.memo<PageBlockProps>(
           </View>
         )}
 
-        <Text style={[styles.folio, { color: fg }]}>{page.folioNumber}</Text>
       </View>
     );
   }
@@ -265,6 +241,7 @@ const PageBlock = React.memo<PageBlockProps>(
 export const ReaderView: React.FC<ReaderViewProps> = ({
   currentBook,
   customPages,
+  onUpdateReadingPosition,
   settings,
   onUpdateSettings,
   onOpenSettingsSheet,
@@ -276,6 +253,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   isBookmarked,
   onToggleBookmark,
   isNavVisible,
+  isImmersiveMode,
   onToggleNavVisibility,
   setNavVisibility,
   showToast,
@@ -284,16 +262,22 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 }) => {
   const pages = useMemo<BookContentPage[]>(
     () => customPages ?? (currentBook ? BOOK_PAGES[currentBook.id] : undefined) ?? [],
-    [customPages, currentBook]
+    [customPages, currentBook?.id]
   );
+  const getSavedPageIndex = () => {
+    if (!pages.length) return 0;
+    const savedIndex = pages.findIndex((p) => p.pageNumber === currentBook?.currentPage);
+    return savedIndex >= 0
+      ? savedIndex
+      : Math.max(0, Math.min(pages.length - 1, (currentBook?.currentPage ?? 1) - 1));
+  };
 
   const flowMode: ReadingFlowMode = settings.readingFlowMode || 'continuous';
   const paper = readerPaper[settings.theme];
   const isDark = settings.theme === 'charcoal';
   const accent = isDark ? colors.primaryFixedDim : colors.primary;
 
-  const [pageIndex, setPageIndex] = useState(0);
-  const [progress, setProgress] = useState(0);
+  const [pageIndex, setPageIndex] = useState(getSavedPageIndex);
   const [menuOpen, setMenuOpen] = useState(false);
   const [typesetOpen, setTypesetOpen] = useState(false);
   const [sheet, setSheet] = useState<{
@@ -308,17 +292,54 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const lastY = useRef(0);
   const navShown = useRef(isNavVisible);
   navShown.current = isNavVisible;
-  const lastPct = useRef(-1);
 
   // reset when a different book is opened
   const bookId = currentBook?.id;
   useEffect(() => {
-    setPageIndex(0);
-    setProgress(0);
+    const savedIndex = getSavedPageIndex();
+    setPageIndex(savedIndex);
     lastY.current = 0;
+    if (flowMode === 'continuous') {
+      const timer = setTimeout(() => {
+        listRef.current?.scrollToIndex({ index: savedIndex, animated: false });
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId]);
 
   const page = pages[Math.min(pageIndex, Math.max(0, pages.length - 1))];
+  const updatePageIndex = useCallback(
+    (index: number) => {
+      const nextIndex = Math.max(0, Math.min(pages.length - 1, index));
+      setPageIndex(nextIndex);
+      const nextPage = pages[nextIndex];
+      if (bookId && nextPage) {
+        onUpdateReadingPosition(bookId, nextPage, pages.length);
+      }
+    },
+    [bookId, onUpdateReadingPosition, pages]
+  );
+  const updatePageIndexRef = useRef(updatePageIndex);
+  updatePageIndexRef.current = updatePageIndex;
+  const pageIndexRef = useRef(pageIndex);
+  pageIndexRef.current = pageIndex;
+  const flowModeRef = useRef(flowMode);
+  flowModeRef.current = flowMode;
+  const pageSwipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gesture) =>
+          flowModeRef.current === 'paginated' &&
+          Math.abs(gesture.dx) > 12 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2,
+        onPanResponderRelease: (_, gesture) => {
+          if (Math.abs(gesture.dx) < 50) return;
+          updatePageIndexRef.current(pageIndexRef.current + (gesture.dx < 0 ? 1 : -1));
+        },
+      }),
+    []
+  );
   const bookHighlights = useMemo(
     () => highlights.filter((h) => h.bookId === bookId),
     [highlights, bookId]
@@ -354,9 +375,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   useEffect(() => {
     if (!jumpTarget || jumpTarget.bookId !== bookId || pages.length === 0) return;
     const idx = Math.max(0, pages.findIndex((p) => p.pageNumber === jumpTarget.page));
-    setPageIndex(idx);
+    updatePageIndex(idx);
     if (flowMode === 'continuous') {
-      setTimeout(() => listRef.current?.scrollToIndex({ index: idx, animated: false }), 50);
+      setTimeout(() => {
+        listRef.current?.scrollToIndex({ index: idx, animated: false });
+      }, 0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jumpTarget?.nonce]);
@@ -366,38 +389,25 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     if (flowMode === 'paginated') scrollRef.current?.scrollTo({ y: 0, animated: false });
   }, [pageIndex, flowMode]);
 
-  // switching back to continuous: restore position
-  useEffect(() => {
-    if (flowMode === 'continuous' && pageIndex > 0) {
-      setTimeout(() => listRef.current?.scrollToIndex({ index: pageIndex, animated: false }), 80);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flowMode]);
-
   // ---- scroll handling (progress + immersive nav) ----
   const handleScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-      const y = contentOffset.y;
-      const max = Math.max(1, contentSize.height - layoutMeasurement.height);
-      const pct = Math.round(Math.max(0, Math.min(1, y / max)) * 100);
-      if (pct !== lastPct.current) {
-        lastPct.current = pct;
-        if (flowMode === 'continuous') setProgress(pct);
-      }
+      const y = e.nativeEvent.contentOffset.y;
 
       const dy = y - lastY.current;
-      if (dy > 14 && y > 60 && navShown.current) setNavVisibility(false);
-      else if ((dy < -18 || y < 20) && !navShown.current) setNavVisibility(true);
+      if (!isImmersiveMode) {
+        if (dy > 14 && y > 60 && navShown.current) setNavVisibility(false);
+        else if ((dy < -18 || y < 20) && !navShown.current) setNavVisibility(true);
+      }
       lastY.current = y;
     },
-    [flowMode, setNavVisibility]
+    [isImmersiveMode, setNavVisibility]
   );
 
   const viewConfig = useRef({ itemVisiblePercentThreshold: 25 }).current;
   const onViewable = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
     const first = viewableItems.find((v) => v.index != null);
-    if (first && first.index != null) setPageIndex(first.index);
+    if (first && first.index != null) updatePageIndexRef.current(first.index);
   }).current;
 
   // ---- passage sheet ----
@@ -461,6 +471,68 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     closeSheet();
   };
 
+  const handleTap = useCallback(() => {
+    if (isNavVisible || isImmersiveMode) onToggleNavVisibility();
+    else setNavVisibility(true);
+  }, [isImmersiveMode, isNavVisible, onToggleNavVisibility, setNavVisibility]);
+  const renderPage = useCallback(
+    (p: BookContentPage, idx: number) => (
+      <PageBlock
+        page={p}
+        showChapterHeader={
+          flowMode === 'paginated' ||
+          idx === 0 ||
+          pages[idx - 1].chapterNumber !== p.chapterNumber
+        }
+        hls={bookHighlights}
+        textStyle={textStyle}
+        dropStyle={dropStyle}
+        fg={paper.fg}
+        accent={accent}
+        onTap={handleTap}
+        onOpen={openSheet}
+      />
+    ),
+    [accent, bookHighlights, dropStyle, flowMode, handleTap, openSheet, pages, paper.fg, textStyle]
+  );
+  const renderListItem = useCallback(
+    ({ item, index }: { item: BookContentPage; index: number }) => renderPage(item, index),
+    [renderPage]
+  );
+  const keyExtractor = useCallback((_: BookContentPage, index: number) => String(index), []);
+  const handleScrollToIndexFailed = useCallback(
+    (info: { index: number; averageItemLength: number }) => {
+      listRef.current?.scrollToOffset({
+        offset: info.averageItemLength * info.index,
+        animated: false,
+      });
+      setTimeout(() => {
+        listRef.current?.scrollToIndex({ index: info.index, animated: false });
+      }, 120);
+    },
+    []
+  );
+  const listContentStyle = useMemo(
+    () => ({ paddingHorizontal: hPad, paddingTop: 24, paddingBottom: 32 }),
+    [hPad]
+  );
+  const chapterText = useMemo(
+    () =>
+      page
+        ? pages
+            .filter((p) => p.chapterNumber === page.chapterNumber)
+            .map(
+              (p) =>
+                p.dropCap +
+                p.paragraph1 +
+                ' ' +
+                (p.paragraph2Lead + p.highlightedText + p.paragraph2Rest)
+            )
+            .join(' ')
+        : '',
+    [page?.chapterNumber, pages]
+  );
+
   // ---- empty states ----
   if (!currentBook) {
     return (
@@ -485,14 +557,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   }
 
   const paginatedPercent = Math.round(((pageIndex + 1) / pages.length) * 100);
-  const percent = flowMode === 'continuous' ? progress : paginatedPercent;
-
-  const chapterText = pages
-    .filter((p) => p.chapterNumber === page.chapterNumber)
-    .map((p) => p.dropCap + p.paragraph1 + ' ' + (p.paragraph2Lead + p.highlightedText + p.paragraph2Rest))
-    .join(' ');
-
-  const handleTap = () => onToggleNavVisibility();
+  const percent = Math.max(0, Math.min(100, paginatedPercent));
 
   const flowOptions: { id: ReadingFlowMode; label: string; icon: React.ComponentProps<typeof Icon>['name'] }[] = [
     { id: 'continuous', label: 'Scroll', icon: 'unfold_more' },
@@ -506,20 +571,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     { id: 'sepia', bg: '#f7ecd7' },
     { id: 'charcoal', bg: '#23221e' },
   ];
-
-  const renderPage = (p: BookContentPage, idx: number) => (
-    <PageBlock
-      page={p}
-      showChapterHeader={flowMode === 'paginated' || idx === 0 || pages[idx - 1].chapterNumber !== p.chapterNumber}
-      hls={bookHighlights}
-      textStyle={textStyle}
-      dropStyle={dropStyle}
-      fg={paper.fg}
-      accent={accent}
-      onTap={handleTap}
-      onOpen={openSheet}
-    />
-  );
 
   return (
     <View style={styles.root}>
@@ -667,9 +718,9 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           <FlatList
             ref={listRef}
             data={pages}
-            keyExtractor={(_, i) => String(i)}
-            renderItem={({ item, index }) => renderPage(item, index)}
-            contentContainerStyle={{ paddingHorizontal: hPad, paddingTop: 24, paddingBottom: 32 }}
+            keyExtractor={keyExtractor}
+            renderItem={renderListItem}
+            contentContainerStyle={listContentStyle}
             onScroll={handleScroll}
             scrollEventThrottle={32}
             onViewableItemsChanged={onViewable}
@@ -677,17 +728,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             initialNumToRender={3}
             maxToRenderPerBatch={4}
             windowSize={7}
-            onScrollToIndexFailed={(info) => {
-              listRef.current?.scrollToOffset({
-                offset: info.averageItemLength * info.index,
-                animated: false,
-              });
-              setTimeout(() => listRef.current?.scrollToIndex({ index: info.index, animated: false }), 120);
-            }}
+            onScrollToIndexFailed={handleScrollToIndexFailed}
             showsVerticalScrollIndicator={false}
           />
         ) : (
-          <>
+          <View style={{ flex: 1 }} {...pageSwipeResponder.panHandlers}>
             <ScrollView
               ref={scrollRef}
               onScroll={handleScroll}
@@ -699,7 +744,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             </ScrollView>
             <View style={styles.pager}>
               <Pressable
-                onPress={() => setPageIndex((i) => Math.max(0, i - 1))}
+                onPress={() => updatePageIndex(pageIndex - 1)}
                 disabled={pageIndex === 0}
                 style={[styles.pagerBtn, pageIndex === 0 && { opacity: 0.35 }]}
               >
@@ -710,7 +755,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                 {pageIndex + 1} / {pages.length}
               </Text>
               <Pressable
-                onPress={() => setPageIndex((i) => Math.min(pages.length - 1, i + 1))}
+                onPress={() => updatePageIndex(pageIndex + 1)}
                 disabled={pageIndex >= pages.length - 1}
                 style={[styles.pagerBtn, pageIndex >= pages.length - 1 && { opacity: 0.35 }]}
               >
@@ -718,12 +763,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                 <Icon name="chevron_right" size={22} color={colors.onSurface} />
               </Pressable>
             </View>
-          </>
+          </View>
         )}
       </View>
 
       {/* Footer */}
-      <View style={[styles.footer, { paddingBottom: isNavVisible ? bottomSpace : 8 }]}>
+      <View style={[styles.footer, { paddingBottom: bottomSpace }]}>
         <ProgressBar percent={percent} height={4} />
         <View style={styles.footerRow}>
           <Text style={styles.footerText}>
@@ -783,7 +828,13 @@ const styles = StyleSheet.create({
   hudChapter: { ...type.bodySm, color: colors.muted },
   hudActions: { flexDirection: 'row', alignItems: 'center' },
   hudBtn: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  hudSlim: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 4 },
+  hudSlim: {
+    minHeight: 89,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: 4,
+  },
   flowRow: { flexDirection: 'row', backgroundColor: colors.surfaceContainer, padding: 3, borderRadius: 12, gap: 3 },
   flowBtn: {
     flex: 1,
@@ -840,8 +891,6 @@ const styles = StyleSheet.create({
   chapterNo: { fontFamily: F.sansSemi, fontSize: 11, letterSpacing: 2 },
   chapterTitle: { fontFamily: F.serifMedium, fontSize: 26, lineHeight: 32, textAlign: 'center' },
   rule: { width: 36, height: 2, opacity: 0.4, marginTop: 4 },
-  folio: { textAlign: 'center', fontFamily: F.serifItalic, fontSize: 12, opacity: 0.45, marginTop: 16 },
-
   pager: {
     flexDirection: 'row',
     alignItems: 'center',

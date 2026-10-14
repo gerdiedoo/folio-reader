@@ -1,7 +1,8 @@
 import * as Speech from 'expo-speech';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors, F, type } from '../theme';
+import { AppPalette, useAppTheme } from '../AppTheme';
 import { LexiconEntry } from '../types';
 import { Icon } from './ui/Icon';
 import { ModalShell } from './ui/ModalShell';
@@ -110,6 +111,8 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
   onSaveToLexicon,
   showToast,
 }) => {
+  const colors = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [searchTerm, setSearchTerm] = useState(initialWord);
   const [lookup, setLookup] = useState<LookupState>({ status: 'idle' });
   const key = searchTerm.toLowerCase().trim();
@@ -261,7 +264,7 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors: AppPalette) => StyleSheet.create({
   header: {
     padding: 16,
     backgroundColor: colors.surfaceLow,
@@ -294,7 +297,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: 'rgba(255,219,207,0.6)',
+    backgroundColor: colors.primaryFixed,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -326,7 +329,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: colors.primary,
+    backgroundColor: colors.primaryContainer,
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 12,

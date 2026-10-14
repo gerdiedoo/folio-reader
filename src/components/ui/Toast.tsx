@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
 import { colors, type } from '../../theme';
+import { useAppTheme } from '../../AppTheme';
 import { Icon } from './Icon';
 
 interface ToastProps {
@@ -10,6 +11,7 @@ interface ToastProps {
 
 /** Floating confirmation pill. Replaces the reader-only "ambient toast" so every tab can use it. */
 export const Toast: React.FC<ToastProps> = ({ message, bottom }) => {
+  const palette = useAppTheme();
   const opacity = useRef(new Animated.Value(0)).current;
   const [shown, setShown] = useState('');
 
@@ -24,9 +26,9 @@ export const Toast: React.FC<ToastProps> = ({ message, bottom }) => {
 
   return (
     <Animated.View pointerEvents="none" style={[styles.wrap, { bottom, opacity }]}>
-      <View style={styles.pill}>
-        <Icon name="check_circle" size={14} color={colors.tertiaryFixed} />
-        <Text style={styles.text} numberOfLines={2}>
+      <View style={[styles.pill, { backgroundColor: palette.onSurface }]}>
+        <Icon name="check_circle" size={14} color={palette.tertiary} />
+        <Text style={[styles.text, { color: palette.background }]} numberOfLines={2}>
           {shown}
         </Text>
       </View>

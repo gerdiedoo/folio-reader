@@ -49,6 +49,20 @@ export function savePages(bookId: string, pages: BookContentPage[]): void {
   }
 }
 
+export function removeBookFiles(bookId: string, coverUrl?: string): void {
+  try {
+    const pagesFile = new File(Paths.document, 'folio', 'pages', `${bookId}.json`);
+    if (pagesFile.exists) pagesFile.delete();
+
+    if (coverUrl?.startsWith('file://') && coverUrl.includes(`/custom-${bookId}-`)) {
+      const coverFile = new File(coverUrl);
+      if (coverFile.exists) coverFile.delete();
+    }
+  } catch (err) {
+    console.warn(`Failed to remove local files for book ${bookId}:`, err);
+  }
+}
+
 export async function loadPages(bookId: string): Promise<BookContentPage[] | null> {
   try {
     const file = new File(Paths.document, 'folio', 'pages', `${bookId}.json`);

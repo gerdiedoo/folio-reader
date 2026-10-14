@@ -14,7 +14,7 @@ import {
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, AppState, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomNav } from './src/components/BottomNav';
 import { DictionaryModal } from './src/components/DictionaryModal';
@@ -34,8 +34,9 @@ import {
   INITIAL_LEXICON,
   INITIAL_SETTINGS,
 } from './src/data/initialData';
-import { loadJSON, loadPages, saveJSON } from './src/lib/localStore';
+import { loadJSON, loadPages, removeBookFiles, saveJSON } from './src/lib/localStore';
 import {
+  deleteBookFromSupabase,
   deleteHighlightFromSupabase,
   fetchBooksFromSupabase,
   fetchHighlightsFromSupabase,
@@ -54,6 +55,7 @@ import {
   upsertReadingSettingsToSupabase,
 } from './src/lib/supabase';
 import { colors, NAV_SPACE } from './src/theme';
+import { AppThemeProvider, createPalette } from './src/AppTheme';
 import {
   Book,
   BookContentPage,
@@ -64,6 +66,13 @@ import {
   TabType,
   UserProfile,
 } from './src/types';
+
+function getLocalDateKey(): string {
+  const today = new Date();
+  const month = String(today.getMonth() + 1).padStart(2, '0');
+  const day = String(today.getDate()).padStart(2, '0');
+  return `${today.getFullYear()}-${month}-${day}`;
+}
 
 function FolioApp() {
   const insets = useSafeAreaInsets();
@@ -82,8 +91,12 @@ function FolioApp() {
 
   // Navigation visibility (auto-hides while reading & scrolling)
   const [isNavVisible, setIsNavVisible] = useState(true);
+  const [isImmersiveMode, setIsImmersiveMode] = useState(false);
   useEffect(() => {
-    if (activeTab !== 'reading') setIsNavVisible(true);
+    if (activeTab !== 'reading') {
+      setIsNavVisible(true);
+      setIsImmersiveMode(false);
+    }
   }, [activeTab]);
 
   // Modal / overlay state
@@ -100,10 +113,21 @@ function FolioApp() {
   // Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const readingPositionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const readingGoalRef = useRef(readingGoal);
+  readingGoalRef.current = readingGoal;
+  const readingDayKeyRef = useRef('');
+  const readingSecondsRef = useRef(0);
+  const reportedReadingMinutesRef = useRef(0);
+  const lastReadingTickRef = useRef<number | null>(null);
   const showToast = useCallback((message: string) => {
     setToastMessage(message);
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToastMessage(null), 2400);
+  }, []);
+  const handleToggleNavVisibility = useCallback(() => {
+    setIsNavVisible((prev) => !prev);
+    setIsImmersiveMode((prev) => !prev);
   }, []);
 
   // ---- Local-first hydration, then Supabase merge, then auth listener ----
@@ -111,12 +135,13 @@ function FolioApp() {
     let cancelled = false;
 
     (async () => {
-      const [lBooks, lSettings, lGoal, lHighlights, lLexicon] = await Promise.all([
+      const [lBooks, lSettings, lGoal, lHighlights, lLexicon, lReadingDay] = await Promise.all([
         loadJSON<Book[]>('books'),
         loadJSON<ReadingSettings>('settings'),
         loadJSON<ReadingGoal>('goal'),
         loadJSON<HighlightEntry[]>('highlights'),
         loadJSON<LexiconEntry[]>('lexicon'),
+        loadJSON<string>('readingDay'),
       ]);
       if (cancelled) return;
 
@@ -140,6 +165,7 @@ function FolioApp() {
       if (lBooks?.length) setCurrentBookId(lBooks[0].id);
 
       // Remote data (cloud wins for items it has, local-only items are kept)
+      let mergedGoal = lGoal ?? INITIAL_GOAL;
       try {
         const [sbBooks, sbHighlights, sbLexicon, sbGoal, sbSettings] = await Promise.all([
           fetchBooksFromSupabase(),
@@ -164,13 +190,27 @@ function FolioApp() {
         }
         if (sbHighlights?.length) setHighlights(sbHighlights);
         if (sbLexicon?.length) setLexicon(sbLexicon);
-        if (sbGoal) setReadingGoal(sbGoal);
+        if (sbGoal) {
+          mergedGoal = sbGoal;
+          setReadingGoal(sbGoal);
+        }
         if (sbSettings) setSettings((prev) => ({ ...prev, ...sbSettings }));
       } catch (err) {
         console.warn('Initial Supabase fetch note:', err);
       }
 
-      if (!cancelled) setHydrated(true);
+      if (!cancelled) {
+        const todayKey = getLocalDateKey();
+        readingDayKeyRef.current = todayKey;
+        await saveJSON('readingDay', todayKey);
+        if (lReadingDay !== todayKey) {
+          const resetGoal = { ...mergedGoal, minutesReadToday: 0 };
+          readingGoalRef.current = resetGoal;
+          setReadingGoal(resetGoal);
+          void upsertReadingGoalToSupabase(resetGoal);
+        }
+        setHydrated(true);
+      }
     })();
 
     getCurrentSupabaseUser().then((u) => {
@@ -181,7 +221,9 @@ function FolioApp() {
       if (session?.user) {
         const profile = toUserProfile(session.user);
         setUser(profile);
-        if (event === 'SIGNED_IN') showToast(`Signed in as ${profile.email ?? profile.fullName}`);
+        if (event === 'SIGNED_IN') {
+          showToast(`Signed in as ${profile?.email ?? profile?.fullName ?? 'your account'}`);
+        }
       } else {
         setUser(null);
       }
@@ -210,6 +252,89 @@ function FolioApp() {
     if (hydrated) saveJSON('lexicon', lexicon);
   }, [lexicon, hydrated]);
 
+  // Count only foreground time while the reader is visible; persist each full minute.
+  useEffect(() => {
+    if (!hydrated) return;
+
+    const tick = () => {
+      const readerVisible =
+        activeTab === 'reading' &&
+        !!currentBookId &&
+        !!customPagesMap[currentBookId]?.length &&
+        !isProfileOpen &&
+        !isSearchOpen &&
+        !isSettingsSheetOpen &&
+        !dictionaryState.isOpen &&
+        !flashcardItem;
+      if (AppState.currentState !== 'active' || !readerVisible) {
+        lastReadingTickRef.current = null;
+        return;
+      }
+
+      const now = Date.now();
+      const todayKey = getLocalDateKey();
+      if (readingDayKeyRef.current !== todayKey) {
+        readingDayKeyRef.current = todayKey;
+        readingSecondsRef.current = 0;
+        reportedReadingMinutesRef.current = 0;
+        void saveJSON('readingDay', todayKey);
+        const resetGoal = { ...readingGoalRef.current, minutesReadToday: 0 };
+        readingGoalRef.current = resetGoal;
+        setReadingGoal(resetGoal);
+        void upsertReadingGoalToSupabase(resetGoal);
+        lastReadingTickRef.current = now;
+        return;
+      }
+
+      if (lastReadingTickRef.current === null) {
+        lastReadingTickRef.current = now;
+        return;
+      }
+
+      readingSecondsRef.current += Math.max(0, now - lastReadingTickRef.current) / 1000;
+      lastReadingTickRef.current = now;
+      const totalMinutes = Math.floor(readingSecondsRef.current / 60);
+      const newlyReadMinutes = totalMinutes - reportedReadingMinutesRef.current;
+      if (newlyReadMinutes <= 0) return;
+
+      reportedReadingMinutesRef.current = totalMinutes;
+      const updatedGoal = {
+        ...readingGoalRef.current,
+        minutesReadToday: readingGoalRef.current.minutesReadToday + newlyReadMinutes,
+      };
+      readingGoalRef.current = updatedGoal;
+      setReadingGoal(updatedGoal);
+      void upsertReadingGoalToSupabase(updatedGoal);
+    };
+
+    tick();
+    const interval = setInterval(tick, 10_000);
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') {
+        lastReadingTickRef.current = null;
+      } else {
+        tick();
+      }
+    });
+
+    return () => {
+      tick();
+      clearInterval(interval);
+      appStateSubscription.remove();
+      lastReadingTickRef.current = null;
+    };
+  }, [
+    activeTab,
+    currentBookId,
+    customPagesMap,
+    dictionaryState.isOpen,
+    flashcardItem,
+    hydrated,
+    isProfileOpen,
+    isSearchOpen,
+    isSettingsSheetOpen,
+  ]);
+
   // ---- Auth ----
   const handleGoogleSignIn = async () => {
     await signInWithGoogle();
@@ -229,18 +354,35 @@ function FolioApp() {
     if (book) showToast(`Resumed "${book.title}"`);
   };
 
+  const handleUpdateReadingPosition = useCallback(
+    (bookId: string, page: BookContentPage, totalPages: number) => {
+      const book = books.find((item) => item.id === bookId);
+      if (!book || book.currentPage === page.pageNumber) return;
+
+      const updatedBook: Book = {
+        ...book,
+        currentPage: page.pageNumber,
+        currentChapter: page.chapterNumber,
+        currentLoc: page.locNumber,
+        progressPercent: Math.round((page.pageNumber / Math.max(1, totalPages)) * 100),
+      };
+      const updatedBooks = books.map((item) => (item.id === bookId ? updatedBook : item));
+      setBooks(updatedBooks);
+      void saveJSON('books', updatedBooks);
+
+      if (readingPositionTimer.current) clearTimeout(readingPositionTimer.current);
+      readingPositionTimer.current = setTimeout(() => {
+        void upsertBookToSupabase(updatedBook);
+      }, 750);
+    },
+    [books]
+  );
+
   const handleJumpToReader = (bookId: string, pageNumber: number) => {
     setCurrentBookId(bookId);
     setJumpTarget({ bookId, page: pageNumber, nonce: Date.now() });
     setActiveTab('reading');
     showToast(`Jumped to Page ${pageNumber}`);
-  };
-
-  const handleLogReadingTime = (mins: number) => {
-    const updated = { ...readingGoal, minutesReadToday: readingGoal.minutesReadToday + mins };
-    setReadingGoal(updated);
-    upsertReadingGoalToSupabase(updated);
-    showToast(`Logged +${mins}m reading time`);
   };
 
   const handleUpdateSettings = (partial: Partial<ReadingSettings>) => {
@@ -295,10 +437,8 @@ function FolioApp() {
   const handleAddEpubBook = (newBook: Book, newPages: BookContentPage[]) => {
     setBooks((prev) => [newBook, ...prev]);
     setCustomPagesMap((prev) => ({ ...prev, [newBook.id]: newPages }));
-    setCurrentBookId(newBook.id);
-    setActiveTab('reading');
     upsertBookToSupabase(newBook);
-    showToast(`Loaded "${newBook.title}" into Reader`);
+    showToast(`Added "${newBook.title}" to your Library`);
   };
 
   const handleUpdateBookCover = (bookId: string, coverStyle: 'image' | 'typographic', newCoverUrl?: string) => {
@@ -313,6 +453,30 @@ function FolioApp() {
     upsertBookToSupabase(updated);
   };
 
+  const handleRemoveBook = async (bookId: string) => {
+    const book = books.find((item) => item.id === bookId);
+    if (!book) return;
+
+    const remainingBooks = books.filter((item) => item.id !== bookId);
+    setBooks(remainingBooks);
+    setHighlights((prev) => prev.filter((item) => item.bookId !== bookId));
+    setLexicon((prev) => prev.filter((item) => item.bookId !== bookId));
+    setCustomPagesMap((prev) => {
+      const remainingPages = { ...prev };
+      delete remainingPages[bookId];
+      return remainingPages;
+    });
+    if (currentBookId === bookId) setCurrentBookId(remainingBooks[0]?.id ?? '');
+    removeBookFiles(bookId, book.coverUrl);
+
+    const removedFromCloud = await deleteBookFromSupabase(bookId);
+    showToast(
+      removedFromCloud
+        ? `"${book.title}" and its notes were removed`
+        : `"${book.title}" removed locally; cloud cleanup failed`
+    );
+  };
+
   const saveSettingsFromSheet = (newSettings: ReadingSettings, message: string) => {
     setSettings(newSettings);
     upsertReadingSettingsToSupabase(newSettings);
@@ -321,13 +485,14 @@ function FolioApp() {
 
   // ---- Layout ----
   const reading = activeTab === 'reading';
-  const immersive = reading && !isNavVisible;
-  const topPad = immersive ? insets.top + 8 : insets.top + HEADER_HEIGHT + 4;
+  const topPad = insets.top + HEADER_HEIGHT + 4;
   const bottomSpace = NAV_SPACE + insets.bottom;
+  const palette = createPalette(settings.theme);
 
   return (
-    <View style={styles.app}>
-      <StatusBar style="dark" />
+    <AppThemeProvider theme={settings.theme}>
+    <View style={[styles.app, { backgroundColor: palette.background }]}>
+      <StatusBar style={settings.theme === 'charcoal' ? 'light' : 'dark'} />
 
       <Header
         activeTab={activeTab}
@@ -347,9 +512,9 @@ function FolioApp() {
             readingGoal={readingGoal}
             globalCoverStyle={settings.defaultCoverStyle || 'image'}
             onOpenBook={handleOpenBook}
-            onLogReadingTime={handleLogReadingTime}
             onAddEpubBook={handleAddEpubBook}
             onUpdateBookCover={handleUpdateBookCover}
+            onRemoveBook={handleRemoveBook}
             onChangeGlobalCoverStyle={(style) => handleUpdateSettings({ defaultCoverStyle: style })}
             showToast={showToast}
             bottomInset={insets.bottom}
@@ -360,6 +525,7 @@ function FolioApp() {
           <ReaderView
             currentBook={currentBook}
             customPages={currentBook ? customPagesMap[currentBook.id] : undefined}
+            onUpdateReadingPosition={handleUpdateReadingPosition}
             settings={settings}
             onUpdateSettings={handleUpdateSettings}
             onOpenSettingsSheet={() => setIsSettingsSheetOpen(true)}
@@ -371,7 +537,8 @@ function FolioApp() {
             isBookmarked={isBookmarked}
             onToggleBookmark={handleToggleBookmark}
             isNavVisible={isNavVisible}
-            onToggleNavVisibility={() => setIsNavVisible((prev) => !prev)}
+            isImmersiveMode={isImmersiveMode}
+            onToggleNavVisibility={handleToggleNavVisibility}
             setNavVisibility={setIsNavVisible}
             showToast={showToast}
             jumpTarget={jumpTarget}
@@ -398,7 +565,7 @@ function FolioApp() {
           <SettingsSheet
             settings={settings}
             onSave={(s) => saveSettingsFromSheet(s, 'Typography preferences saved')}
-            onClose={() => setActiveTab('reading')}
+            onClose={() => setActiveTab('settings')}
             bottomSpace={bottomSpace}
           />
         )}
@@ -463,6 +630,7 @@ function FolioApp() {
       <BottomNav activeTab={activeTab} onTabChange={setActiveTab} visible={isNavVisible} />
       <Toast message={toastMessage} bottom={bottomSpace - 8 + 12} />
     </View>
+    </AppThemeProvider>
   );
 }
 

@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../../theme';
+import { useAppTheme } from '../../AppTheme';
 
 interface ModalShellProps {
   onClose: () => void;
@@ -33,6 +34,7 @@ export const ModalShell: React.FC<ModalShellProps> = ({
   cardStyle,
 }) => {
   const insets = useSafeAreaInsets();
+  const palette = useAppTheme();
   const isBottom = align === 'bottom';
 
   return (
@@ -58,12 +60,17 @@ export const ModalShell: React.FC<ModalShellProps> = ({
             },
           ]}
         >
-          <Pressable style={styles.scrim} onPress={onClose} />
+          <Pressable style={[styles.scrim, { backgroundColor: palette.scrim }]} onPress={onClose} />
           <View
             style={[
               styles.card,
               isBottom ? styles.sheet : styles.dialog,
-              { maxWidth, paddingBottom: isBottom ? insets.bottom : 0 },
+              {
+                backgroundColor: isBottom ? palette.surfaceLow : palette.surface,
+                borderColor: palette.border,
+                maxWidth,
+                paddingBottom: isBottom ? insets.bottom : 0,
+              },
               cardStyle,
             ]}
           >

@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { INITIAL_SETTINGS } from '../data/initialData';
 import { colors, F, previewPaper, readerFontFamily, type } from '../theme';
+import { AppPalette, useAppTheme } from '../AppTheme';
 import { LineSpacing, Margins, PaperTheme, ReadingSettings, Typeface } from '../types';
 import { Icon, IconName } from './ui/Icon';
 import { ModalShell } from './ui/ModalShell';
@@ -48,6 +49,8 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
   isSheetOnly = false,
   bottomSpace = 24,
 }) => {
+  const colors = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [local, setLocal] = useState<ReadingSettings>({ ...settings });
   const [activeTab, setActiveTab] = useState<SheetTab>('font');
 
@@ -149,7 +152,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                     <Pressable
                       key={f}
                       onPress={() => update({ font: f })}
-                      style={[styles.fontPill, { backgroundColor: selected ? colors.primary : colors.surface }]}
+                      style={[styles.fontPill, { backgroundColor: selected ? colors.primaryContainer : colors.surface }]}
                     >
                       {selected && <Icon name="check_small" size={16} color="#fff" />}
                       <Text style={[styles.fontPillText, { color: selected ? '#fff' : colors.onSurface }]}>
@@ -274,7 +277,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                       styles.themeBtn,
                       selected
                         ? { backgroundColor: colors.surfaceContainer, borderColor: 'rgba(137,52,20,0.3)' }
-                        : { backgroundColor: 'rgba(241,237,230,0.6)', borderColor: 'transparent' },
+                        : { backgroundColor: colors.surfaceLow, borderColor: 'transparent' },
                     ]}
                   >
                     <View style={[styles.swatch, { backgroundColor: t.swatch }]}>
@@ -392,7 +395,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
           <Pressable onPress={reset} style={[styles.actionBtn, { backgroundColor: colors.surfaceContainer }]}>
             <Text style={[styles.actionText, { color: colors.muted }]}>Reset Defaults</Text>
           </Pressable>
-          <Pressable onPress={apply} style={[styles.actionBtn, { backgroundColor: colors.primary }]}>
+          <Pressable onPress={apply} style={[styles.actionBtn, { backgroundColor: colors.primaryContainer }]}>
             <Text style={[styles.actionText, { color: '#fff' }]}>Keep Changes</Text>
           </Pressable>
         </View>
@@ -416,24 +419,28 @@ const ChoiceButton: React.FC<{
   label: string;
   active: boolean;
   onPress: () => void;
-}> = ({ icon, label, active, onPress }) => (
-  <Pressable
-    onPress={onPress}
-    style={[
-      styles.choice,
-      active
-        ? { backgroundColor: colors.primary, borderColor: colors.primary }
-        : { backgroundColor: colors.surfaceContainer, borderColor: colors.border },
-    ]}
-  >
-    <Icon name={icon} size={17} color={active ? '#fff' : colors.muted} />
-    <Text style={[styles.choiceText, { color: active ? '#fff' : colors.muted }]} numberOfLines={1}>
-      {label}
-    </Text>
-  </Pressable>
-);
+}> = ({ icon, label, active, onPress }) => {
+  const colors = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[
+        styles.choice,
+        active
+          ? { backgroundColor: colors.primaryContainer, borderColor: colors.primaryContainer }
+          : { backgroundColor: colors.surfaceContainer, borderColor: colors.border },
+      ]}
+    >
+      <Icon name={icon} size={17} color={active ? '#fff' : colors.muted} />
+      <Text style={[styles.choiceText, { color: active ? '#fff' : colors.muted }]} numberOfLines={1}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+};
 
-const styles = StyleSheet.create({
+const createStyles = (colors: AppPalette) => StyleSheet.create({
   inline: {
     flex: 1,
     backgroundColor: colors.surfaceLow,
