@@ -14,7 +14,7 @@ import {
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, AppState, BackHandler, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomNav } from './src/components/BottomNav';
 import { DictionaryModal } from './src/components/DictionaryModal';
@@ -89,6 +89,15 @@ function FolioApp() {
   const [hydrated, setHydrated] = useState(false);
   const [jumpTarget, setJumpTarget] = useState<JumpTarget | null>(null);
 
+  useEffect(() => {
+    if (activeTab !== 'reading') return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      setActiveTab('library');
+      return true;
+    });
+    return () => subscription.remove();
+  }, [activeTab]);
+
   // Navigation visibility (auto-hides while reading & scrolling)
   const [isNavVisible, setIsNavVisible] = useState(true);
   const [isImmersiveMode, setIsImmersiveMode] = useState(false);
@@ -129,6 +138,13 @@ function FolioApp() {
     setIsNavVisible((prev) => !prev);
     setIsImmersiveMode((prev) => !prev);
   }, []);
+  const setReaderNavVisibility = useCallback(
+    (visible: boolean) => {
+      if (visible && isImmersiveMode) return;
+      setIsNavVisible(visible);
+    },
+    [isImmersiveMode]
+  );
 
   // ---- Local-first hydration, then Supabase merge, then auth listener ----
   useEffect(() => {
@@ -485,23 +501,25 @@ function FolioApp() {
 
   // ---- Layout ----
   const reading = activeTab === 'reading';
-  const topPad = insets.top + HEADER_HEIGHT + 4;
+  const topPad = reading && isImmersiveMode ? insets.top + 8 : insets.top + HEADER_HEIGHT + 4;
   const bottomSpace = NAV_SPACE + insets.bottom;
+  const readingBottomSpace = insets.bottom + 8;
   const palette = createPalette(settings.theme);
 
   return (
     <AppThemeProvider theme={settings.theme}>
     <View style={[styles.app, { backgroundColor: palette.background }]}>
-      <StatusBar style={settings.theme === 'charcoal' ? 'light' : 'dark'} />
+      <StatusBar
+        style={settings.theme === 'charcoal' ? 'light' : 'dark'}
+        hidden={reading && isImmersiveMode}
+      />
 
       <Header
         activeTab={activeTab}
         onTabChange={setActiveTab}
         onOpenSearch={() => setIsSearchOpen(true)}
         onOpenProfile={() => setIsProfileOpen(true)}
-        isBookmarked={isBookmarked}
-        onToggleBookmark={handleToggleBookmark}
-        visible={isNavVisible}
+        visible={isNavVisible && !isImmersiveMode}
         userAvatar={user?.avatarUrl}
       />
 
@@ -536,13 +554,13 @@ function FolioApp() {
             onAddReflectionNote={handleAddReflectionNote}
             isBookmarked={isBookmarked}
             onToggleBookmark={handleToggleBookmark}
-            isNavVisible={isNavVisible}
+            isNavVisible={isNavVisible && !isImmersiveMode}
             isImmersiveMode={isImmersiveMode}
             onToggleNavVisibility={handleToggleNavVisibility}
-            setNavVisibility={setIsNavVisible}
+            setNavVisibility={setReaderNavVisibility}
             showToast={showToast}
             jumpTarget={jumpTarget}
-            bottomSpace={bottomSpace}
+            bottomSpace={readingBottomSpace}
           />
         )}
 
@@ -598,11 +616,6 @@ function FolioApp() {
           onClose={() => setIsProfileOpen(false)}
           onGoogleSignIn={handleGoogleSignIn}
           onSignOut={handleSignOut}
-          onUpdateDailyTarget={(mins) => {
-            const updated = { ...readingGoal, dailyTargetMinutes: mins };
-            setReadingGoal(updated);
-            upsertReadingGoalToSupabase(updated);
-          }}
           showToast={showToast}
         />
       )}
@@ -627,7 +640,13 @@ function FolioApp() {
         />
       )}
 
-      <BottomNav activeTab={activeTab} onTabChange={setActiveTab} visible={isNavVisible} />
+      {!isSearchOpen && (
+        <BottomNav
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          visible={activeTab !== 'reading' && isNavVisible && !isImmersiveMode}
+        />
+      )}
       <Toast message={toastMessage} bottom={bottomSpace - 8 + 12} />
     </View>
     </AppThemeProvider>

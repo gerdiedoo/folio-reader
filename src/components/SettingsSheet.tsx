@@ -84,9 +84,11 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
             <Icon name="format_size" size={22} color={colors.primary} />
             <Text style={styles.headerTitle}>Typography &amp; Layout</Text>
           </View>
-          <Pressable onPress={onClose} accessibilityLabel="Close Settings" style={styles.closeBtn}>
-            <Icon name="close" size={20} color={colors.muted} />
-          </Pressable>
+          {isSheetOnly && (
+            <Pressable onPress={onClose} accessibilityLabel="Close Settings" style={styles.closeBtn}>
+              <Icon name="close" size={20} color={colors.muted} />
+            </Pressable>
+          )}
         </View>
 
         <View style={styles.segment}>

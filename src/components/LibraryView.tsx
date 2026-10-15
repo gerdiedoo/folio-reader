@@ -2,7 +2,6 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import React, { useMemo, useState } from 'react';
 import {
-  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import { parseEpubFile } from '../lib/epubParser';
-import { persistCoverImage, savePages } from '../lib/localStore';
+import { persistCoverImage, removeBookFiles, savePages } from '../lib/localStore';
 import { colors, F, NAV_SPACE, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
 import { Book, BookContentPage, ReadingGoal } from '../types';
@@ -51,6 +50,9 @@ const SORTS: { id: Sort; label: string }[] = [
   { id: 'title', label: 'Title' },
   { id: 'progress', label: 'Progress' },
 ];
+
+const normalizeBookMetadata = (value: string) =>
+  value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s+/g, ' ').toLowerCase();
 
 export const LibraryView: React.FC<LibraryViewProps> = ({
   books,
@@ -122,6 +124,16 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       }
       setImporting(true);
       const { book, pages } = await parseEpubFile(asset.uri, asset.name);
+      const duplicate = books.find(
+        (existing) =>
+          normalizeBookMetadata(existing.title) === normalizeBookMetadata(book.title) &&
+          normalizeBookMetadata(existing.author) === normalizeBookMetadata(book.author)
+      );
+      if (duplicate) {
+        removeBookFiles(book.id, book.coverUrl);
+        showToast(`"${duplicate.title}" by ${duplicate.author} is already in your Library`);
+        return;
+      }
       savePages(book.id, pages);
       onAddEpubBook(book, pages);
     } catch (err: unknown) {
@@ -333,19 +345,9 @@ const CoverEditor: React.FC<{
   const [url, setUrl] = useState(book.coverUrl?.startsWith('http') ? book.coverUrl : '');
   const [pickedUri, setPickedUri] = useState<string | undefined>(undefined);
   const [tint, setTint] = useState<ClothTint>('parchment');
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
 
   const previewUri = pickedUri ?? (url.trim() || book.coverUrl);
-
-  const confirmRemove = () => {
-    Alert.alert(
-      'Remove book?',
-      `“${book.title}” and its saved pages, highlights, and vocabulary cards will be removed from this app and the connected Supabase database.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Remove', style: 'destructive', onPress: onRemove },
-      ]
-    );
-  };
 
   const choosePhoto = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -364,82 +366,100 @@ const CoverEditor: React.FC<{
   return (
     <ModalShell onClose={onClose} maxWidth={400}>
       <View style={styles.editHead}>
-        <Text style={styles.editTitle}>Customize Thumbnail</Text>
+        <Text style={styles.editTitle}>{confirmingRemove ? 'Remove book?' : 'Customize Thumbnail'}</Text>
         <Pressable onPress={onClose} hitSlop={8}>
           <Icon name="close" size={20} color={colors.muted} />
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 16, gap: 14 }} keyboardShouldPersistTaps="handled">
-        <View style={{ alignItems: 'center' }}>
-          <BookCover
-            book={book}
-            style={style}
-            uriOverride={previewUri}
-            tint={tint}
-            size="compact"
-            containerStyle={{ width: 110, aspectRatio: 2 / 3 }}
-          />
-        </View>
-
-        <View style={styles.coverToggle}>
-          {(['image', 'typographic'] as const).map((s) => (
-            <Pressable
-              key={s}
-              onPress={() => setStyle(s)}
-              style={[styles.toggleBtn, { flex: 1, flexDirection: 'row', gap: 6 }, style === s && { backgroundColor: colors.surface }]}
-            >
-              <Icon name={s === 'image' ? 'image' : 'title'} size={16} color={style === s ? colors.primary : colors.muted} />
-              <Text style={[styles.sortText, style === s && styles.sortActive]}>
-                {s === 'image' ? 'Illustrated' : 'Typographic'}
-              </Text>
+      {confirmingRemove ? (
+        <View style={styles.removeConfirm}>
+          <Icon name="delete_outline" size={32} color={colors.danger} />
+          <Text style={styles.removeConfirmText}>
+            “{book.title}” and its saved pages, highlights, and vocabulary cards will be removed from this app
+            and the connected Supabase database.
+          </Text>
+          <View style={styles.removeConfirmActions}>
+            <Pressable onPress={() => setConfirmingRemove(false)} style={styles.cancelRemoveBtn}>
+              <Text style={styles.cancelRemoveText}>Cancel</Text>
             </Pressable>
-          ))}
-        </View>
-
-        {style === 'image' ? (
-          <View style={{ gap: 8 }}>
-            <TextInput
-              value={url}
-              onChangeText={(t) => {
-                setUrl(t);
-                setPickedUri(undefined);
-              }}
-              placeholder="Paste an image URL (https://…)"
-              placeholderTextColor={colors.muted}
-              autoCapitalize="none"
-              autoCorrect={false}
-              style={styles.urlInput}
-            />
-            <Pressable onPress={choosePhoto} style={styles.photoBtn}>
-              <Icon name="upload" size={18} color={colors.primary} />
-              <Text style={styles.photoText}>Choose from photos</Text>
+            <Pressable onPress={onRemove} style={styles.confirmRemoveBtn}>
+              <Text style={styles.confirmRemoveText}>Remove</Text>
             </Pressable>
           </View>
-        ) : (
-          <View style={styles.tintRow}>
-            {(Object.keys(CLOTH) as ClothTint[]).map((t) => (
+        </View>
+      ) : (
+        <ScrollView contentContainerStyle={{ padding: 16, gap: 14 }} keyboardShouldPersistTaps="handled">
+          <View style={{ alignItems: 'center' }}>
+            <BookCover
+              book={book}
+              style={style}
+              uriOverride={previewUri}
+              tint={tint}
+              size="compact"
+              containerStyle={{ width: 110, aspectRatio: 2 / 3 }}
+            />
+          </View>
+
+          <View style={styles.coverToggle}>
+            {(['image', 'typographic'] as const).map((s) => (
               <Pressable
-                key={t}
-                onPress={() => setTint(t)}
-                style={[
-                  styles.tint,
-                  { backgroundColor: CLOTH[t].bg },
-                  tint === t && { borderColor: colors.primary, borderWidth: 2 },
-                ]}
-              />
+                key={s}
+                onPress={() => setStyle(s)}
+                style={[styles.toggleBtn, { flex: 1, flexDirection: 'row', gap: 6 }, style === s && { backgroundColor: colors.surface }]}
+              >
+                <Icon name={s === 'image' ? 'image' : 'title'} size={16} color={style === s ? colors.primary : colors.muted} />
+                <Text style={[styles.sortText, style === s && styles.sortActive]}>
+                  {s === 'image' ? 'Illustrated' : 'Typographic'}
+                </Text>
+              </Pressable>
             ))}
           </View>
-        )}
 
-        <Pressable onPress={() => onSave(style, style === 'image' ? previewUri : undefined)} style={styles.saveBtn}>
-          <Text style={styles.saveText}>Apply</Text>
-        </Pressable>
-        <Pressable onPress={confirmRemove} style={styles.removeBtn}>
-          <Icon name="delete_outline" size={18} color={colors.danger} />
-          <Text style={styles.removeText}>Remove Book</Text>
-        </Pressable>
-      </ScrollView>
+          {style === 'image' ? (
+            <View style={{ gap: 8 }}>
+              <TextInput
+                value={url}
+                onChangeText={(t) => {
+                  setUrl(t);
+                  setPickedUri(undefined);
+                }}
+                placeholder="Paste an image URL (https://…)"
+                placeholderTextColor={colors.muted}
+                autoCapitalize="none"
+                autoCorrect={false}
+                style={styles.urlInput}
+              />
+              <Pressable onPress={choosePhoto} style={styles.photoBtn}>
+                <Icon name="upload" size={18} color={colors.primary} />
+                <Text style={styles.photoText}>Choose from photos</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <View style={styles.tintRow}>
+              {(Object.keys(CLOTH) as ClothTint[]).map((t) => (
+                <Pressable
+                  key={t}
+                  onPress={() => setTint(t)}
+                  style={[
+                    styles.tint,
+                    { backgroundColor: CLOTH[t].bg },
+                    tint === t && { borderColor: colors.primary, borderWidth: 2 },
+                  ]}
+                />
+              ))}
+            </View>
+          )}
+
+          <Pressable onPress={() => onSave(style, style === 'image' ? previewUri : undefined)} style={styles.saveBtn}>
+            <Text style={styles.saveText}>Apply</Text>
+          </Pressable>
+          <Pressable onPress={() => setConfirmingRemove(true)} style={styles.removeBtn}>
+            <Icon name="delete_outline" size={18} color={colors.danger} />
+            <Text style={styles.removeText}>Remove Book</Text>
+          </Pressable>
+        </ScrollView>
+      )}
     </ModalShell>
   );
 };
@@ -586,4 +606,25 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     backgroundColor: colors.surfaceContainer,
   },
   removeText: { ...type.labelMd, color: colors.danger },
+  removeConfirm: { padding: 20, gap: 14, alignItems: 'center' },
+  removeConfirmText: { ...type.bodyMd, color: colors.onSurfaceVariant, textAlign: 'center' },
+  removeConfirmActions: { flexDirection: 'row', alignSelf: 'stretch', gap: 10, marginTop: 4 },
+  cancelRemoveBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceContainer,
+  },
+  cancelRemoveText: { ...type.labelLg, color: colors.onSurface },
+  confirmRemoveBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: colors.danger,
+  },
+  confirmRemoveText: { ...type.labelLg, color: '#fff' },
 });

@@ -20,6 +20,7 @@ interface ModalShellProps {
   align?: 'center' | 'top' | 'bottom';
   maxWidth?: number;
   cardStyle?: StyleProp<ViewStyle>;
+  avoidAndroidKeyboard?: boolean;
 }
 
 /**
@@ -32,6 +33,7 @@ export const ModalShell: React.FC<ModalShellProps> = ({
   align = 'center',
   maxWidth = 448,
   cardStyle,
+  avoidAndroidKeyboard = true,
 }) => {
   const insets = useSafeAreaInsets();
   const palette = useAppTheme();
@@ -47,7 +49,7 @@ export const ModalShell: React.FC<ModalShellProps> = ({
     >
       <KeyboardAvoidingView
         style={styles.fill}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : avoidAndroidKeyboard ? 'height' : undefined}
       >
         <View
           style={[

@@ -12,7 +12,6 @@ interface ProfileModalProps {
   goal: ReadingGoal;
   user: UserProfile | null;
   onClose: () => void;
-  onUpdateDailyTarget: (newTarget: number) => void;
   onGoogleSignIn: () => Promise<void>;
   onSignOut: () => Promise<void>;
   showToast: (msg: string) => void;
@@ -43,7 +42,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   goal,
   user,
   onClose,
-  onUpdateDailyTarget,
   onGoogleSignIn,
   onSignOut,
   showToast,
@@ -199,29 +197,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           </View>
         </View>
 
-        <View style={styles.goalBlock}>
-          <View style={styles.goalHead}>
-            <Text style={styles.goalLabel}>Daily Reading Target</Text>
-            <Text style={styles.goalValue}>{goal.dailyTargetMinutes} mins</Text>
-          </View>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            {[30, 45, 60].map((mins) => {
-              const active = goal.dailyTargetMinutes === mins;
-              return (
-                <Pressable
-                  key={mins}
-                  onPress={() => {
-                    onUpdateDailyTarget(mins);
-                    showToast(`Daily target set to ${mins} mins`);
-                  }}
-                  style={[styles.minBtn, { backgroundColor: active ? colors.primaryContainer : colors.surfaceContainer }]}
-                >
-                  <Text style={[styles.minText, { color: active ? '#fff' : colors.muted }]}>{mins}m</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
       </ScrollView>
 
       <View style={styles.footer}>
@@ -345,17 +320,6 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   statLabel: { fontFamily: F.sansSemi, fontSize: 11, letterSpacing: 0.8 },
   statValue: { fontFamily: F.serifSemi, fontSize: 22, lineHeight: 28, color: colors.onSurface },
   statSub: { fontFamily: F.sans, fontSize: 11, color: colors.muted },
-  goalBlock: {
-    padding: 16,
-    gap: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.borderSoft,
-  },
-  goalHead: { flexDirection: 'row', justifyContent: 'space-between' },
-  goalLabel: { fontFamily: F.sansSemi, fontSize: 12, color: colors.onSurface },
-  goalValue: { fontFamily: F.sansBold, fontSize: 12, color: colors.primary },
-  minBtn: { flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
-  minText: { fontFamily: F.sansSemi, fontSize: 12 },
   footer: {
     padding: 12,
     backgroundColor: colors.surfaceLow,

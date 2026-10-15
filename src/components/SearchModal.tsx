@@ -47,7 +47,13 @@ export const SearchModal: React.FC<SearchModalProps> = ({
     matchingBooks.length === 0 && matchingHighlights.length === 0 && matchingLexicon.length === 0;
 
   return (
-    <ModalShell onClose={onClose} align="top" maxWidth={512} cardStyle={{ maxHeight: '80%' }}>
+    <ModalShell
+      onClose={onClose}
+      align="top"
+      maxWidth={512}
+      cardStyle={{ maxHeight: '80%' }}
+      avoidAndroidKeyboard={false}
+    >
       <View style={styles.top}>
         <Icon name="search" size={22} color={colors.muted} />
         <TextInput

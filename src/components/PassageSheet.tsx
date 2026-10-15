@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors, F, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
@@ -31,7 +31,29 @@ interface PassageSheetProps {
 interface Token {
   start: number;
   end: number; // exclusive
+  word: string;
+  gap: string;
 }
+
+interface PassageWordProps {
+  token: Token;
+  index: number;
+  selected: boolean;
+  selectedStyle: object;
+  onPressWord: (index: number) => void;
+}
+
+const PassageWord = React.memo<PassageWordProps>(
+  ({ token, index, selected, selectedStyle, onPressWord }) => {
+    const handlePress = useCallback(() => onPressWord(index), [index, onPressWord]);
+    return (
+      <Text onPress={handlePress} style={selected ? selectedStyle : undefined}>
+        {token.gap}
+        {token.word}
+      </Text>
+    );
+  }
+);
 
 /**
  * React Native has no browser-style text selection with a floating toolbar, so
@@ -54,8 +76,13 @@ export const PassageSheet: React.FC<PassageSheetProps> = ({
   const tokens = useMemo<Token[]>(() => {
     const out: Token[] = [];
     const re = /\S+/g;
+    let cursor = 0;
     let m: RegExpExecArray | null;
-    while ((m = re.exec(text))) out.push({ start: m.index, end: m.index + m[0].length });
+    while ((m = re.exec(text))) {
+      const end = m.index + m[0].length;
+      out.push({ start: m.index, end, word: m[0], gap: text.slice(cursor, m.index) });
+      cursor = end;
+    }
     return out;
   }, [text]);
 
@@ -65,11 +92,17 @@ export const PassageSheet: React.FC<PassageSheetProps> = ({
     const idx = text.indexOf(target);
     if (idx < 0) return null;
     const end = idx + target.length;
-    const covered = tokens
-      .map((t, i) => ({ t, i }))
-      .filter(({ t }) => t.start < end && t.end > idx)
-      .map(({ i }) => i);
-    return covered.length ? { a: covered[0], b: covered[covered.length - 1] } : null;
+    let first = -1;
+    let last = -1;
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      if (token.start >= end) break;
+      if (token.end > idx) {
+        if (first < 0) first = i;
+        last = i;
+      }
+    }
+    return first >= 0 ? { a: first, b: last } : null;
   }, [text, tokens, initialSelection, existing]);
 
   const [range, setRange] = useState<{ a: number; b: number } | null>(initialRange);
@@ -82,13 +115,13 @@ export const PassageSheet: React.FC<PassageSheetProps> = ({
   const selected = range ? text.slice(tokens[range.a].start, tokens[range.b].end) : '';
   const hasSelection = selected.length > 0;
 
-  const onWordPress = (i: number) => {
+  const onWordPress = useCallback((i: number) => {
     setRange((prev) => {
       if (!prev) return { a: i, b: i };
       if (prev.a === prev.b && prev.a !== i) return { a: Math.min(prev.a, i), b: Math.max(prev.a, i) };
       return { a: i, b: i };
     });
-  };
+  }, []);
 
   const handleDefine = () => {
     const first = selected.split(/\s+/)[0] || '';
@@ -101,21 +134,20 @@ export const PassageSheet: React.FC<PassageSheetProps> = ({
     onSaveNote(selected, activeColor, note.trim());
   };
 
-  const rendered = tokens.map((t, i) => {
-    const isSel = range ? i >= range.a && i <= range.b : false;
-    const gap = i === 0 ? text.slice(0, t.start) : text.slice(tokens[i - 1].end, t.start);
-    return (
-      <Text key={i}>
-        {gap}
-        <Text
-          onPress={() => onWordPress(i)}
-          style={isSel ? { backgroundColor: activeColor.hex, color: colors.onSurface } : undefined}
-        >
-          {text.slice(t.start, t.end)}
-        </Text>
-      </Text>
-    );
-  });
+  const selectedStyle = useMemo(
+    () => ({ backgroundColor: activeColor.hex, color: colors.onSurface }),
+    [activeColor.hex, colors.onSurface]
+  );
+  const rendered = tokens.map((token, index) => (
+    <PassageWord
+      key={index}
+      token={token}
+      index={index}
+      selected={range ? index >= range.a && index <= range.b : false}
+      selectedStyle={selectedStyle}
+      onPressWord={onWordPress}
+    />
+  ));
 
   return (
     <ModalShell onClose={onClose} align="bottom" maxWidth={560} cardStyle={{ maxHeight: '86%' }}>

@@ -54,7 +54,10 @@ export function removeBookFiles(bookId: string, coverUrl?: string): void {
     const pagesFile = new File(Paths.document, 'folio', 'pages', `${bookId}.json`);
     if (pagesFile.exists) pagesFile.delete();
 
-    if (coverUrl?.startsWith('file://') && coverUrl.includes(`/custom-${bookId}-`)) {
+    const coverDirectoryUri = `${coversDir().uri.replace(/\/?$/, '/')}`;
+    const isImportedCover = coverUrl?.startsWith(`${coverDirectoryUri}${bookId}.`);
+    const isCustomCover = coverUrl?.includes(`/custom-${bookId}-`);
+    if (coverUrl?.startsWith('file://') && (isImportedCover || isCustomCover)) {
       const coverFile = new File(coverUrl);
       if (coverFile.exists) coverFile.delete();
     }

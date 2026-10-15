@@ -2,13 +2,13 @@ import * as Clipboard from 'expo-clipboard';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
-  NativeScrollEvent,
-  NativeSyntheticEvent,
+  GestureResponderEvent,
   PanResponder,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
   ViewToken,
 } from 'react-native';
@@ -23,6 +23,7 @@ import {
   ReadingSettings,
 } from '../types';
 import { HIGHLIGHT_COLORS, PassageSheet } from './PassageSheet';
+import { ChapterInfo, ChapterSheet, ScrubBar } from './ReaderNavigator';
 import { SingleLineReader } from './SingleLineReader';
 import { Icon } from './ui/Icon';
 import { ProgressBar } from './ui/ProgressBar';
@@ -59,6 +60,7 @@ interface ReaderViewProps {
 
 const MARGINS = { narrow: 14, regular: 20, wide: 30 } as const;
 const LINE_MULT = { compact: 1.45, standard: 1.7, loose: 2.0 } as const;
+const NO_HIGHLIGHTS: HighlightEntry[] = [];
 
 const fmt = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
@@ -69,6 +71,93 @@ interface Seg {
   start: number;
   end: number;
   hl?: HighlightEntry;
+}
+
+interface PaginatedPage {
+  sourceIndex: number;
+  page: BookContentPage;
+  showChapterHeader: boolean;
+}
+
+function wrapText(text: string, charsPerLine: number): string[] {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let line = '';
+
+  words.forEach((word) => {
+    if (line && line.length + word.length + 1 > charsPerLine) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  });
+  if (line) lines.push(line);
+  return lines;
+}
+
+function paginateContent(
+  pages: BookContentPage[],
+  maxLines: number,
+  charsPerLine: number
+): PaginatedPage[] {
+  const result: PaginatedPage[] = [];
+
+  pages.forEach((source, sourceIndex) => {
+    const firstParagraph = wrapText(source.dropCap + source.paragraph1, charsPerLine);
+    const secondParagraph = wrapText(
+      source.paragraph2Lead + source.highlightedText + source.paragraph2Rest,
+      charsPerLine
+    );
+    if (firstParagraph.length === 0 && secondParagraph.length === 0) {
+      result.push({ sourceIndex, page: source, showChapterHeader: true });
+      return;
+    }
+    let firstOffset = 0;
+    let secondOffset = 0;
+    let firstSegment = true;
+
+    while (firstOffset < firstParagraph.length || secondOffset < secondParagraph.length) {
+      const chapterHeaderLines = firstSegment ? 3 : 0;
+      let remainingLines = Math.max(1, maxLines - chapterHeaderLines);
+      const firstStart = firstOffset;
+      const firstCount = Math.min(remainingLines, firstParagraph.length - firstOffset);
+      firstOffset += firstCount;
+      remainingLines -= firstCount;
+
+      const secondStart = secondOffset;
+      if (firstOffset === firstParagraph.length && secondOffset < secondParagraph.length) {
+        const paragraphGap = firstCount > 0 ? 1 : 0;
+        if (remainingLines > paragraphGap) remainingLines -= paragraphGap;
+        const secondCount = Math.min(remainingLines, secondParagraph.length - secondOffset);
+        secondOffset += secondCount;
+      }
+
+      const firstText = firstParagraph.slice(firstStart, firstOffset).join(' ');
+      const isInitialText = firstStart === 0;
+      const firstCharacter = isInitialText ? source.dropCap : '';
+      const paragraph1 = isInitialText ? firstText.slice(firstCharacter.length) : firstText;
+      const secondText = secondParagraph.slice(secondStart, secondOffset).join(' ');
+
+      result.push({
+        sourceIndex,
+        showChapterHeader: firstSegment,
+        page: {
+          ...source,
+          dropCap: firstCharacter,
+          paragraph1,
+          paragraph2Lead: '',
+          highlightedText: secondText,
+          paragraph2Rest: '',
+        },
+      });
+      firstSegment = false;
+
+      if (firstCount === 0 && secondOffset === secondStart) break;
+    }
+  });
+
+  return result;
 }
 
 function buildSegments(full: string, hls: HighlightEntry[]): Seg[] {
@@ -99,7 +188,7 @@ interface ParagraphProps {
   indent?: boolean;
   textStyle: object;
   dropStyle: object;
-  onTap: () => void;
+  onTap: (e: GestureResponderEvent) => void;
   onOpen: (full: string, existing?: HighlightEntry | null, initial?: string) => void;
 }
 
@@ -182,7 +271,7 @@ interface PageBlockProps {
   dropStyle: object;
   fg: string;
   accent: string;
-  onTap: () => void;
+  onTap: (e: GestureResponderEvent) => void;
   onOpen: (page: BookContentPage, full: string, existing?: HighlightEntry | null, initial?: string) => void;
 }
 
@@ -278,6 +367,36 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const accent = isDark ? colors.primaryFixedDim : colors.primary;
 
   const [pageIndex, setPageIndex] = useState(getSavedPageIndex);
+  const pageIndexRef = useRef(pageIndex);
+  pageIndexRef.current = pageIndex;
+  const { width: winWidth } = useWindowDimensions();
+  const winWidthRef = useRef(winWidth);
+  winWidthRef.current = winWidth;
+  const [chaptersOpen, setChaptersOpen] = useState(false);
+  // Scroll mode renders a window of pages that starts at `listBase`. A jump just moves the
+  // window (and remounts the list), so the destination shows instantly instead of the list
+  // scrolling through pages whose heights it hasn't measured yet. Earlier pages are
+  // prepended on demand when the reader scrolls back up.
+  const [listBase, setListBase] = useState(pageIndex);
+  const [listKey, setListKey] = useState(0);
+  const listBaseRef = useRef(listBase);
+  listBaseRef.current = listBase;
+  const listData = useMemo(() => pages.slice(listBase), [pages, listBase]);
+  const jumpList = useCallback((idx: number) => {
+    listBaseRef.current = idx;
+    setListBase(idx);
+    setListKey((k) => k + 1);
+  }, []);
+  const handleStartReached = useCallback(() => {
+    if (listBaseRef.current <= 0) return;
+    const next = Math.max(0, listBaseRef.current - 6);
+    listBaseRef.current = next;
+    setListBase(next);
+  }, []);
+  /** Page we jumped away from, so a long jump can be undone with one tap. */
+  const [returnTo, setReturnTo] = useState<number | null>(null);
+  const [paginatedIndex, setPaginatedIndex] = useState(0);
+  const [pageArea, setPageArea] = useState({ width: 0, height: 0 });
   const [menuOpen, setMenuOpen] = useState(false);
   const [typesetOpen, setTypesetOpen] = useState(false);
   const [sheet, setSheet] = useState<{
@@ -289,41 +408,50 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   const listRef = useRef<FlatList<BookContentPage>>(null);
   const scrollRef = useRef<ScrollView>(null);
-  const lastY = useRef(0);
-  const navShown = useRef(isNavVisible);
-  navShown.current = isNavVisible;
+  const navVisibleRef = useRef(isNavVisible);
+  navVisibleRef.current = isNavVisible;
+  const immersiveModeRef = useRef(isImmersiveMode);
+  immersiveModeRef.current = isImmersiveMode;
+  const toggleNavVisibilityRef = useRef(onToggleNavVisibility);
+  toggleNavVisibilityRef.current = onToggleNavVisibility;
+  const setNavVisibilityRef = useRef(setNavVisibility);
+  setNavVisibilityRef.current = setNavVisibility;
 
   // reset when a different book is opened
   const bookId = currentBook?.id;
-  useEffect(() => {
-    const savedIndex = getSavedPageIndex();
-    setPageIndex(savedIndex);
-    lastY.current = 0;
-    if (flowMode === 'continuous') {
-      const timer = setTimeout(() => {
-        listRef.current?.scrollToIndex({ index: savedIndex, animated: false });
-      }, 0);
-      return () => clearTimeout(timer);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookId]);
-
   const page = pages[Math.min(pageIndex, Math.max(0, pages.length - 1))];
+  // Saving the reading position re-renders the whole app and writes to storage, so while the
+  // reader is scrolling or scrubbing we only report it once it has settled for a moment.
+  const onUpdatePositionRef = useRef(onUpdateReadingPosition);
+  onUpdatePositionRef.current = onUpdateReadingPosition;
+  const positionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingPosition = useRef<{ bookId: string; page: BookContentPage; total: number } | null>(null);
+  const flushPosition = useCallback(() => {
+    if (positionTimer.current) clearTimeout(positionTimer.current);
+    positionTimer.current = null;
+    const pending = pendingPosition.current;
+    pendingPosition.current = null;
+    if (pending) onUpdatePositionRef.current(pending.bookId, pending.page, pending.total);
+  }, []);
+  useEffect(() => flushPosition, [flushPosition]);
   const updatePageIndex = useCallback(
     (index: number) => {
       const nextIndex = Math.max(0, Math.min(pages.length - 1, index));
       setPageIndex(nextIndex);
       const nextPage = pages[nextIndex];
       if (bookId && nextPage) {
-        onUpdateReadingPosition(bookId, nextPage, pages.length);
+        pendingPosition.current = { bookId, page: nextPage, total: pages.length };
+        if (positionTimer.current) clearTimeout(positionTimer.current);
+        positionTimer.current = setTimeout(flushPosition, 400);
       }
     },
-    [bookId, onUpdateReadingPosition, pages]
+    [bookId, flushPosition, pages]
   );
   const updatePageIndexRef = useRef(updatePageIndex);
   updatePageIndexRef.current = updatePageIndex;
-  const pageIndexRef = useRef(pageIndex);
-  pageIndexRef.current = pageIndex;
+  const paginatedIndexRef = useRef(paginatedIndex);
+  paginatedIndexRef.current = paginatedIndex;
+  const turnPageRef = useRef<(index: number) => void>(() => {});
   const flowModeRef = useRef(flowMode);
   flowModeRef.current = flowMode;
   const pageSwipeResponder = useMemo(
@@ -335,7 +463,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2,
         onPanResponderRelease: (_, gesture) => {
           if (Math.abs(gesture.dx) < 50) return;
-          updatePageIndexRef.current(pageIndexRef.current + (gesture.dx < 0 ? 1 : -1));
+          turnPageRef.current(paginatedIndexRef.current + (gesture.dx < 0 ? 1 : -1));
         },
       }),
     []
@@ -343,6 +471,40 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const bookHighlights = useMemo(
     () => highlights.filter((h) => h.bookId === bookId),
     [highlights, bookId]
+  );
+  const previousPageHighlights = useRef<Map<number, HighlightEntry[]>>(new Map());
+  const pageHighlightsRef = useRef<Map<number, HighlightEntry[]>>(new Map());
+  const pageHighlights = useMemo(() => {
+    const pageIndexByLocation = new Map<string, number>();
+    pages.forEach((item, index) => {
+      pageIndexByLocation.set(`${item.chapterTitle}\0${item.pageNumber}`, index);
+    });
+
+    const grouped = new Map<number, HighlightEntry[]>();
+    bookHighlights.forEach((highlight) => {
+      const index = pageIndexByLocation.get(`${highlight.chapter}\0${highlight.page}`);
+      if (index === undefined) return;
+      const group = grouped.get(index);
+      if (group) group.push(highlight);
+      else grouped.set(index, [highlight]);
+    });
+
+    const next = new Map<number, HighlightEntry[]>();
+    pages.forEach((_, index) => {
+      const updated = grouped.get(index) ?? NO_HIGHLIGHTS;
+      const previous = previousPageHighlights.current.get(index);
+      const unchanged =
+        previous?.length === updated.length &&
+        updated.every((highlight, i) => highlight === previous[i]);
+      next.set(index, unchanged ? previous : updated);
+    });
+    previousPageHighlights.current = next;
+    pageHighlightsRef.current = next;
+    return next;
+  }, [bookHighlights, pages]);
+  const getPageHighlights = useCallback(
+    (index: number) => pageHighlightsRef.current.get(index) ?? NO_HIGHLIGHTS,
+    []
   );
 
   // ---- typography ----
@@ -371,43 +533,174 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     [baseSize, lineHeight, accent]
   );
 
+  const paginatedPages = useMemo(() => {
+    if (pageArea.width <= 0 || pageArea.height <= 0) {
+      return pages.map((source, sourceIndex) => ({
+        sourceIndex,
+        page: source,
+        showChapterHeader: true,
+      }));
+    }
+    const availableWidth = Math.max(80, pageArea.width - hPad * 2);
+    const charsPerLine = Math.max(12, Math.floor(availableWidth / (baseSize * 0.58)));
+    const maxLines = Math.max(4, Math.floor((pageArea.height - 112) / lineHeight));
+    return paginateContent(pages, maxLines, charsPerLine);
+  }, [baseSize, hPad, lineHeight, pageArea.height, pageArea.width, pages]);
+  const turnPaginatedPage = useCallback(
+    (index: number) => {
+      const nextIndex = Math.max(0, Math.min(paginatedPages.length - 1, index));
+      const nextPage = paginatedPages[nextIndex];
+      if (!nextPage) return;
+      setPaginatedIndex(nextIndex);
+      updatePageIndex(nextPage.sourceIndex);
+    },
+    [paginatedPages, updatePageIndex]
+  );
+  turnPageRef.current = turnPaginatedPage;
+
+  // ---- fast navigation: chapters, scrubber, jump + undo ----
+  const chapters = useMemo<ChapterInfo[]>(() => {
+    const list: ChapterInfo[] = [];
+    pages.forEach((p, i) => {
+      const last = list[list.length - 1];
+      if (last && last.number === p.chapterNumber) last.pageCount += 1;
+      else list.push({ number: p.chapterNumber, title: p.chapterTitle, startIndex: i, pageCount: 1 });
+    });
+    return list;
+  }, [pages]);
+
+  const currentChapterIdx = Math.max(
+    0,
+    chapters.findIndex((c) => pageIndex >= c.startIndex && pageIndex < c.startIndex + c.pageCount)
+  );
+
+  /** Jump to a source page in whichever reading mode is active. */
+  const goToSource = useCallback(
+    (target: number, remember = true) => {
+      const idx = Math.max(0, Math.min(pages.length - 1, target));
+      if (remember && idx !== pageIndexRef.current) setReturnTo(pageIndexRef.current);
+      updatePageIndex(idx);
+      if (flowMode === 'paginated') {
+        const seg = paginatedPages.findIndex((item) => item.sourceIndex === idx);
+        setPaginatedIndex(Math.max(0, seg));
+      } else if (flowMode === 'continuous') {
+        jumpList(idx);
+      }
+    },
+    [flowMode, jumpList, paginatedPages, pages.length, updatePageIndex]
+  );
+
+  const goPrevChapter = useCallback(() => {
+    const ch = chapters[currentChapterIdx];
+    if (!ch) return;
+    // like a media player: first press restarts the chapter, second goes back one
+    if (pageIndexRef.current > ch.startIndex) goToSource(ch.startIndex);
+    else if (currentChapterIdx > 0) goToSource(chapters[currentChapterIdx - 1].startIndex);
+  }, [chapters, currentChapterIdx, goToSource]);
+
+  const goNextChapter = useCallback(() => {
+    const next = chapters[currentChapterIdx + 1];
+    if (next) goToSource(next.startIndex);
+  }, [chapters, currentChapterIdx, goToSource]);
+
+  const scrubPaginated = flowMode === 'paginated';
+  const scrubCount = scrubPaginated ? paginatedPages.length : pages.length;
+  const scrubIndex = scrubPaginated ? paginatedIndex : pageIndex;
+  const scrubMarks = useMemo(() => {
+    if (scrubCount < 2) return [];
+    return chapters.slice(1).map((c) => {
+      const at = scrubPaginated
+        ? Math.max(0, paginatedPages.findIndex((item) => item.sourceIndex === c.startIndex))
+        : c.startIndex;
+      return at / (scrubCount - 1);
+    });
+  }, [chapters, paginatedPages, scrubCount, scrubPaginated]);
+
+  const scrubLabel = useCallback(
+    (i: number) => {
+      const src = scrubPaginated ? paginatedPages[i]?.page : pages[i];
+      if (!src) return '';
+      return `${src.chapterTitle}\nPage ${i + 1} of ${scrubCount}`;
+    },
+    [pages, paginatedPages, scrubCount, scrubPaginated]
+  );
+
+  const commitScrub = useCallback(
+    (i: number) => {
+      if (!scrubPaginated) {
+        goToSource(i);
+        return;
+      }
+      const seg = paginatedPages[i];
+      if (!seg) return;
+      if (seg.sourceIndex !== pageIndexRef.current) setReturnTo(pageIndexRef.current);
+      turnPaginatedPage(i);
+    },
+    [goToSource, paginatedPages, scrubPaginated, turnPaginatedPage]
+  );
+
+  const handleReturn = useCallback(() => {
+    if (returnTo === null) return;
+    const target = returnTo;
+    setReturnTo(null);
+    goToSource(target, false);
+  }, [goToSource, returnTo]);
+
+  // the "Back to page" chip disappears on its own, and when the book changes
+  useEffect(() => {
+    if (returnTo === null) return;
+    const t = setTimeout(() => setReturnTo(null), 10000);
+    return () => clearTimeout(t);
+  }, [returnTo]);
+  useEffect(() => {
+    setReturnTo(null);
+    setChaptersOpen(false);
+  }, [bookId]);
+
+  // reset when a different book is opened
+  useEffect(() => {
+    const savedIndex = getSavedPageIndex();
+    setPageIndex(savedIndex);
+    const savedSegmentIndex = paginatedPages.findIndex((item) => item.sourceIndex === savedIndex);
+    setPaginatedIndex(Math.max(0, savedSegmentIndex));
+    if (flowMode === 'continuous') jumpList(savedIndex);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookId]);
+
+  // coming back to Scroll mode: start the list at the page being read
+  useEffect(() => {
+    if (flowMode === 'continuous') jumpList(pageIndexRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flowMode]);
+
+  useEffect(() => {
+    if (flowMode !== 'paginated') return;
+    const savedSegmentIndex = paginatedPages.findIndex((item) => item.sourceIndex === pageIndex);
+    setPaginatedIndex(Math.max(0, savedSegmentIndex));
+  }, [flowMode]);
+
   // ---- jump from Notebook / Search ----
   useEffect(() => {
     if (!jumpTarget || jumpTarget.bookId !== bookId || pages.length === 0) return;
     const idx = Math.max(0, pages.findIndex((p) => p.pageNumber === jumpTarget.page));
     updatePageIndex(idx);
-    if (flowMode === 'continuous') {
-      setTimeout(() => {
-        listRef.current?.scrollToIndex({ index: idx, animated: false });
-      }, 0);
+    if (flowMode === 'paginated') {
+      const segmentIndex = paginatedPages.findIndex((item) => item.sourceIndex === idx);
+      setPaginatedIndex(Math.max(0, segmentIndex));
     }
+    if (flowMode === 'continuous') jumpList(idx);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jumpTarget?.nonce]);
 
   // paginated: back to top on page change
   useEffect(() => {
     if (flowMode === 'paginated') scrollRef.current?.scrollTo({ y: 0, animated: false });
-  }, [pageIndex, flowMode]);
-
-  // ---- scroll handling (progress + immersive nav) ----
-  const handleScroll = useCallback(
-    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const y = e.nativeEvent.contentOffset.y;
-
-      const dy = y - lastY.current;
-      if (!isImmersiveMode) {
-        if (dy > 14 && y > 60 && navShown.current) setNavVisibility(false);
-        else if ((dy < -18 || y < 20) && !navShown.current) setNavVisibility(true);
-      }
-      lastY.current = y;
-    },
-    [isImmersiveMode, setNavVisibility]
-  );
+  }, [paginatedIndex, flowMode]);
 
   const viewConfig = useRef({ itemVisiblePercentThreshold: 25 }).current;
   const onViewable = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
     const first = viewableItems.find((v) => v.index != null);
-    if (first && first.index != null) updatePageIndexRef.current(first.index);
+    if (first && first.index != null) updatePageIndexRef.current(listBaseRef.current + first.index);
   }).current;
 
   // ---- passage sheet ----
@@ -471,20 +764,34 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     closeSheet();
   };
 
-  const handleTap = useCallback(() => {
-    if (isNavVisible || isImmersiveMode) onToggleNavVisibility();
-    else setNavVisibility(true);
-  }, [isImmersiveMode, isNavVisible, onToggleNavVisibility, setNavVisibility]);
+  // Pages mode: tap the left / right edge to turn the page, the middle to toggle the HUD.
+  const handleTap = useCallback((e?: GestureResponderEvent) => {
+    if (flowModeRef.current === 'paginated' && e) {
+      const x = e.nativeEvent.pageX;
+      const w = winWidthRef.current;
+      if (x < w * 0.28) {
+        turnPageRef.current(paginatedIndexRef.current - 1);
+        return;
+      }
+      if (x > w * 0.72) {
+        turnPageRef.current(paginatedIndexRef.current + 1);
+        return;
+      }
+    }
+    if (navVisibleRef.current || immersiveModeRef.current) toggleNavVisibilityRef.current();
+    else setNavVisibilityRef.current(true);
+  }, []);
   const renderPage = useCallback(
-    (p: BookContentPage, idx: number) => (
+    (p: BookContentPage, idx: number, showChapterHeader?: boolean) => (
       <PageBlock
         page={p}
         showChapterHeader={
-          flowMode === 'paginated' ||
-          idx === 0 ||
-          pages[idx - 1].chapterNumber !== p.chapterNumber
+          showChapterHeader ??
+          (flowMode === 'paginated' ||
+            idx === 0 ||
+            pages[idx - 1].chapterNumber !== p.chapterNumber)
         }
-        hls={bookHighlights}
+        hls={getPageHighlights(idx)}
         textStyle={textStyle}
         dropStyle={dropStyle}
         fg={paper.fg}
@@ -493,25 +800,15 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         onOpen={openSheet}
       />
     ),
-    [accent, bookHighlights, dropStyle, flowMode, handleTap, openSheet, pages, paper.fg, textStyle]
+    [accent, dropStyle, flowMode, getPageHighlights, handleTap, openSheet, pages, paper.fg, textStyle]
   );
   const renderListItem = useCallback(
-    ({ item, index }: { item: BookContentPage; index: number }) => renderPage(item, index),
-    [renderPage]
+    ({ item, index }: { item: BookContentPage; index: number }) =>
+      renderPage(item, listBase + index),
+    [listBase, renderPage]
   );
-  const keyExtractor = useCallback((_: BookContentPage, index: number) => String(index), []);
-  const handleScrollToIndexFailed = useCallback(
-    (info: { index: number; averageItemLength: number }) => {
-      listRef.current?.scrollToOffset({
-        offset: info.averageItemLength * info.index,
-        animated: false,
-      });
-      setTimeout(() => {
-        listRef.current?.scrollToIndex({ index: info.index, animated: false });
-      }, 120);
-    },
-    []
-  );
+  // keyed by page number (not list position) so prepending earlier pages keeps rows stable
+  const keyExtractor = useCallback((item: BookContentPage) => String(item.pageNumber), []);
   const listContentStyle = useMemo(
     () => ({ paddingHorizontal: hPad, paddingTop: 24, paddingBottom: 32 }),
     [hPad]
@@ -557,7 +854,15 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   }
 
   const paginatedPercent = Math.round(((pageIndex + 1) / pages.length) * 100);
-  const percent = Math.max(0, Math.min(100, paginatedPercent));
+  const percent = Math.max(
+    0,
+    Math.min(
+      100,
+      flowMode === 'paginated'
+        ? Math.round(((paginatedIndex + 1) / Math.max(1, paginatedPages.length)) * 100)
+        : paginatedPercent
+    )
+  );
 
   const flowOptions: { id: ReadingFlowMode; label: string; icon: React.ComponentProps<typeof Icon>['name'] }[] = [
     { id: 'continuous', label: 'Scroll', icon: 'unfold_more' },
@@ -684,6 +989,16 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                 style={styles.menuItem}
                 onPress={() => {
                   setMenuOpen(false);
+                  setChaptersOpen(true);
+                }}
+              >
+                <Icon name="toc" size={18} color={colors.onSurface} />
+                <Text style={styles.menuText}>Contents</Text>
+              </Pressable>
+              <Pressable
+                style={styles.menuItem}
+                onPress={() => {
+                  setMenuOpen(false);
                   onOpenDictionary('', '');
                 }}
               >
@@ -717,64 +1032,149 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         ) : flowMode === 'continuous' ? (
           <FlatList
             ref={listRef}
-            data={pages}
+            key={listKey}
+            data={listData}
+            extraData={pageHighlights}
             keyExtractor={keyExtractor}
             renderItem={renderListItem}
             contentContainerStyle={listContentStyle}
-            onScroll={handleScroll}
-            scrollEventThrottle={32}
             onViewableItemsChanged={onViewable}
             viewabilityConfig={viewConfig}
-            initialNumToRender={3}
-            maxToRenderPerBatch={4}
-            windowSize={7}
-            onScrollToIndexFailed={handleScrollToIndexFailed}
+            initialNumToRender={2}
+            maxToRenderPerBatch={2}
+            updateCellsBatchingPeriod={60}
+            windowSize={5}
+            onStartReached={handleStartReached}
+            onStartReachedThreshold={1.5}
+            maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
             showsVerticalScrollIndicator={false}
           />
         ) : (
-          <View style={{ flex: 1 }} {...pageSwipeResponder.panHandlers}>
+          <View
+            style={{ flex: 1 }}
+            onLayout={(event) => {
+              const { width, height } = event.nativeEvent.layout;
+              setPageArea((current) =>
+                current.width === width && current.height === height ? current : { width, height }
+              );
+            }}
+            {...pageSwipeResponder.panHandlers}
+          >
             <ScrollView
               ref={scrollRef}
-              onScroll={handleScroll}
-              scrollEventThrottle={32}
-              contentContainerStyle={{ paddingHorizontal: hPad, paddingTop: 24, paddingBottom: 24 }}
+              style={{ flex: 1 }}
+              scrollEnabled={false}
+              contentContainerStyle={{ flexGrow: 1 }}
               showsVerticalScrollIndicator={false}
             >
-              {renderPage(page, pageIndex)}
+              {/* blank space also counts as a tap: edges turn the page, centre toggles the HUD */}
+              <Pressable
+                onPress={handleTap}
+                style={{ flexGrow: 1, paddingHorizontal: hPad, paddingTop: 24, paddingBottom: 24 }}
+              >
+                {paginatedPages[paginatedIndex] &&
+                  renderPage(
+                    paginatedPages[paginatedIndex].page,
+                    paginatedPages[paginatedIndex].sourceIndex,
+                    paginatedPages[paginatedIndex].showChapterHeader
+                  )}
+              </Pressable>
             </ScrollView>
-            <View style={styles.pager}>
-              <Pressable
-                onPress={() => updatePageIndex(pageIndex - 1)}
-                disabled={pageIndex === 0}
-                style={[styles.pagerBtn, pageIndex === 0 && { opacity: 0.35 }]}
-              >
-                <Icon name="chevron_left" size={22} color={colors.onSurface} />
-                <Text style={styles.pagerText}>Prev</Text>
-              </Pressable>
-              <Text style={styles.pagerCount}>
-                {pageIndex + 1} / {pages.length}
-              </Text>
-              <Pressable
-                onPress={() => updatePageIndex(pageIndex + 1)}
-                disabled={pageIndex >= pages.length - 1}
-                style={[styles.pagerBtn, pageIndex >= pages.length - 1 && { opacity: 0.35 }]}
-              >
-                <Text style={styles.pagerText}>Next</Text>
-                <Icon name="chevron_right" size={22} color={colors.onSurface} />
-              </Pressable>
-            </View>
+            {isImmersiveMode ? (
+              <View style={[styles.pager, styles.pagerMinimal]}>
+                <Text style={styles.minimalPageCount}>
+                  {paginatedIndex + 1} / {paginatedPages.length}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.pager}>
+                <Pressable
+                  onPress={() => turnPaginatedPage(paginatedIndex - 1)}
+                  disabled={paginatedIndex === 0}
+                  style={[styles.pagerBtn, paginatedIndex === 0 && { opacity: 0.35 }]}
+                >
+                  <Icon name="chevron_left" size={22} color={colors.onSurface} />
+                  <Text style={styles.pagerText}>Prev</Text>
+                </Pressable>
+                <Text style={styles.pagerCount}>
+                  {paginatedIndex + 1} / {paginatedPages.length}
+                </Text>
+                <Pressable
+                  onPress={() => turnPaginatedPage(paginatedIndex + 1)}
+                  disabled={paginatedIndex >= paginatedPages.length - 1}
+                  style={[
+                    styles.pagerBtn,
+                    paginatedIndex >= paginatedPages.length - 1 && { opacity: 0.35 },
+                  ]}
+                >
+                  <Text style={styles.pagerText}>Next</Text>
+                  <Icon name="chevron_right" size={22} color={colors.onSurface} />
+                </Pressable>
+              </View>
+            )}
           </View>
         )}
       </View>
 
-      {/* Footer */}
+      {/* "Back to page" chip: undo a long jump */}
+      {!isImmersiveMode && returnTo !== null && (
+        <Pressable
+          onPress={handleReturn}
+          accessibilityLabel="Return to previous position"
+          style={[styles.returnChip, { bottom: bottomSpace + 92 }]}
+        >
+          <Icon name="undo" size={16} color={colors.surface} />
+          <Text style={styles.returnText}>Back to page {returnTo + 1}</Text>
+        </Pressable>
+      )}
+
+      {/* Footer: contents · chapter skip · draggable scrubber */}
       <View style={[styles.footer, { paddingBottom: bottomSpace }]}>
-        <ProgressBar percent={percent} height={4} />
+        {isImmersiveMode ? (
+          <ProgressBar percent={percent} height={2} style={styles.minimalProgress} />
+        ) : (
+          <View style={styles.navRow}>
+            <Pressable
+              onPress={() => setChaptersOpen(true)}
+              accessibilityLabel="Contents"
+              hitSlop={6}
+              style={styles.navBtn}
+            >
+              <Icon name="toc" size={22} color={colors.primary} />
+            </Pressable>
+            <Pressable
+              onPress={goPrevChapter}
+              accessibilityLabel="Previous chapter"
+              hitSlop={6}
+              style={styles.navBtn}
+            >
+              <Icon name="skip_previous" size={22} color={colors.onSurface} />
+            </Pressable>
+            <View style={{ flex: 1 }}>
+              <ScrubBar
+                count={scrubCount}
+                index={scrubIndex}
+                labelFor={scrubLabel}
+                onCommit={commitScrub}
+                marks={scrubMarks}
+              />
+            </View>
+            <Pressable
+              onPress={goNextChapter}
+              accessibilityLabel="Next chapter"
+              disabled={currentChapterIdx >= chapters.length - 1}
+              hitSlop={6}
+              style={[styles.navBtn, currentChapterIdx >= chapters.length - 1 && { opacity: 0.35 }]}
+            >
+              <Icon name="skip_next" size={22} color={colors.onSurface} />
+            </Pressable>
+          </View>
+        )}
         <View style={styles.footerRow}>
           <Text style={styles.footerText}>
             Loc {fmt(page.locNumber)} of {fmt(page.totalLoc)} · {percent}%
           </Text>
-          {settings.displayReadingPace && (
+          {!isImmersiveMode && settings.displayReadingPace && (
             <View style={styles.paceRow}>
               <Icon name="schedule" size={13} color={colors.muted} />
               <Text style={styles.footerText}>{page.minutesLeftInChapter} min left in chapter</Text>
@@ -782,6 +1182,18 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           )}
         </View>
       </View>
+
+      {chaptersOpen && (
+        <ChapterSheet
+          chapters={chapters}
+          currentIndex={currentChapterIdx}
+          onClose={() => setChaptersOpen(false)}
+          onSelect={(startIndex) => {
+            setChaptersOpen(false);
+            goToSource(startIndex);
+          }}
+        />
+      )}
 
       {sheet && (
         <PassageSheet
@@ -829,7 +1241,7 @@ const styles = StyleSheet.create({
   hudActions: { flexDirection: 'row', alignItems: 'center' },
   hudBtn: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   hudSlim: {
-    minHeight: 89,
+    minHeight: 46,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -903,8 +1315,31 @@ const styles = StyleSheet.create({
   pagerBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingVertical: 6, paddingHorizontal: 8 },
   pagerText: { ...type.labelLg, color: colors.onSurface },
   pagerCount: { ...type.labelMd, color: colors.muted },
+  pagerMinimal: { justifyContent: 'center', paddingVertical: 5 },
+  minimalPageCount: { ...type.bodySm, color: colors.muted, opacity: 0.7 },
 
-  footer: { paddingTop: 10, gap: 6 },
+  footer: { paddingTop: 6, gap: 2, zIndex: 10 },
+  navRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  navBtn: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  minimalProgress: { opacity: 0.55 },
+  returnChip: {
+    position: 'absolute',
+    alignSelf: 'center',
+    zIndex: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 999,
+    backgroundColor: colors.onSurface,
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  returnText: { ...type.labelMd, color: colors.surface },
   footerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   paceRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   footerText: { ...type.bodySm, color: colors.muted },

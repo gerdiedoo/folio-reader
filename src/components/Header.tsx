@@ -14,8 +14,6 @@ interface HeaderProps {
   onTabChange: (tab: TabType) => void;
   onOpenSearch: () => void;
   onOpenProfile: () => void;
-  isBookmarked?: boolean;
-  onToggleBookmark?: () => void;
   visible?: boolean;
   userAvatar?: string;
 }
@@ -32,8 +30,6 @@ export const Header: React.FC<HeaderProps> = ({
   onTabChange,
   onOpenSearch,
   onOpenProfile,
-  isBookmarked,
-  onToggleBookmark,
   visible = true,
   userAvatar,
 }) => {
@@ -88,19 +84,7 @@ export const Header: React.FC<HeaderProps> = ({
         </View>
 
         <View style={styles.right}>
-          {activeTab === 'reading' ? (
-            <Pressable
-              onPress={onToggleBookmark}
-              accessibilityLabel="Bookmark page"
-              style={[styles.iconBtn, isBookmarked && { backgroundColor: palette.primaryFixed }]}
-            >
-              <Icon
-                name={isBookmarked ? 'bookmark' : 'bookmark_border'}
-                size={22}
-                color={isBookmarked ? palette.primary : palette.muted}
-              />
-            </Pressable>
-          ) : (
+          {activeTab !== 'reading' && (
             <Pressable onPress={onOpenSearch} accessibilityLabel="Search Archive" style={styles.iconBtn}>
               <Icon name="search" size={22} color={palette.muted} />
             </Pressable>

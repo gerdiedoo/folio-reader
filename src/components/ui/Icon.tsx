@@ -76,6 +76,10 @@ const MI: Record<string, MIName> = {
   view_day: 'view-day',
   format_indent_increase: 'format-indent-increase',
   vertical_split: 'vertical-split',
+  toc: 'toc',
+  skip_previous: 'skip-previous',
+  skip_next: 'skip-next',
+  undo: 'undo',
 };
 
 const MCI: Record<string, MCIName> = {
