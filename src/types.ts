@@ -44,6 +44,13 @@ export interface Book {
   totalLoc?: number;
   currentLoc?: number;
   coverAlt: string;
+  genres?: string[];
+  annotation?: string;
+  documentLanguage?: string;
+  documentIdentifier?: string;
+  fileFormat?: string;
+  fileSizeBytes?: number;
+  fileLocation?: string;
 }
 
 export interface HighlightEntry {

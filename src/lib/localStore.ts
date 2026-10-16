@@ -49,10 +49,28 @@ export function savePages(bookId: string, pages: BookContentPage[]): void {
   }
 }
 
+export function getBookPagesLocation(bookId: string): string {
+  return new File(Paths.document, 'folio', 'pages', `${bookId}.json`).uri;
+}
+
+export function persistBookFile(sourceUri: string, bookId: string): string | undefined {
+  try {
+    const dir = ensureDir('folio', 'books');
+    const destination = new File(dir, `${bookId}.epub`);
+    new File(sourceUri).copy(destination);
+    return destination.uri;
+  } catch (err) {
+    console.warn(`Failed to persist EPUB file for book ${bookId}:`, err);
+    return undefined;
+  }
+}
+
 export function removeBookFiles(bookId: string, coverUrl?: string): void {
   try {
     const pagesFile = new File(Paths.document, 'folio', 'pages', `${bookId}.json`);
     if (pagesFile.exists) pagesFile.delete();
+    const epubFile = new File(Paths.document, 'folio', 'books', `${bookId}.epub`);
+    if (epubFile.exists) epubFile.delete();
 
     const coverDirectoryUri = `${coversDir().uri.replace(/\/?$/, '/')}`;
     const isImportedCover = coverUrl?.startsWith(`${coverDirectoryUri}${bookId}.`);

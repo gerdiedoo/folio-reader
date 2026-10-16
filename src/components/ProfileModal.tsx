@@ -5,8 +5,10 @@ import { getAuthRedirectUrl, SUPABASE_URL } from '../lib/supabase';
 import { colors, F, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
 import { ReadingGoal, UserProfile } from '../types';
+import { LibraryRestoreProgress, LibraryRestoreResult } from '../lib/catalog';
 import { Icon } from './ui/Icon';
 import { ModalShell } from './ui/ModalShell';
+import { ProgressBar } from './ui/ProgressBar';
 
 interface ProfileModalProps {
   goal: ReadingGoal;
@@ -14,6 +16,8 @@ interface ProfileModalProps {
   onClose: () => void;
   onGoogleSignIn: () => Promise<void>;
   onSignOut: () => Promise<void>;
+  onBackupLibrary: () => Promise<number>;
+  onRestoreLibrary: (onProgress: (progress: LibraryRestoreProgress) => void) => Promise<LibraryRestoreResult | null>;
   showToast: (msg: string) => void;
 }
 
@@ -44,11 +48,16 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   onClose,
   onGoogleSignIn,
   onSignOut,
+  onBackupLibrary,
+  onRestoreLibrary,
   showToast,
 }) => {
   const colors = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [libraryAction, setLibraryAction] = useState<'backup' | 'restore' | null>(null);
+  const [restoreProgress, setRestoreProgress] = useState<LibraryRestoreProgress | null>(null);
+  const [restoreResult, setRestoreResult] = useState<LibraryRestoreResult | null>(null);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
 
   const projectHost = SUPABASE_URL.replace(/^https?:\/\//, '');
@@ -73,6 +82,41 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       showToast('Signed out of Folio');
     } catch {
       showToast('Sign out failed');
+    }
+  };
+
+  const handleBackupLibrary = async () => {
+    setLibraryAction('backup');
+    setRestoreProgress(null);
+    try {
+      const count = await onBackupLibrary();
+      showToast(`Backed up ${count} ${count === 1 ? 'book' : 'books'} to your account`);
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'Library backup failed');
+    } finally {
+      setLibraryAction(null);
+    }
+  };
+
+  const handleRestoreLibrary = async () => {
+    setLibraryAction('restore');
+    setRestoreResult(null);
+    setRestoreProgress({ current: 0, total: 0, percent: 0, title: 'Loading your backup…', phase: 'loading' });
+    try {
+      const result = await onRestoreLibrary(setRestoreProgress);
+      if (!result) {
+        setRestoreProgress(null);
+        showToast('No library backup found for this account');
+      } else {
+        setRestoreResult(result);
+        showToast(
+          `Restored ${result.restored}; skipped ${result.skipped} unavailable; ${result.lookupFailed} catalog lookup(s) timed out; ${result.alreadyInLibrary} already in library`
+        );
+      }
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : 'Library restore failed');
+    } finally {
+      setLibraryAction(null);
     }
   };
 
@@ -112,7 +156,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                 <View style={styles.authDot} />
                 <Text style={styles.authBadgeText}>Authenticated via Google</Text>
               </View>
-              <Pressable onPress={handleSignOut} hitSlop={8}>
+              <Pressable onPress={handleSignOut} hitSlop={8} disabled={!!libraryAction}>
                 <Text style={styles.signOut}>Sign Out</Text>
               </Pressable>
             </View>
@@ -132,6 +176,89 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
               </Pressable>
             </View>
           )}
+          {user ? (
+            <View style={[styles.libraryBackup, { backgroundColor: colors.surfaceLow, borderColor: colors.borderSoft }]}>
+              <View style={styles.backupHeading}>
+                <Icon name="cloud_upload" size={19} color={colors.primary} />
+                <Text style={[styles.backupTitle, { color: colors.onSurface }]}>Library backup</Text>
+              </View>
+              <Text style={[styles.backupDescription, { color: colors.muted }]}>
+                Save your book list to this account. Restore downloads available Project Gutenberg books again;
+                EPUB files stay on your device.
+              </Text>
+              {libraryAction === 'restore' || restoreProgress?.phase === 'complete' ? (
+                <View style={styles.restoreProgress}>
+                  <View style={styles.restoreProgressLabels}>
+                    <Text style={[styles.restoreProgressText, { color: colors.onSurfaceVariant }]} numberOfLines={1}>
+                      {restoreProgress?.phase === 'loading'
+                        ? 'Loading your backup…'
+                        : restoreProgress?.phase === 'complete'
+                          ? restoreProgress.title
+                          : `${restoreProgress?.phase === 'finding' ? 'Finding' : restoreProgress?.phase === 'downloading' ? 'Downloading' : 'Preparing'} ${restoreProgress?.title ?? ''}`}
+                    </Text>
+                    {restoreProgress && restoreProgress.total > 0 ? (
+                      <Text style={[styles.restoreProgressText, { color: colors.muted }]}>
+                        {restoreProgress.current}/{restoreProgress.total}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <ProgressBar percent={restoreProgress?.percent ?? 0} height={4} />
+                </View>
+              ) : null}
+              {restoreResult ? (
+                <View style={[styles.restoreResult, { borderTopColor: colors.borderSoft }]}>
+                  <Text style={[styles.restoreResultTitle, { color: colors.onSurface }]}>
+                    {restoreResult.failures.length === 0
+                      ? 'All available books were restored'
+                      : `Could not restore ${restoreResult.failures.length} ${restoreResult.failures.length === 1 ? 'book' : 'books'}`}
+                  </Text>
+                  {restoreResult.failures.map((failure, index) => (
+                    <View key={`${failure.title}-${index}`} style={styles.restoreFailure}>
+                      <Icon name="cloud_off" size={15} color={colors.muted} />
+                      <View style={styles.restoreFailureText}>
+                        <Text style={[styles.restoreFailureTitle, { color: colors.onSurfaceVariant }]}>
+                          {failure.title}
+                        </Text>
+                        <Text style={[styles.restoreProgressText, { color: colors.muted }]}>
+                          {failure.reason}
+                        </Text>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+              <View style={styles.backupActions}>
+                <Pressable
+                  onPress={handleBackupLibrary}
+                  disabled={!!libraryAction}
+                  style={[
+                    styles.backupButton,
+                    { backgroundColor: colors.primaryContainer },
+                    libraryAction && { opacity: 0.6 },
+                  ]}
+                >
+                  <Icon name={libraryAction === 'backup' ? 'sync' : 'cloud_upload'} size={17} color={colors.white} spin={libraryAction === 'backup'} />
+                  <Text style={[styles.backupButtonText, { color: colors.white }]}>
+                    {libraryAction === 'backup' ? 'Backing up…' : 'Back up'}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={handleRestoreLibrary}
+                  disabled={!!libraryAction}
+                  style={[
+                    styles.backupButton,
+                    { borderColor: colors.primary },
+                    libraryAction && { opacity: 0.6 },
+                  ]}
+                >
+                  <Icon name={libraryAction === 'restore' ? 'sync' : 'download'} size={17} color={colors.primary} spin={libraryAction === 'restore'} />
+                  <Text style={[styles.backupButtonText, { color: colors.primary }]}>
+                    {libraryAction === 'restore' ? 'Restoring…' : 'Restore'}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
         </View>
 
         {showSetupGuide && (
@@ -270,6 +397,38 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   authDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.emerald },
   authBadgeText: { fontFamily: F.sansSemi, fontSize: 11, color: colors.emerald },
   signOut: { fontFamily: F.sansMedium, fontSize: 11, color: colors.primary },
+  libraryBackup: {
+    width: '100%',
+    marginTop: 16,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    gap: 8,
+  },
+  backupHeading: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  backupTitle: { ...type.labelLg },
+  backupDescription: { ...type.bodySm },
+  restoreProgress: { width: '100%', gap: 6, marginTop: 4 },
+  restoreProgressLabels: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  restoreProgressText: { ...type.bodySm, flexShrink: 1 },
+  restoreResult: { width: '100%', gap: 8, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 10, marginTop: 2 },
+  restoreResultTitle: { ...type.labelMd },
+  restoreFailure: { flexDirection: 'row', alignItems: 'flex-start', gap: 7 },
+  restoreFailureText: { flex: 1, gap: 2 },
+  restoreFailureTitle: { ...type.bodyMd },
+  backupActions: { flexDirection: 'row', gap: 8, marginTop: 3 },
+  backupButton: {
+    flex: 1,
+    minHeight: 40,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderRadius: 999,
+  },
+  backupButtonText: { ...type.labelMd },
   googleBtn: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -12,6 +12,7 @@ import {
   ReadingSettings,
   UserProfile,
 } from '../types';
+import { LibraryBackupEntry } from './catalog';
 
 // Lets the in-app browser close itself when the OAuth redirect comes back.
 WebBrowser.maybeCompleteAuthSession();
@@ -214,7 +215,74 @@ create table if not exists reading_settings (
 -- If you already ran the old script, add the missing columns:
 alter table books add column if not exists cover_style text;
 alter table reading_settings add column if not exists default_cover_style text default 'image';
+
+-- Private library backups used to re-download public-domain Gutenberg books.
+create table if not exists library_backups (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  books jsonb not null default '[]'::jsonb,
+  updated_at timestamp with time zone not null default timezone('utc'::text, now())
+);
+
+alter table library_backups enable row level security;
+revoke all on table library_backups from anon;
+grant select, insert, update on table library_backups to authenticated;
+drop policy if exists "Users can read their own library backup" on library_backups;
+create policy "Users can read their own library backup" on library_backups
+  for select using (auth.uid() = user_id);
+drop policy if exists "Users can create their own library backup" on library_backups;
+create policy "Users can create their own library backup" on library_backups
+  for insert with check (auth.uid() = user_id);
+drop policy if exists "Users can update their own library backup" on library_backups;
+create policy "Users can update their own library backup" on library_backups
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 `;
+
+export async function saveLibraryBackup(userId: string, books: LibraryBackupEntry[]): Promise<void> {
+  const { error } = await supabase.from('library_backups').upsert(
+    { user_id: userId, books, updated_at: new Date().toISOString() },
+    { onConflict: 'user_id' }
+  );
+  if (error) {
+    console.warn('Supabase library backup failed:', error.message);
+    throw new Error(`Could not back up your library: ${error.message}`);
+  }
+}
+
+export async function fetchLibraryBackup(userId: string): Promise<LibraryBackupEntry[] | null> {
+  const { data, error } = await supabase
+    .from('library_backups')
+    .select('books')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) {
+    console.warn('Supabase library restore lookup failed:', error.message);
+    throw new Error(`Could not load your library backup: ${error.message}`);
+  }
+  if (!data || !Array.isArray(data.books)) return null;
+
+  return data.books.filter((entry): entry is LibraryBackupEntry => {
+    if (!entry || typeof entry !== 'object') return false;
+    const candidate = entry as Partial<LibraryBackupEntry>;
+    return typeof candidate.title === 'string' && typeof candidate.author === 'string';
+  }).map((entry) => ({
+    title: entry.title,
+    author: entry.author,
+    ...(typeof entry.gutenbergId === 'number' && Number.isInteger(entry.gutenbergId)
+      ? { gutenbergId: entry.gutenbergId }
+      : {}),
+    ...(typeof entry.currentPage === 'number' && Number.isFinite(entry.currentPage)
+      ? { currentPage: entry.currentPage }
+      : {}),
+    ...(typeof entry.progressPercent === 'number' && Number.isFinite(entry.progressPercent)
+      ? { progressPercent: entry.progressPercent }
+      : {}),
+    ...(typeof entry.currentChapter === 'string' ? { currentChapter: entry.currentChapter } : {}),
+    ...(typeof entry.currentLoc === 'number' && Number.isFinite(entry.currentLoc)
+      ? { currentLoc: entry.currentLoc }
+      : {}),
+    ...(typeof entry.isFinished === 'boolean' ? { isFinished: entry.isFinished } : {}),
+  }));
+}
 
 export async function testSupabaseConnection(): Promise<{ connected: boolean; message: string }> {
   try {

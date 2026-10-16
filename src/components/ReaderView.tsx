@@ -393,8 +393,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     listBaseRef.current = next;
     setListBase(next);
   }, []);
-  /** Page we jumped away from, so a long jump can be undone with one tap. */
-  const [returnTo, setReturnTo] = useState<number | null>(null);
   const [paginatedIndex, setPaginatedIndex] = useState(0);
   const [pageArea, setPageArea] = useState({ width: 0, height: 0 });
   const [menuOpen, setMenuOpen] = useState(false);
@@ -558,7 +556,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   );
   turnPageRef.current = turnPaginatedPage;
 
-  // ---- fast navigation: chapters, scrubber, jump + undo ----
+  // ---- fast navigation: chapters and scrubber ----
   const chapters = useMemo<ChapterInfo[]>(() => {
     const list: ChapterInfo[] = [];
     pages.forEach((p, i) => {
@@ -576,9 +574,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   /** Jump to a source page in whichever reading mode is active. */
   const goToSource = useCallback(
-    (target: number, remember = true) => {
+    (target: number) => {
       const idx = Math.max(0, Math.min(pages.length - 1, target));
-      if (remember && idx !== pageIndexRef.current) setReturnTo(pageIndexRef.current);
       updatePageIndex(idx);
       if (flowMode === 'paginated') {
         const seg = paginatedPages.findIndex((item) => item.sourceIndex === idx);
@@ -633,27 +630,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       }
       const seg = paginatedPages[i];
       if (!seg) return;
-      if (seg.sourceIndex !== pageIndexRef.current) setReturnTo(pageIndexRef.current);
       turnPaginatedPage(i);
     },
     [goToSource, paginatedPages, scrubPaginated, turnPaginatedPage]
   );
 
-  const handleReturn = useCallback(() => {
-    if (returnTo === null) return;
-    const target = returnTo;
-    setReturnTo(null);
-    goToSource(target, false);
-  }, [goToSource, returnTo]);
-
-  // the "Back to page" chip disappears on its own, and when the book changes
   useEffect(() => {
-    if (returnTo === null) return;
-    const t = setTimeout(() => setReturnTo(null), 10000);
-    return () => clearTimeout(t);
-  }, [returnTo]);
-  useEffect(() => {
-    setReturnTo(null);
     setChaptersOpen(false);
   }, [bookId]);
 
@@ -1116,18 +1098,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         )}
       </View>
 
-      {/* "Back to page" chip: undo a long jump */}
-      {!isImmersiveMode && returnTo !== null && (
-        <Pressable
-          onPress={handleReturn}
-          accessibilityLabel="Return to previous position"
-          style={[styles.returnChip, { bottom: bottomSpace + 92 }]}
-        >
-          <Icon name="undo" size={16} color={colors.surface} />
-          <Text style={styles.returnText}>Back to page {returnTo + 1}</Text>
-        </Pressable>
-      )}
-
       {/* Footer: contents · chapter skip · draggable scrubber */}
       <View style={[styles.footer, { paddingBottom: bottomSpace }]}>
         {isImmersiveMode ? (
@@ -1322,24 +1292,6 @@ const styles = StyleSheet.create({
   navRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   navBtn: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   minimalProgress: { opacity: 0.55 },
-  returnChip: {
-    position: 'absolute',
-    alignSelf: 'center',
-    zIndex: 25,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 999,
-    backgroundColor: colors.onSurface,
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-  },
-  returnText: { ...type.labelMd, color: colors.surface },
   footerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   paceRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   footerText: { ...type.bodySm, color: colors.muted },

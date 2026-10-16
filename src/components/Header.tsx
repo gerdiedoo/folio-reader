@@ -16,6 +16,8 @@ interface HeaderProps {
   onOpenProfile: () => void;
   visible?: boolean;
   userAvatar?: string;
+  detailsTitle?: string;
+  onBackFromDetails?: () => void;
 }
 
 const TITLES: Record<TabType, string> = {
@@ -32,6 +34,8 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenProfile,
   visible = true,
   userAvatar,
+  detailsTitle,
+  onBackFromDetails,
 }) => {
   const insets = useSafeAreaInsets();
   const palette = useAppTheme();
@@ -62,7 +66,23 @@ export const Header: React.FC<HeaderProps> = ({
     >
       <View style={styles.row}>
         <View style={styles.left}>
-          {activeTab === 'reading' && (
+          {detailsTitle ? (
+            <>
+              <Pressable
+                onPress={onBackFromDetails}
+                accessibilityLabel="Back to Library"
+                style={styles.backBtn}
+              >
+                <Icon name="arrow_back" size={24} color={palette.onSurface} />
+              </Pressable>
+              <View style={{ flexShrink: 1 }}>
+                <Text style={[styles.brandLabel, { color: palette.muted }]}>BOOK DETAILS</Text>
+                <Text style={[styles.title, { color: palette.onSurface }]} numberOfLines={1}>
+                  {detailsTitle}
+                </Text>
+              </View>
+            </>
+          ) : activeTab === 'reading' ? (
             <Pressable
               onPress={() => onTabChange('library')}
               accessibilityLabel="Back to Library"
@@ -70,33 +90,37 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Icon name="arrow_back" size={24} color={palette.onSurface} />
             </Pressable>
-          )}
+          ) : null}
 
-          <Pressable onPress={() => onTabChange('library')} style={styles.brand}>
-            <Image source={{ uri: FOLIO_LOGO_URL }} style={styles.logo} resizeMode="contain" />
-            <View style={{ flexShrink: 1 }}>
-              <Text style={[styles.brandLabel, { color: palette.muted }]}>FOLIO</Text>
-              <Text style={[styles.title, { color: palette.onSurface }]} numberOfLines={1}>
-                {TITLES[activeTab]}
-              </Text>
-            </View>
-          </Pressable>
+          {!detailsTitle ? (
+            <Pressable onPress={() => onTabChange('library')} style={styles.brand}>
+              <Image source={{ uri: FOLIO_LOGO_URL }} style={styles.logo} resizeMode="contain" />
+              <View style={{ flexShrink: 1 }}>
+                <Text style={[styles.brandLabel, { color: palette.muted }]}>FOLIO</Text>
+                <Text style={[styles.title, { color: palette.onSurface }]} numberOfLines={1}>
+                  {TITLES[activeTab]}
+                </Text>
+              </View>
+            </Pressable>
+          ) : null}
         </View>
 
         <View style={styles.right}>
-          {activeTab !== 'reading' && (
+          {!detailsTitle && activeTab !== 'reading' && (
             <Pressable onPress={onOpenSearch} accessibilityLabel="Search Archive" style={styles.iconBtn}>
               <Icon name="search" size={22} color={palette.muted} />
             </Pressable>
           )}
 
-          <Pressable onPress={onOpenProfile} accessibilityLabel="Reader Profile" style={styles.iconBtn}>
-            {userAvatar ? (
-              <Image source={{ uri: userAvatar }} style={styles.avatar} />
-            ) : (
-              <Icon name="account_circle" size={32} color={palette.muted} />
-            )}
-          </Pressable>
+          {!detailsTitle ? (
+            <Pressable onPress={onOpenProfile} accessibilityLabel="Reader Profile" style={styles.iconBtn}>
+              {userAvatar ? (
+                <Image source={{ uri: userAvatar }} style={styles.avatar} />
+              ) : (
+                <Icon name="account_circle" size={32} color={palette.muted} />
+              )}
+            </Pressable>
+          ) : null}
         </View>
       </View>
     </Animated.View>

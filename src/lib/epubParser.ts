@@ -3,7 +3,7 @@ import { XMLParser } from 'fast-xml-parser';
 import JSZip from 'jszip';
 import { HTMLElement as HtmlNode, parse as parseHtml } from 'node-html-parser';
 import { Book, BookContentPage } from '../types';
-import { coversDir } from './localStore';
+import { coversDir, persistBookFile } from './localStore';
 
 export interface ParsedEpub {
   book: Book;
@@ -78,6 +78,15 @@ export async function parseEpubFile(fileUri: string, fileName: string): Promise<
 
   const title = textOf(opf.metadata?.title) || fileName.replace(/\.epub$/i, '');
   const author = textOf(opf.metadata?.creator) || 'Unknown Author';
+  const genres = asArray(opf.metadata?.subject).map(textOf).filter(Boolean);
+  const annotation = textOf(opf.metadata?.description);
+  const documentLanguage = textOf(opf.metadata?.language);
+  const identifiers = asArray<any>(opf.metadata?.identifier);
+  const uniqueIdentifierId = opf['@_unique-identifier'];
+  const documentIdentifier = textOf(
+    identifiers.find((identifier) => identifier?.['@_id'] === uniqueIdentifierId) ?? identifiers[0]
+  );
+  const fileSizeBytes = new File(fileUri).size;
 
   // Manifest & spine
   const manifestMap: Record<string, { href: string; mediaType: string; properties: string }> = {};
@@ -225,6 +234,7 @@ export async function parseEpubFile(fileUri: string, fileName: string): Promise<
     });
   }
 
+  const fileLocation = persistBookFile(fileUri, bookId);
   const newBook: Book = {
     id: bookId,
     title,
@@ -236,11 +246,18 @@ export async function parseEpubFile(fileUri: string, fileName: string): Promise<
     totalPages: pages.length,
     minutesLeft: Math.round(pages.length * 1.8),
     currentChapter: pages[0]?.chapterNumber || 'Chapter 1',
-    lastOpened: 'Uploaded just now',
+    lastOpened: 'Not yet read',
     isDownloaded: true,
     totalLoc: pages[pages.length - 1]?.totalLoc || 1000,
     currentLoc: 100,
     coverAlt: `Cover for ${title} by ${author}`,
+    genres,
+    annotation,
+    documentLanguage,
+    documentIdentifier,
+    fileFormat: 'EPUB',
+    fileSizeBytes: fileSizeBytes ?? undefined,
+    fileLocation,
   };
 
   return { book: newBook, pages };

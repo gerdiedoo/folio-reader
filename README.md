@@ -18,8 +18,10 @@ works in Expo Go; no custom native code.
 
 1. Run [`supabase/schema.sql`](./supabase/schema.sql) in the Supabase SQL editor, or copy the
    same SQL from **Notebook → Supabase Config → Copy SQL** in the app.
-   (The original script was missing `books.cover_style` and `reading_settings.default_cover_style`,
-   so book and settings upserts were failing silently. This version adds both, plus `ALTER`s.)
+   This creates the private, RLS-protected `library_backups` table used by the profile's
+   **Back up** and **Restore** actions. If upgrading an existing project, rerun the script to
+   add this table and its account-only policies. It also adds the previously missing
+   `books.cover_style` and `reading_settings.default_cover_style` columns.
 2. For EAS preview builds, add `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_KEY` to the
    EAS **preview** environment. These `EXPO_PUBLIC_` values are bundled into the app; use the
    project URL and publishable/anon key, never a `service_role` key. Then rebuild the APK.
@@ -46,14 +48,18 @@ works in Expo Go; no custom native code.
 ## Behaviour fixes made along the way
 
 - Highlights, lexicon, books, settings and goal are cached locally (AsyncStorage) and merged with Supabase on launch.
-- Imported EPUBs survive app restarts (previously the text lived only in memory); importing adds them to the Library without automatically opening the Reader.
-- Books can be removed from Library via **Customize Thumbnail → Remove Book**; confirming removes the saved pages, highlights, and vocabulary cards locally and from Supabase.
+- Imported EPUBs and their parsed pages survive app restarts; importing adds them to the Library without automatically opening the Reader.
+- Selecting a library book opens its details page, with its reading position, EPUB metadata and local file location; **Start reading** opens the Reader.
+- Library and free-book browsing each support grid and list layouts.
+- Books can be removed from Library via **Customize cover → Remove Book**; confirming removes the saved EPUB, pages, highlights, and vocabulary cards locally and from Supabase.
 - Odd paragraph counts no longer duplicate the last paragraph on a page.
 - Toasts show on every tab (they were only visible in the reader).
 - Dictionary uses dictionaryapi.dev for words outside the 4 built-in entries instead of showing a fake definition; saved cards are filed under the current book (was hard-coded to `remains-of-the-day`).
 - Notebook defaults to "All Books" (it defaulted to a mock book id, so real highlights were hidden).
 - "Sync to Supabase" now actually pushes books/highlights/vocabulary.
 - “Today’s reading” tracks foreground time while the reader is visible and resets at local midnight.
+- Signed-in profiles can back up book metadata to a private Supabase row and restore matching
+  Project Gutenberg EPUBs on another device. EPUB files remain local; non-Gutenberg books are skipped.
 - Continuous mode tracks the visible page (Loc / minutes left update), saves per-book reading position locally and to Supabase, and "Jump to Reader" lands on the right page.
 - The straight-line (RSVP/tape) reader, unused in the web app, is reachable from the reader's "Line" mode.
 

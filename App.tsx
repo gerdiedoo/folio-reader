@@ -34,7 +34,22 @@ import {
   INITIAL_LEXICON,
   INITIAL_SETTINGS,
 } from './src/data/initialData';
-import { loadJSON, loadPages, removeBookFiles, saveJSON } from './src/lib/localStore';
+import { loadJSON, loadPages, removeBookFiles, saveJSON, savePages } from './src/lib/localStore';
+import { parseEpubFile } from './src/lib/epubParser';
+import {
+  CatalogBook,
+  deleteDownloaded,
+  downloadEpub,
+  findCatalogBook,
+  getCatalogBook,
+  loadAdded,
+  LibraryRestoreFailure,
+  LibraryRestoreProgress,
+  LibraryRestoreResult,
+  LibraryRecoveryBook,
+  rememberAdded,
+  LibraryBackupEntry,
+} from './src/lib/catalog';
 import {
   deleteBookFromSupabase,
   deleteHighlightFromSupabase,
@@ -43,7 +58,9 @@ import {
   fetchLexiconFromSupabase,
   fetchReadingGoalFromSupabase,
   fetchReadingSettingsFromSupabase,
+  fetchLibraryBackup,
   getCurrentSupabaseUser,
+  saveLibraryBackup,
   signInWithGoogle,
   signOutSupabase,
   supabase,
@@ -74,18 +91,43 @@ function getLocalDateKey(): string {
   return `${today.getFullYear()}-${month}-${day}`;
 }
 
+function normalizeBookMetadata(value: string): string {
+  return value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function applySavedReadingProgress(book: Book, entry: LibraryBackupEntry): Book {
+  const totalPages = Math.max(1, book.totalPages);
+  const currentPage = Math.max(1, Math.min(totalPages, Math.floor(entry.currentPage ?? book.currentPage)));
+  return {
+    ...book,
+    currentPage,
+    progressPercent: Math.max(0, Math.min(100, Math.round((currentPage / totalPages) * 100))),
+    currentChapter: entry.currentChapter || book.currentChapter,
+    currentLoc: entry.currentLoc ?? book.currentLoc,
+    isFinished: entry.isFinished ?? book.isFinished,
+  };
+}
+
 function FolioApp() {
   const insets = useSafeAreaInsets();
 
   const [activeTab, setActiveTab] = useState<TabType>('library');
   const [books, setBooks] = useState<Book[]>(INITIAL_BOOKS);
   const [currentBookId, setCurrentBookId] = useState<string>('');
+  const [bookDetailsId, setBookDetailsId] = useState<string | null>(null);
   const [customPagesMap, setCustomPagesMap] = useState<Record<string, BookContentPage[]>>({});
   const [settings, setSettings] = useState<ReadingSettings>(INITIAL_SETTINGS);
   const [readingGoal, setReadingGoal] = useState<ReadingGoal>(INITIAL_GOAL);
   const [highlights, setHighlights] = useState<HighlightEntry[]>(INITIAL_HIGHLIGHTS);
   const [lexicon, setLexicon] = useState<LexiconEntry[]>(INITIAL_LEXICON);
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [recoveryBooks, setRecoveryBooks] = useState<LibraryRecoveryBook[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [jumpTarget, setJumpTarget] = useState<JumpTarget | null>(null);
 
@@ -151,13 +193,14 @@ function FolioApp() {
     let cancelled = false;
 
     (async () => {
-      const [lBooks, lSettings, lGoal, lHighlights, lLexicon, lReadingDay] = await Promise.all([
+      const [lBooks, lSettings, lGoal, lHighlights, lLexicon, lReadingDay, lRecoveryBooks] = await Promise.all([
         loadJSON<Book[]>('books'),
         loadJSON<ReadingSettings>('settings'),
         loadJSON<ReadingGoal>('goal'),
         loadJSON<HighlightEntry[]>('highlights'),
         loadJSON<LexiconEntry[]>('lexicon'),
         loadJSON<string>('readingDay'),
+        loadJSON<LibraryRecoveryBook[]>('libraryRecoveryBooks'),
       ]);
       if (cancelled) return;
 
@@ -166,6 +209,7 @@ function FolioApp() {
       if (lGoal) setReadingGoal(lGoal);
       if (lHighlights) setHighlights(lHighlights);
       if (lLexicon) setLexicon(lLexicon);
+      if (lRecoveryBooks) setRecoveryBooks(lRecoveryBooks);
       setSettings(mergedSettings);
 
       // Re-attach parsed EPUB pages that were saved to disk
@@ -267,6 +311,9 @@ function FolioApp() {
   useEffect(() => {
     if (hydrated) saveJSON('lexicon', lexicon);
   }, [lexicon, hydrated]);
+  useEffect(() => {
+    if (hydrated) saveJSON('libraryRecoveryBooks', recoveryBooks);
+  }, [recoveryBooks, hydrated]);
 
   // Count only foreground time while the reader is visible; persist each full minute.
   useEffect(() => {
@@ -360,14 +407,225 @@ function FolioApp() {
     setUser(null);
   };
 
+  const handleBackupLibrary = async (): Promise<number> => {
+    if (!user) throw new Error('Sign in to back up your library.');
+    const catalogBooks = await loadAdded();
+    const backup: LibraryBackupEntry[] = books.map((book) => {
+      const catalogId = Object.entries(catalogBooks).find(([, bookId]) => bookId === book.id)?.[0];
+      const gutenbergId = catalogId?.match(/^gutenberg-(\d+)$/)?.[1];
+      return {
+        title: book.title,
+        author: book.author,
+        ...(gutenbergId ? { gutenbergId: Number(gutenbergId) } : {}),
+        currentPage: book.currentPage,
+        progressPercent: book.progressPercent,
+        currentChapter: book.currentChapter,
+        currentLoc: book.currentLoc,
+        isFinished: book.isFinished,
+      };
+    });
+    await saveLibraryBackup(user.id, backup);
+    return backup.length;
+  };
+
+  const handleRestoreImportedProgress = async (book: Book): Promise<Book> => {
+    if (!user) return book;
+    try {
+      const backup = await fetchLibraryBackup(user.id);
+      const matchingEntry = backup?.find((entry) =>
+        normalizeBookMetadata(entry.title) === normalizeBookMetadata(book.title) &&
+        normalizeBookMetadata(entry.author) === normalizeBookMetadata(book.author)
+      );
+      if (!matchingEntry || typeof matchingEntry.currentPage !== 'number') return book;
+
+      const restoredBook = applySavedReadingProgress(book, matchingEntry);
+      showToast(`Restored reading progress for "${book.title}"`);
+      return restoredBook;
+    } catch (err) {
+      console.warn(`Could not restore saved progress for "${book.title}":`, err);
+      showToast('Could not check your cloud backup; imported book will start at the beginning');
+      return book;
+    }
+  };
+
+  const handleRestoreLibrary = async (
+    onProgress: (progress: LibraryRestoreProgress) => void
+  ): Promise<LibraryRestoreResult | null> => {
+    if (!user) throw new Error('Sign in to restore your library.');
+    onProgress({ current: 0, total: 0, percent: 0, title: 'Loading your backup…', phase: 'loading' });
+    const backup = await fetchLibraryBackup(user.id);
+    if (!backup) return null;
+    if (backup.length === 0) {
+      onProgress({ current: 0, total: 0, percent: 100, title: 'Your backup is empty', phase: 'complete' });
+      return {
+        restored: 0,
+        skipped: 0,
+        alreadyInLibrary: 0,
+        lookupFailed: 0,
+        failures: [],
+      };
+    }
+
+    const existingTitles = new Set(books.map((book) => normalizeBookMetadata(book.title)));
+    let catalogMappings = await loadAdded();
+    let restored = 0;
+    let skipped = 0;
+    let alreadyInLibrary = 0;
+    let lookupFailed = 0;
+    const failures: LibraryRestoreFailure[] = [];
+
+    for (const [index, entry] of backup.entries()) {
+      const titleKey = normalizeBookMetadata(entry.title);
+      const basePercent = (index / backup.length) * 100;
+      const bookPercent = 100 / backup.length;
+      const reportBookComplete = () => onProgress({
+        current: index + 1,
+        total: backup.length,
+        percent: basePercent + bookPercent,
+        title: entry.title,
+        phase: 'finding',
+      });
+      if (existingTitles.has(titleKey)) {
+        const existingBook = books.find((book) => normalizeBookMetadata(book.title) === titleKey);
+        if (existingBook && typeof entry.currentPage === 'number') {
+          const updatedBook = applySavedReadingProgress(existingBook, entry);
+          setBooks((previous) => previous.map((book) => book.id === updatedBook.id ? updatedBook : book));
+          void upsertBookToSupabase(updatedBook);
+        }
+        alreadyInLibrary++;
+        reportBookComplete();
+        continue;
+      }
+
+      onProgress({
+        current: index + 1,
+        total: backup.length,
+        percent: basePercent + bookPercent * 0.1,
+        title: entry.title,
+        phase: 'finding',
+      });
+      let catalogBook: CatalogBook | null;
+      try {
+        catalogBook = entry.gutenbergId ? await getCatalogBook(entry.gutenbergId) : null;
+        if (!catalogBook) {
+          catalogBook = await findCatalogBook(entry.title, entry.author);
+        }
+      } catch (err) {
+        console.warn(`Catalog lookup failed for "${entry.title}":`, err);
+        lookupFailed++;
+        failures.push({
+          title: entry.title,
+          reason: err instanceof Error ? err.message : 'Catalog lookup failed',
+          entry,
+        });
+        reportBookComplete();
+        continue;
+      }
+      if (!catalogBook) {
+        skipped++;
+        failures.push({ title: entry.title, reason: 'Not found in Project Gutenberg', entry });
+        reportBookComplete();
+        continue;
+      }
+
+      let uri: string | null = null;
+      try {
+        onProgress({
+          current: index + 1,
+          total: backup.length,
+          percent: basePercent + bookPercent * 0.2,
+          title: entry.title,
+          phase: 'downloading',
+        });
+        uri = await downloadEpub(catalogBook, (downloadPercent) => {
+          onProgress({
+            current: index + 1,
+            total: backup.length,
+            percent: basePercent + bookPercent * (0.2 + (downloadPercent / 100) * 0.6),
+            title: entry.title,
+            phase: 'downloading',
+          });
+        });
+        onProgress({
+          current: index + 1,
+          total: backup.length,
+          percent: basePercent + bookPercent * 0.85,
+          title: entry.title,
+          phase: 'preparing',
+        });
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        const { book, pages } = await parseEpubFile(uri, `${catalogBook.title}.epub`);
+        if (!book.coverUrl && catalogBook.coverUrl) {
+          book.coverUrl = catalogBook.coverUrl;
+          book.coverStyle = 'image';
+        }
+        const restoredBook = applySavedReadingProgress(book, entry);
+        savePages(book.id, pages);
+        handleAddEpubBook(restoredBook, pages);
+        catalogMappings = await rememberAdded(catalogMappings, catalogBook.id, book.id);
+        existingTitles.add(titleKey);
+        restored++;
+      } catch (err) {
+        console.warn(`Could not restore "${entry.title}":`, err);
+        failures.push({
+          title: entry.title,
+          reason: err instanceof Error ? err.message : 'Download or import failed',
+          entry,
+        });
+      } finally {
+        if (uri) deleteDownloaded(uri);
+      }
+      reportBookComplete();
+    }
+
+    if (failures.length > 0) {
+      setRecoveryBooks((current) => {
+        const byId = new Map(current.map((recovery) => [recovery.id, recovery]));
+        failures.forEach((failure) => {
+          const id = `${normalizeBookMetadata(failure.entry.title)}::${normalizeBookMetadata(failure.entry.author)}`;
+          byId.set(id, { ...failure.entry, id, reason: failure.reason });
+        });
+        return Array.from(byId.values());
+      });
+    }
+
+    onProgress({ current: backup.length, total: backup.length, percent: 100, title: 'Library restored', phase: 'complete' });
+    return { restored, skipped, alreadyInLibrary, lookupFailed, failures };
+  };
+
+  const handleReimportRecoveryBook = async (
+    recovery: LibraryRecoveryBook,
+    importedBook: Book,
+    pages: BookContentPage[]
+  ) => {
+    const restoredBook = applySavedReadingProgress(importedBook, recovery);
+    savePages(restoredBook.id, pages);
+    handleAddEpubBook(restoredBook, pages);
+    setRecoveryBooks((current) => current.filter((item) => item.id !== recovery.id));
+    showToast(`Restored "${restoredBook.title}" with saved reading progress`);
+  };
+
   const currentBook = books.find((b) => b.id === currentBookId) || books[0];
 
   // ---- Actions ----
   const handleOpenBook = (bookId: string) => {
+    const book = books.find((b) => b.id === bookId);
+    if (book) {
+      const updatedBook = { ...book, lastOpened: new Date().toISOString() };
+      const updatedBooks = books.map((item) => (item.id === bookId ? updatedBook : item));
+      setBooks(updatedBooks);
+      void saveJSON('books', updatedBooks);
+      void upsertBookToSupabase(updatedBook);
+    }
+    setBookDetailsId(null);
     setCurrentBookId(bookId);
     setActiveTab('reading');
-    const book = books.find((b) => b.id === bookId);
     if (book) showToast(`Resumed "${book.title}"`);
+  };
+
+  const handleSelectBookDetails = (bookId: string) => {
+    setActiveTab('library');
+    setBookDetailsId(bookId);
   };
 
   const handleUpdateReadingPosition = useCallback(
@@ -381,6 +639,7 @@ function FolioApp() {
         currentChapter: page.chapterNumber,
         currentLoc: page.locNumber,
         progressPercent: Math.round((page.pageNumber / Math.max(1, totalPages)) * 100),
+        lastOpened: new Date().toISOString(),
       };
       const updatedBooks = books.map((item) => (item.id === bookId ? updatedBook : item));
       setBooks(updatedBooks);
@@ -521,19 +780,29 @@ function FolioApp() {
         onOpenProfile={() => setIsProfileOpen(true)}
         visible={isNavVisible && !isImmersiveMode}
         userAvatar={user?.avatarUrl}
+        detailsTitle={
+          activeTab === 'library' && bookDetailsId
+            ? books.find((book) => book.id === bookDetailsId)?.title ?? 'Book details'
+            : undefined
+        }
+        onBackFromDetails={() => setBookDetailsId(null)}
       />
 
       <View style={[styles.main, { paddingTop: topPad, paddingBottom: reading ? 0 : 0 }]}>
         {activeTab === 'library' && (
           <LibraryView
             books={books}
+            recoveryBooks={recoveryBooks}
+            selectedBookId={bookDetailsId}
+            onSelectBook={setBookDetailsId}
             readingGoal={readingGoal}
             globalCoverStyle={settings.defaultCoverStyle || 'image'}
             onOpenBook={handleOpenBook}
             onAddEpubBook={handleAddEpubBook}
+            onRestoreImportedProgress={handleRestoreImportedProgress}
+            onReimportRecoveryBook={handleReimportRecoveryBook}
             onUpdateBookCover={handleUpdateBookCover}
             onRemoveBook={handleRemoveBook}
-            onChangeGlobalCoverStyle={(style) => handleUpdateSettings({ defaultCoverStyle: style })}
             showToast={showToast}
             bottomInset={insets.bottom}
           />
@@ -604,7 +873,7 @@ function FolioApp() {
           highlights={highlights}
           lexicon={lexicon}
           onClose={() => setIsSearchOpen(false)}
-          onSelectBook={handleOpenBook}
+          onSelectBook={handleSelectBookDetails}
           onSelectHighlight={handleJumpToReader}
         />
       )}
@@ -616,6 +885,8 @@ function FolioApp() {
           onClose={() => setIsProfileOpen(false)}
           onGoogleSignIn={handleGoogleSignIn}
           onSignOut={handleSignOut}
+          onBackupLibrary={handleBackupLibrary}
+          onRestoreLibrary={handleRestoreLibrary}
           showToast={showToast}
         />
       )}
@@ -644,7 +915,7 @@ function FolioApp() {
         <BottomNav
           activeTab={activeTab}
           onTabChange={setActiveTab}
-          visible={activeTab !== 'reading' && isNavVisible && !isImmersiveMode}
+          visible={activeTab !== 'reading' && !bookDetailsId && isNavVisible && !isImmersiveMode}
         />
       )}
       <Toast message={toastMessage} bottom={bottomSpace - 8 + 12} />

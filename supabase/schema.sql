@@ -75,6 +75,27 @@ create table if not exists reading_settings (
   updated_at timestamp with time zone default timezone('utc'::text, now())
 );
 
+-- Private per-account library backups. Only metadata is stored; EPUBs are
+-- re-downloaded from Project Gutenberg when a backup is restored.
+create table if not exists library_backups (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  books jsonb not null default '[]'::jsonb,
+  updated_at timestamp with time zone not null default timezone('utc'::text, now())
+);
+
+alter table library_backups enable row level security;
+revoke all on table library_backups from anon;
+grant select, insert, update on table library_backups to authenticated;
+drop policy if exists "Users can read their own library backup" on library_backups;
+create policy "Users can read their own library backup" on library_backups
+  for select using (auth.uid() = user_id);
+drop policy if exists "Users can create their own library backup" on library_backups;
+create policy "Users can create their own library backup" on library_backups
+  for insert with check (auth.uid() = user_id);
+drop policy if exists "Users can update their own library backup" on library_backups;
+create policy "Users can update their own library backup" on library_backups
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
 -- Add columns when upgrading a database created with the older schema.
 alter table books add column if not exists cover_style text;
 alter table reading_settings
