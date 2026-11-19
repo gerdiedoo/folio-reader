@@ -22,6 +22,16 @@
         "simulator": true
       },
       "environment": "development"
+    },
+    "dev-preview": {
+      "distribution": "internal",
+      "environment": "development",
+      "env": {
+        "EXPO_PUBLIC_APP_VARIANT": "development"
+      },
+      "android": {
+        "buildType": "apk"
+      }
     }
   },
   "submit": {

@@ -294,8 +294,8 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
               {getAuthRedirectUrl()}
             </Text>
             <Text style={styles.stepBody}>
-              (In Expo Go this is an exp:// address that changes with your network. A development or
-              production build uses folio://auth-callback.)
+              (In Expo Go this is an exp:// address that changes with your network. An installed
+              build uses the redirect shown above.)
             </Text>
           </View>
         )}

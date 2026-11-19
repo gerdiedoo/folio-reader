@@ -13,17 +13,29 @@ import {
   UserProfile,
 } from '../types';
 import { LibraryBackupEntry } from './catalog';
+import { selectBackend } from './backendConfig';
 
 // Lets the in-app browser close itself when the OAuth redirect comes back.
 WebBrowser.maybeCompleteAuthSession();
 
-export const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
-const SUPABASE_KEY = process.env.EXPO_PUBLIC_SUPABASE_KEY ?? '';
+const backend = selectBackend(
+  process.env.EXPO_PUBLIC_APP_VARIANT,
+  {
+    url: process.env.EXPO_PUBLIC_SUPABASE_URL ?? '',
+    key: process.env.EXPO_PUBLIC_SUPABASE_KEY ?? '',
+  },
+  {
+    url: process.env.EXPO_PUBLIC_DEV_SUPABASE_URL ?? '',
+    key: process.env.EXPO_PUBLIC_DEV_SUPABASE_KEY ?? '',
+  },
+);
+export const SUPABASE_URL = backend.url;
+const SUPABASE_KEY = backend.key;
 const hasSupabaseConfig = Boolean(SUPABASE_URL && SUPABASE_KEY);
 
 if (!hasSupabaseConfig) {
   console.warn(
-    'Supabase env vars missing. Configure EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_KEY for this EAS build environment.'
+    'Supabase env vars missing. Configure the Supabase URL and publishable key for this app variant; see docs/android-testing.md.'
   );
 }
 
@@ -53,7 +65,7 @@ export function getAuthRedirectUrl(): string {
 export async function signInWithGoogle(): Promise<void> {
   if (!hasSupabaseConfig) {
     throw new Error(
-      'Supabase is not configured in this app build. Add EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_KEY to the EAS preview environment, then rebuild.'
+      'Supabase is not configured in this app build. Configure the Supabase variables for this app variant, then rebuild; see docs/android-testing.md.'
     );
   }
 

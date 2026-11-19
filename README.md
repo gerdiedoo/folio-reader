@@ -96,3 +96,9 @@ The current reader still converts selected paragraph elements to plain text. Ric
 formatting, lists, illustrations, and linked footnotes are not fully supported.
 A successful import does not yet guarantee full EPUB fidelity. Improving that
 rendering model is a separate development step.
+
+## Android test app
+
+See [Android testing](docs/android-testing.md) for the standalone **Folio Dev** APK,
+separate Supabase project configuration, and phone test checklist. Use the
+`dev-preview` EAS profile to install beside the main Folio app.
