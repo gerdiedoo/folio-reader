@@ -93,3 +93,41 @@ test('rejects a ZIP without EPUB container metadata', async () => {
   await assert.rejects(input.parse, /container.xml not found/);
   assert.deepEqual(input.writes, []);
 });
+
+// Plain-text fidelity: each source block should appear once, in document order.
+for (const [name, body, expected] of [
+  ['lists with nested paragraphs', '<ul><li>First item</li><li><p>Second item</p><ul><li>Nested item</li></ul></li></ul>', ['First item', 'Second item', 'Nested item']],
+  ['mixed blockquote content', '<blockquote>Before.<p>Inside.</p>After.</blockquote>', ['Before.', 'Inside.', 'After.']],
+  ['nested paragraph wrappers', '<div class="paragraph">Before.<p>Inside.</p>After.</div>', ['Before.', 'Inside.', 'After.']],
+  ['direct body and section text', 'Opening.<section>Start.<div>Middle.</div>End.</section>Closing.', ['Opening.', 'Start.', 'Middle.', 'End.', 'Closing.']],
+  ['table text', '<table><caption>Distances</caption><tr><th>Place</th><th>Miles</th></tr><tr><td>Home</td><td>12</td></tr></table>', ['Distances', 'Place', 'Miles', 'Home', '12']],
+  ['headings and captions', '<h1>Opening</h1><p>Text.</p><h2>Second part</h2><figure><figcaption>The river</figcaption></figure>', ['Opening', 'Text.', 'Second part', 'The river']],
+  ['line breaks', '<p>First line<br/>Second line<br/>Last line</p>', ['First line', 'Second line', 'Last line']],
+  ['entities and inline words', '<p>Fish &amp; chips with <em>salt</em> and <strong>pepper</strong>.</p>', ['Fish & chips with salt and pepper.']],
+  ['non-reading markup', '<script>Secret script</script><style>.red {color:red}</style><!-- ignore --><p>Visible.</p>', ['Visible.']],
+  ['definition lists', '<dl><dt>Folio</dt><dd>A leaf of a book.</dd></dl>', ['Folio', 'A leaf of a book.']],
+]) {
+  test(`preserves ${name} in order without duplicate blocks`, async () => {
+    assert.deepEqual(paragraphs(await parser(await fixture(body)).parse()), expected);
+  });
+}
+
+test('uses the visible chapter heading instead of the XHTML window title', async () => {
+  const result = await parser(await fixture('<h1>Visible chapter</h1><p>Text.</p>')).parse();
+  assert.equal(result.pages[0].chapterTitle, 'VISIBLE CHAPTER');
+});
+
+test('the phone-test EPUB retains its entire expected text sequence', async () => {
+  const bytes = fs.readFileSync(path.join(__dirname, '../docs/fixtures/folio-content-check.epub'));
+  const result = await parser(bytes).parse();
+  assert.equal(result.book.title, 'Folio Content Check');
+  assert.equal(result.pages[0].chapterTitle, 'CONTENT CHECK');
+  assert.deepEqual(paragraphs(result), [
+    'Content Check', 'Yes.', 'Before the wrapper.', 'Before the nested paragraph.',
+    'Inside the nested paragraph.', 'After the nested paragraph.', 'After the wrapper.',
+    'List Check', 'First list item.', 'Second list item.', 'Nested list item.',
+    'Before the quotation.', 'Inside the quotation.', 'After the quotation.',
+    'Table Check', 'Journey distances', 'Place', 'Miles', 'Home', '12',
+    'First short line.', 'Second short line.', 'Fish & chips with salt and pepper.', 'THE END.',
+  ]);
+});

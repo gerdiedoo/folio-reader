@@ -92,10 +92,18 @@ are rejected with an error instead of producing placeholder reading content.
 Validation runs before imported cover/book files are written. Existing imports
 are not rewritten; re-import the original EPUB to recover previously omitted text.
 
-The current reader still converts selected paragraph elements to plain text. Rich
-formatting, lists, illustrations, and linked footnotes are not fully supported.
-A successful import does not yet guarantee full EPUB fidelity. Improving that
-rendering model is a separate development step.
+The reader imports plain text in document order, including headings, nested
+lists, table cells, captions, definition lists, and text outside paragraph tags.
+Line breaks become separate reading blocks. Nested wrappers do not duplicate
+passages. Visible chapter headings take precedence over the XHTML page title.
+
+This does not reproduce publisher typography, list numbering/indentation, table
+grids, illustrations, or linked footnote navigation. Inline emphasis is still
+plain text. A successful import does not yet guarantee full EPUB fidelity.
+Existing imports are not rewritten, so new extraction behavior requires re-import.
+
+For a phone check, download [Folio Content Check](docs/fixtures/folio-content-check.epub)
+and follow the [content-check instructions](docs/android-testing.md#content-preservation-check).
 
 ## Android test app
 

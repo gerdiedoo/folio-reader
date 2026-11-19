@@ -6,6 +6,14 @@ on:
     paths:
       - .github/workflows/build-folio-dev.yml
       - eas.json
+      - app.json
+      - app.config.js
+      - App.tsx
+      - index.ts
+      - src/**
+      - assets/**
+      - package.json
+      - package-lock.json
   workflow_dispatch:
 
 permissions:

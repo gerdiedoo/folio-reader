@@ -30,15 +30,15 @@ public values in the `dev-preview` profile and rebuild.
 Save an Expo token with access to this app's EAS project as the repository's
 `EXPO_TOKEN` Actions secret. The workflow never stores this token in source files.
 
-**Build Folio Dev APK** starts automatically when its workflow or `eas.json` is
-pushed to `development`. It runs tests and TypeScript checks, then submits an EAS
-Android build and waits for completion. It does not publish an app-store release.
-The workflow only builds `development`, and intentionally does not rebuild on
-every application commit. To build later app changes, open a previous run of this
-workflow, use **View workflow file**, edit a comment on the `development` branch,
-and commit it to trigger a new build. **Re-run jobs** rebuilds the old run's commit,
-not the latest branch tip. Manual dispatch is also declared, but GitHub normally
-requires the workflow to exist on the default branch before exposing that button.
+**Build Folio Dev APK** starts automatically when application source, assets,
+dependency declarations, app/build configuration, or the workflow is pushed to
+`development`. It runs tests and TypeScript checks, then submits an EAS Android
+build and waits for completion. It does not publish an app-store release.
+The workflow only builds `development`; documentation-only commits do not trigger
+another build. Each triggered run may consume EAS build quota.
+**Re-run jobs** rebuilds that run's commit, not the latest branch tip.
+Manual dispatch is also declared, but GitHub normally requires the workflow to
+exist on the default branch before exposing that button.
 
 Open the run under the repository's **Actions** tab. After it turns green, open its
 summary and tap **Download the Android APK** on your phone. Install **Folio Dev**;
@@ -90,3 +90,24 @@ not in source files or this chat.
 
 Preparing configuration does not create an APK or apply SQL. Verify the EAS build,
 installation, schema, connectivity, and device behavior as separate steps.
+
+## Content preservation check
+
+Download [Folio Content Check](fixtures/folio-content-check.epub), then import it
+as a new book in the updated Folio Dev APK. Existing books retain previously
+parsed pages; re-import is required to exercise new parser behavior. Keep originals
+and avoid deleting books with annotations just to test this update.
+
+Check the short opening “Yes.” and final “THE END.” Both should be present. Between
+them, read the wrapper text in before/inside/after order, each phrase once. Confirm
+all three list items are present, followed by the quotation's before/inside/after
+phrases. Under Table Check, the caption is “Journey distances”, followed by Place,
+Miles, Home, and 12, in that order. Both short lines and the fish-and-chips sentence
+must remain readable. The chapter name should be Content Check, not the XHTML
+file title. The same fixture's complete text sequence is asserted by `npm test`.
+
+Lists and table cells are plain reading blocks, not a visual reproduction of their
+original layout. Inline italics/bold and interactive footnotes are later work.
+On the phone, verify continuous and paginated modes, then force-close/reopen the
+app and return to the test book. Report missing/duplicated text and the mode used.
+Automated fixture checks do not establish native rendering or restart behavior.

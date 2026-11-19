@@ -1,7 +1,7 @@
 import { File } from 'expo-file-system';
 import { XMLParser } from 'fast-xml-parser';
 import JSZip from 'jszip';
-import { HTMLElement as HtmlNode, parse as parseHtml } from 'node-html-parser';
+import { HTMLElement as HtmlNode, Node as HtmlTreeNode, NodeType, parse as parseHtml } from 'node-html-parser';
 import { Book, BookContentPage } from '../types';
 import { coversDir, persistBookFile } from './localStore';
 
@@ -53,6 +53,47 @@ function resolvePath(base: string, href: string): string {
 
 function cleanText(s: string | undefined): string {
   return (s || '').replace(/\s+/g, ' ').trim();
+}
+
+// Keep block boundaries without reading both a wrapper's text and its children.
+// The reader still uses plain text: table cells and list items become blocks,
+// not a recreation of publisher layout. Inline elements stay in the same block.
+const TEXT_BLOCKS = new Set([
+  'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'CAPTION', 'DD', 'DIV', 'DL', 'DT',
+  'FIGCAPTION', 'FIGURE', 'FOOTER', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HEADER',
+  'HR', 'LI', 'MAIN', 'NAV', 'OL', 'P', 'PRE', 'SECTION', 'TABLE', 'TBODY', 'TD',
+  'TFOOT', 'TH', 'THEAD', 'TR', 'UL',
+]);
+const NON_READING_ELEMENTS = new Set(['HEAD', 'SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT']);
+
+function extractReadingBlocks(root: HtmlNode): string[] {
+  const blocks: string[] = [];
+  let buffer = '';
+  const flush = () => {
+    const text = cleanText(buffer);
+    if (text) blocks.push(text);
+    buffer = '';
+  };
+  const visit = (node: HtmlTreeNode) => {
+    if (node.nodeType === NodeType.TEXT_NODE) {
+      buffer += node.text;
+      return;
+    }
+    if (node.nodeType !== NodeType.ELEMENT_NODE) return;
+    const tag = node.rawTagName?.toUpperCase().split(':').pop() ?? '';
+    if (NON_READING_ELEMENTS.has(tag)) return;
+    if (tag === 'BR') {
+      flush();
+      return;
+    }
+    const isBlock = TEXT_BLOCKS.has(tag);
+    if (isBlock) flush();
+    node.childNodes.forEach(visit);
+    if (isBlock) flush();
+  };
+  visit(root);
+  flush();
+  return blocks;
 }
 
 export async function parseEpubFile(fileUri: string, fileName: string): Promise<ParsedEpub> {
@@ -123,17 +164,12 @@ export async function parseEpubFile(fileUri: string, fileName: string): Promise<
     const chapterHtml = await chapterZip.async('string');
     const root = parseHtml(chapterHtml);
 
+    const body = root.querySelector('body') ?? root;
     const heading =
-      cleanText(root.querySelector('h1, h2, h3, title')?.text) ||
+      cleanText(body.querySelector('h1, h2, h3, h4, h5, h6')?.text) ||
+      cleanText(root.querySelector('title')?.text) ||
       `Chapter ${rawChapters.length + 1}`;
-
-    const paragraphs: string[] = [];
-    root.querySelectorAll('p, blockquote, div.paragraph').forEach((node: HtmlNode) => {
-      // a <blockquote> wrapping <p>s would otherwise be emitted twice
-      if (node.tagName === 'BLOCKQUOTE' && node.querySelector('p')) return;
-      const text = cleanText(node.text);
-      if (text.length > 0) paragraphs.push(text);
-    });
+    const paragraphs = extractReadingBlocks(body);
 
     if (paragraphs.length > 0) {
       rawChapters.push({ title: heading, textParagraphs: paragraphs });
