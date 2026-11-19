@@ -104,7 +104,98 @@ export async function parseEpubFile(fileUri: string, fileName: string): Promise<
 
   const bookId = `epub-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
-  // 3. Cover (saved to permanent storage; blob: URLs don't exist on native)
+  // Validate readable content before writing any imported files.
+  // Spine → chapters
+  const rawChapters: { title: string; textParagraphs: string[] }[] = [];
+
+  for (const itemref of asArray<any>(opf.spine?.itemref)) {
+    const idref = itemref['@_idref'];
+    if (!idref || !manifestMap[idref]) {
+      throw new Error('This EPUB references a missing chapter. Try another copy of the book.');
+    }
+
+    const href = manifestMap[idref].href;
+    const chapterZip = zip.file(resolvePath(basePath, href)) || zip.file(href);
+    if (!chapterZip) {
+      throw new Error('This EPUB is missing a chapter file. Try another copy of the book.');
+    }
+
+    const chapterHtml = await chapterZip.async('string');
+    const root = parseHtml(chapterHtml);
+
+    const heading =
+      cleanText(root.querySelector('h1, h2, h3, title')?.text) ||
+      `Chapter ${rawChapters.length + 1}`;
+
+    const paragraphs: string[] = [];
+    root.querySelectorAll('p, blockquote, div.paragraph').forEach((node: HtmlNode) => {
+      // a <blockquote> wrapping <p>s would otherwise be emitted twice
+      if (node.tagName === 'BLOCKQUOTE' && node.querySelector('p')) return;
+      const text = cleanText(node.text);
+      if (text.length > 0) paragraphs.push(text);
+    });
+
+    if (paragraphs.length > 0) {
+      rawChapters.push({ title: heading, textParagraphs: paragraphs });
+    }
+  }
+
+  // Chapters → Folio reading pages (two paragraphs per page)
+  const pages: BookContentPage[] = [];
+
+  if (rawChapters.length === 0) {
+    throw new Error(
+      'No readable text was found in this EPUB. It may be image-only, protected, or unsupported. Try another EPUB file.'
+    );
+  }
+
+  let globalPageNum = 1;
+  let loc = 100;
+
+  rawChapters.forEach((ch, chIdx) => {
+    for (let pIdx = 0; pIdx < ch.textParagraphs.length; pIdx += 2) {
+      const p1 = ch.textParagraphs[pIdx] || '';
+      const p2 = ch.textParagraphs[pIdx + 1] ?? ''; // (the web version duplicated p1 here)
+
+      const dropCap = Array.from(p1)[0] || '';
+      const p1Rest = p1.slice(dropCap.length);
+
+      let hlWords = '';
+      let restWords = '';
+      if (p2) {
+        const words = p2.split(' ');
+        const highlightCount = Math.min(12, Math.max(5, Math.floor(words.length / 3)));
+        hlWords = words.slice(0, highlightCount).join(' ');
+        restWords = words.slice(highlightCount).join(' ');
+      }
+
+      pages.push({
+        chapterTitle: ch.title.toUpperCase(),
+        chapterNumber: `CHAPTER ${chIdx + 1}`,
+        folioNumber: `Folio ${globalPageNum}`,
+        dropCap,
+        paragraph1: p1Rest,
+        paragraph2Lead: '',
+        highlightedText: hlWords,
+        paragraph2Rest: restWords ? ' ' + restWords : '',
+        pageNumber: globalPageNum,
+        totalBookPages: 0,
+        locNumber: loc,
+        totalLoc: 2500,
+        minutesLeftInChapter: Math.max(3, Math.round((ch.textParagraphs.length - pIdx) * 1.5)),
+      });
+
+      globalPageNum++;
+      loc += 120;
+    }
+  });
+
+  pages.forEach((p) => {
+    p.totalBookPages = pages.length;
+    p.totalLoc = loc;
+  });
+
+  // Cover (saved to permanent storage; blob: URLs don't exist on native)
   let coverUrl = '';
   try {
     const coverMeta = asArray<any>(opf.metadata?.meta).find((m) => m['@_name'] === 'cover');
@@ -133,105 +224,6 @@ export async function parseEpubFile(fileUri: string, fileName: string): Promise<
     }
   } catch (err) {
     console.warn('EPUB cover extraction failed:', err);
-  }
-
-  // 4. Spine → chapters
-  const rawChapters: { title: string; textParagraphs: string[] }[] = [];
-
-  for (const itemref of asArray<any>(opf.spine?.itemref)) {
-    const idref = itemref['@_idref'];
-    if (!idref || !manifestMap[idref]) continue;
-
-    const href = manifestMap[idref].href;
-    const chapterZip = zip.file(resolvePath(basePath, href)) || zip.file(href);
-    if (!chapterZip) continue;
-
-    const chapterHtml = await chapterZip.async('string');
-    const root = parseHtml(chapterHtml);
-
-    const heading =
-      cleanText(root.querySelector('h1, h2, h3, title')?.text) ||
-      `Chapter ${rawChapters.length + 1}`;
-
-    const paragraphs: string[] = [];
-    root.querySelectorAll('p, blockquote, div.paragraph').forEach((node: HtmlNode) => {
-      // a <blockquote> wrapping <p>s would otherwise be emitted twice
-      if (node.tagName === 'BLOCKQUOTE' && node.querySelector('p')) return;
-      const text = cleanText(node.text);
-      if (text.length > 20) paragraphs.push(text);
-    });
-
-    if (paragraphs.length > 0) {
-      rawChapters.push({ title: heading, textParagraphs: paragraphs });
-    }
-  }
-
-  // 5. Chapters → Folio reading pages (two paragraphs per page)
-  const pages: BookContentPage[] = [];
-
-  if (rawChapters.length === 0) {
-    pages.push({
-      chapterTitle: title.toUpperCase(),
-      chapterNumber: 'CHAPTER I',
-      folioNumber: 'Folio 1',
-      dropCap: title.charAt(0) || 'T',
-      paragraph1:
-        'his book has been successfully loaded into your Folio private archive from a local EPUB file.',
-      paragraph2Lead: 'You can read, highlight, annotate passages, and track your progress. ',
-      highlightedText: 'Every volume retained the impression of its creator.',
-      paragraph2Rest: ' Enjoy your distraction-free reading experience.',
-      pageNumber: 1,
-      totalBookPages: 1,
-      locNumber: 1,
-      totalLoc: 100,
-      minutesLeftInChapter: 5,
-    });
-  } else {
-    let globalPageNum = 1;
-    let loc = 100;
-
-    rawChapters.forEach((ch, chIdx) => {
-      for (let pIdx = 0; pIdx < ch.textParagraphs.length; pIdx += 2) {
-        const p1 = ch.textParagraphs[pIdx] || '';
-        const p2 = ch.textParagraphs[pIdx + 1] ?? ''; // (the web version duplicated p1 here)
-
-        const dropCap = p1.charAt(0).toUpperCase();
-        const p1Rest = p1.substring(1);
-
-        let hlWords = '';
-        let restWords = '';
-        if (p2) {
-          const words = p2.split(' ');
-          const highlightCount = Math.min(12, Math.max(5, Math.floor(words.length / 3)));
-          hlWords = words.slice(0, highlightCount).join(' ');
-          restWords = words.slice(highlightCount).join(' ');
-        }
-
-        pages.push({
-          chapterTitle: ch.title.toUpperCase(),
-          chapterNumber: `CHAPTER ${chIdx + 1}`,
-          folioNumber: `Folio ${globalPageNum}`,
-          dropCap: dropCap || 'A',
-          paragraph1: p1Rest || p1,
-          paragraph2Lead: '',
-          highlightedText: hlWords,
-          paragraph2Rest: restWords ? ' ' + restWords : '',
-          pageNumber: globalPageNum,
-          totalBookPages: 0,
-          locNumber: loc,
-          totalLoc: 2500,
-          minutesLeftInChapter: Math.max(3, Math.round((ch.textParagraphs.length - pIdx) * 1.5)),
-        });
-
-        globalPageNum++;
-        loc += 120;
-      }
-    });
-
-    pages.forEach((p) => {
-      p.totalBookPages = pages.length;
-      p.totalLoc = loc;
-    });
   }
 
   const fileLocation = persistBookFile(fileUri, bookId);

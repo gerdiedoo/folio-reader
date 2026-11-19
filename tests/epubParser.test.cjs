@@ -1,0 +1,95 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const { test } = require('node:test');
+const ts = require('typescript');
+const JSZip = require('jszip');
+
+// Exercise the real parser with real ZIP/XML/HTML dependencies. Only native
+// filesystem access is replaced; these tests do not verify device storage.
+const source = fs.readFileSync(path.join(__dirname, '../src/lib/epubParser.ts'), 'utf8');
+const compiled = ts.transpileModule(source, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, esModuleInterop: true },
+}).outputText;
+
+async function fixture(body, { missingFile = false, missingReference = false, emptySpine = false } = {}) {
+  const zip = new JSZip();
+  zip.file('META-INF/container.xml', '<container><rootfiles><rootfile full-path="EPUB/content.opf"/></rootfiles></container>');
+  zip.file('EPUB/content.opf', `<package><metadata><title>Test book</title><creator>Test author</creator></metadata><manifest><item id="chapter" href="text/chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine>${emptySpine ? '' : `<itemref idref="${missingReference ? 'absent' : 'chapter'}"/>`}</spine></package>`);
+  if (!missingFile) zip.file('EPUB/text/chapter.xhtml', `<html><head><title>Chapter</title></head><body>${body}</body></html>`);
+  return zip.generateAsync({ type: 'uint8array' });
+}
+
+function parser(bytes) {
+  const writes = [];
+  class File {
+    constructor() { this.size = bytes.length; }
+    async bytes() { return bytes; }
+  }
+  const exports = {};
+  vm.runInNewContext(compiled, {
+    exports,
+    console,
+    require(name) {
+      if (name === 'expo-file-system') return { File };
+      if (name === './localStore') return {
+        coversDir() { writes.push('cover'); throw new Error('Unexpected cover access'); },
+        persistBookFile() { writes.push('epub'); return 'file:///saved.epub'; },
+      };
+      return require(name);
+    },
+  }, { filename: 'epubParser.js' });
+  return { parse: () => exports.parseEpubFile('file:///input.epub', 'input.epub'), writes };
+}
+
+function paragraphs(result) {
+  return Array.from(result.pages).flatMap(p => [
+    p.dropCap + p.paragraph1,
+    p.paragraph2Lead + p.highlightedText + p.paragraph2Rest,
+  ]).filter(Boolean);
+}
+
+test('retains short dialogue, closing lines, and an unpaired final paragraph', async () => {
+  const input = parser(await fixture('<p>Yes.</p><p>A longer sentence survives alongside the short dialogue.</p><p>THE END.</p>'));
+  const result = await input.parse();
+  assert.deepEqual(paragraphs(result), ['Yes.', 'A longer sentence survives alongside the short dialogue.', 'THE END.']);
+  assert.equal(result.book.totalPages, 2);
+  assert.deepEqual(input.writes, ['epub']);
+});
+
+test('imports a short poem instead of inventing fallback content', async () => {
+  const result = await parser(await fixture('<p>I wait.</p><p>You go.</p>')).parse();
+  assert.deepEqual(paragraphs(result), ['I wait.', 'You go.']);
+});
+
+for (const text of ['a', 'é', '📖', 'lowercase opening']) {
+  test(`preserves the first character without duplication or case changes: ${text}`, async () => {
+    assert.deepEqual(paragraphs(await parser(await fixture(`<p>${text}</p>`)).parse()), [text]);
+  });
+}
+
+test('ignores empty paragraphs without duplicating nested blockquotes', async () => {
+  const result = await parser(await fixture('<p>  </p><blockquote><p>Stay.</p><p>Go.</p></blockquote>')).parse();
+  assert.deepEqual(paragraphs(result), ['Stay.', 'Go.']);
+});
+
+for (const [name, body, options, message] of [
+  ['empty content', '<p> </p>', {}, /No readable text/],
+  ['image-only content', '<img src="page.png"/>', {}, /No readable text/],
+  ['empty spine', '<p>Text.</p>', { emptySpine: true }, /No readable text/],
+  ['missing chapter reference', '<p>Text.</p>', { missingReference: true }, /missing chapter/],
+  ['missing chapter file', '<p>Text.</p>', { missingFile: true }, /missing a chapter file/],
+]) {
+  test(`rejects ${name} without saving an imported book`, async () => {
+    const input = parser(await fixture(body, options));
+    await assert.rejects(input.parse, message);
+    assert.deepEqual(input.writes, []);
+  });
+}
+
+test('rejects a ZIP without EPUB container metadata', async () => {
+  const input = parser(await new JSZip().generateAsync({ type: 'uint8array' }));
+  await assert.rejects(input.parse, /container.xml not found/);
+  assert.deepEqual(input.writes, []);
+});

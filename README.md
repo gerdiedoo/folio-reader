@@ -70,3 +70,29 @@ works in Expo Go; no custom native code.
 - The selected reading theme (Parchment, White, Sepia, or Charcoal) is applied across app screens, navigation, and dialogs.
 - All tables use a shared `default_user` row / no RLS, so every install of the same Supabase project sees the same data. Add a `user_id` column and Row Level Security before shipping.
 - `assets/folio-logo.svg` is the source logo; Expo uses its 1024×1024 PNG export as the app icon.
+
+## Development checks
+
+```bash
+npm ci
+npm test
+npm run typecheck
+npx expo export --platform android --platform ios --max-workers 2 --output-dir dist
+```
+
+The parser regression tests generate EPUB ZIP fixtures and use the actual XML/HTML
+parsing dependencies. Native filesystem access is mocked; file-picker, storage,
+and rendered reading behavior still require device testing.
+
+### EPUB import limitations
+
+Imports preserve short paragraphs, including single-character passages. Files with
+no supported readable text, missing chapter references, or missing chapter files
+are rejected with an error instead of producing placeholder reading content.
+Validation runs before imported cover/book files are written. Existing imports
+are not rewritten; re-import the original EPUB to recover previously omitted text.
+
+The current reader still converts selected paragraph elements to plain text. Rich
+formatting, lists, illustrations, and linked footnotes are not fully supported.
+A successful import does not yet guarantee full EPUB fidelity. Improving that
+rendering model is a separate development step.
