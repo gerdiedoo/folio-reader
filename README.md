@@ -110,3 +110,16 @@ and follow the [content-check instructions](docs/android-testing.md#content-pres
 See [Android testing](docs/android-testing.md) for the standalone **Folio Dev** APK,
 separate Supabase project configuration, and phone test checklist. Use the
 `dev-preview` EAS profile to install beside the main Folio app.
+
+## Bookmarks
+
+In Scroll or Pages mode, tap the reader's bookmark icon to save/remove the current
+passage. **More → Bookmarks** lists saved locations for the open book, with text
+previews, jump actions, and individual removal. Bookmarks persist on this device
+and are independent of font size and display pagination. They open the start of
+the imported passage, not an exact word or subpage. In Line mode, switch to Scroll
+or Pages to save; opening an existing bookmark switches Line mode to Scroll.
+
+Bookmarks are local only and are not part of Supabase backup/restore. Removing a
+book removes its bookmarks; re-importing creates a new book identity. The old
+unsaved bookmark toggle cannot be migrated because it never stored a location.

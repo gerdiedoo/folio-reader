@@ -111,3 +111,31 @@ original layout. Inline italics/bold and interactive footnotes are later work.
 On the phone, verify continuous and paginated modes, then force-close/reopen the
 app and return to the test book. Report missing/duplicated text and the mode used.
 Automated fixture checks do not establish native rendering or restart behavior.
+
+## Bookmark check
+
+Install the updated Folio Dev APK over the previous version. No database migration
+or EPUB re-import is needed for bookmarks.
+
+1. Open a book in Scroll or Pages mode. The bookmark icon should initially be
+   unselected. Save a passage; wait for “Bookmark saved on this device”.
+2. Move to a different passage and save another. Open **More → Bookmarks**; verify
+   the two previews and tap one to return to its beginning.
+3. Change text size or switch between Scroll/Pages, then open the same bookmark.
+   It should reach the same imported passage even when screen pagination changes.
+4. Force-close and reopen Folio Dev. Open the book and verify both bookmarks remain.
+   Repeat in airplane mode.
+5. Save a bookmark in another book. Remove one from the first book's bookmark list;
+   the other locations and the other book's bookmark must remain.
+6. In Line mode, the bookmark button should explain that saving requires Scroll or
+   Pages. Selecting an existing bookmark should open its passage in Scroll mode.
+7. Check the bookmark controls and list in Charcoal theme, with large system text,
+   and with TalkBack. Verify actions are named, the selected state is announced,
+   and opening/removing bookmarks does not accidentally trigger the other action.
+
+Bookmarks save the start of an imported passage (currently up to two text blocks),
+not the exact word or displayed subpage. They stay local to this installation and
+are not included in cloud backup. Remove books only using disposable test data;
+removal should clear that book's bookmarks. Storage failures are covered by mocked
+adapter tests; native persistence, screen-reader focus and visual layout still
+need this phone check. A failed load offers **Try again** and must not erase data.

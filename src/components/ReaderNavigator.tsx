@@ -159,7 +159,7 @@ export const ChapterSheet: React.FC<ChapterSheetProps> = ({ chapters, currentInd
                   {c.pageCount} {c.pageCount === 1 ? 'page' : 'pages'} · starts p. {c.startIndex + 1}
                 </Text>
               </View>
-              {active ? <Icon name="bookmark" size={18} color={palette.primary} /> : null}
+              {active ? <Icon name="check" size={18} color={palette.primary} /> : null}
             </Pressable>
           );
         })}

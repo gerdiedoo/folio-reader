@@ -109,3 +109,14 @@ export interface UserProfile {
   fullName?: string;
   avatarUrl?: string;
 }
+
+/** A local bookmark anchored to an imported passage, independent of display pagination. */
+export interface Bookmark {
+  id: string;
+  bookId: string;
+  pageNumber: number;
+  locNumber: number;
+  chapterTitle: string;
+  excerpt: string;
+  createdAt: string;
+}

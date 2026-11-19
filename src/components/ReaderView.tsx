@@ -12,11 +12,15 @@ import {
   View,
   ViewToken,
 } from 'react-native';
+import { findBookmarkPage } from '../lib/bookmarks';
+import { BookmarkSheet } from './BookmarkSheet';
+import { useAppTheme } from '../AppTheme';
 import { BOOK_PAGES } from '../data/initialData';
 import { colors, F, readerFontFamily, readerPaper, type } from '../theme';
 import {
   Book,
   BookContentPage,
+  Bookmark,
   HighlightEntry,
   PaperTheme,
   ReadingFlowMode,
@@ -46,8 +50,12 @@ interface ReaderViewProps {
   onAddHighlight: (hl: Omit<HighlightEntry, 'id' | 'dateAdded'>) => void;
   onDeleteHighlight: (id: string) => void;
   onAddReflectionNote: (highlightId: string, note: string) => void;
-  isBookmarked: boolean;
-  onToggleBookmark: () => void;
+  bookmarks: Bookmark[];
+  bookmarkStatus: 'loading' | 'ready' | 'error';
+  bookmarkSaving: boolean;
+  onRetryBookmarks: () => void;
+  onRemoveBookmark: (id: string) => void;
+  onToggleBookmark: (bookId: string, page: BookContentPage) => void;
   isNavVisible: boolean;
   isImmersiveMode: boolean;
   onToggleNavVisibility: () => void;
@@ -339,7 +347,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   onAddHighlight,
   onDeleteHighlight,
   onAddReflectionNote,
-  isBookmarked,
+  bookmarks,
+  bookmarkStatus,
+  bookmarkSaving,
+  onRetryBookmarks,
+  onRemoveBookmark,
   onToggleBookmark,
   isNavVisible,
   isImmersiveMode,
@@ -373,6 +385,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const winWidthRef = useRef(winWidth);
   winWidthRef.current = winWidth;
   const [chaptersOpen, setChaptersOpen] = useState(false);
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
   // Scroll mode renders a window of pages that starts at `listBase`. A jump just moves the
   // window (and remounts the list), so the destination shows instantly instead of the list
   // scrolling through pages whose heights it hasn't measured yet. Earlier pages are
@@ -417,6 +430,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   // reset when a different book is opened
   const bookId = currentBook?.id;
+  const bookBookmarks = useMemo(() => bookmarks.filter(item => item.bookId === bookId)
+    .sort((a, b) => a.pageNumber - b.pageNumber), [bookmarks, bookId]);
   const page = pages[Math.min(pageIndex, Math.max(0, pages.length - 1))];
   // Saving the reading position re-renders the whole app and writes to storage, so while the
   // reader is scrolling or scrubbing we only report it once it has settled for a moment.
@@ -637,6 +652,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   useEffect(() => {
     setChaptersOpen(false);
+    setBookmarksOpen(false);
   }, [bookId]);
 
   // reset when a different book is opened
@@ -835,6 +851,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     );
   }
 
+  const isBookmarked = bookBookmarks.some(item => item.pageNumber === page.pageNumber && item.locNumber === page.locNumber);
+
   const paginatedPercent = Math.round(((pageIndex + 1) / pages.length) * 100);
   const percent = Math.max(
     0,
@@ -887,8 +905,16 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               <HudButton
                 icon={isBookmarked ? 'bookmark' : 'bookmark_border'}
                 active={isBookmarked}
-                onPress={onToggleBookmark}
-                label="Bookmark"
+                onPress={() => {
+                  if (flowMode === 'single-line') {
+                    showToast('Switch to Scroll or Pages to bookmark a passage');
+                    return;
+                  }
+                  onToggleBookmark(currentBook.id, page);
+                }}
+                disabled={bookmarkStatus !== 'ready' || bookmarkSaving}
+                selected={isBookmarked}
+                label={isBookmarked ? 'Remove bookmark from this passage' : 'Save bookmark for this passage'}
               />
               <HudButton icon="fullscreen" onPress={onToggleNavVisibility} label="Immersive mode" />
               <HudButton
@@ -976,6 +1002,17 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               >
                 <Icon name="toc" size={18} color={colors.onSurface} />
                 <Text style={styles.menuText}>Contents</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.menuItem, { minHeight: 48 }]}
+                accessibilityRole="button"
+                onPress={() => {
+                  setMenuOpen(false);
+                  setBookmarksOpen(true);
+                }}
+              >
+                <Icon name="bookmark" size={18} color={colors.onSurface} />
+                <Text style={styles.menuText}>Bookmarks ({bookBookmarks.length})</Text>
               </Pressable>
               <Pressable
                 style={styles.menuItem}
@@ -1153,6 +1190,31 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         </View>
       </View>
 
+      {bookmarksOpen && (
+        <BookmarkSheet
+          bookmarks={bookBookmarks}
+          currentPage={page.pageNumber}
+          status={bookmarkStatus}
+          saving={bookmarkSaving}
+          onClose={() => setBookmarksOpen(false)}
+          onRetry={onRetryBookmarks}
+          onRemove={onRemoveBookmark}
+          onSelect={(bookmark) => {
+            const target = findBookmarkPage(bookmark, pages);
+            if (target < 0) {
+              showToast('This saved passage is unavailable in this copy');
+              return;
+            }
+            setBookmarksOpen(false);
+            if (flowMode === 'single-line') {
+              onUpdateSettings({ readingFlowMode: 'continuous' });
+              jumpList(target);
+            }
+            goToSource(target);
+          }}
+        />
+      )}
+
       {chaptersOpen && (
         <ChapterSheet
           chapters={chapters}
@@ -1187,16 +1249,24 @@ const HudButton: React.FC<{
   onPress: () => void;
   label: string;
   active?: boolean;
-}> = ({ icon, onPress, label, active }) => (
-  <Pressable
-    onPress={onPress}
-    accessibilityLabel={label}
-    hitSlop={4}
-    style={[styles.hudBtn, active && { backgroundColor: 'rgba(255,219,207,0.55)' }]}
-  >
-    <Icon name={icon} size={21} color={active ? colors.primary : colors.muted} />
-  </Pressable>
-);
+  selected?: boolean;
+  disabled?: boolean;
+}> = ({ icon, onPress, label, active, selected, disabled }) => {
+  const palette = useAppTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityLabel={label}
+      accessibilityRole="button"
+      accessibilityState={{ selected, disabled }}
+      disabled={disabled}
+      hitSlop={4}
+      style={[styles.hudBtn, active && { backgroundColor: palette.primaryFixed }, disabled && { opacity: 0.4 }]}
+    >
+      <Icon name={icon} size={21} color={active ? palette.primary : palette.muted} />
+    </Pressable>
+  );
+};
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
@@ -1209,7 +1279,7 @@ const styles = StyleSheet.create({
   hudBook: { ...type.labelMd, color: colors.onSurface },
   hudChapter: { ...type.bodySm, color: colors.muted },
   hudActions: { flexDirection: 'row', alignItems: 'center' },
-  hudBtn: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  hudBtn: { width: 48, height: 48, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   hudSlim: {
     minHeight: 46,
     flexDirection: 'row',

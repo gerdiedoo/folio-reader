@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   EBGaramond_400Regular,
   EBGaramond_400Regular_Italic,
@@ -34,6 +35,7 @@ import {
   INITIAL_LEXICON,
   INITIAL_SETTINGS,
 } from './src/data/initialData';
+import { createBookmark, createBookmarkStore } from './src/lib/bookmarks';
 import { loadJSON, loadPages, removeBookFiles, saveJSON, savePages } from './src/lib/localStore';
 import { parseEpubFile } from './src/lib/epubParser';
 import {
@@ -76,6 +78,7 @@ import { AppThemeProvider, createPalette } from './src/AppTheme';
 import {
   Book,
   BookContentPage,
+  Bookmark,
   HighlightEntry,
   LexiconEntry,
   ReadingGoal,
@@ -114,6 +117,8 @@ function applySavedReadingProgress(book: Book, entry: LibraryBackupEntry): Book 
   };
 }
 
+const bookmarkStore = createBookmarkStore(AsyncStorage);
+
 function FolioApp() {
   const insets = useSafeAreaInsets();
 
@@ -151,7 +156,20 @@ function FolioApp() {
   }, [activeTab]);
 
   // Modal / overlay state
-  const [isBookmarked, setIsBookmarked] = useState(true);
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  const [bookmarkStatus, setBookmarkStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [bookmarkSaving, setBookmarkSaving] = useState(false);
+  const bookmarkWritePending = useRef(false);
+  const loadBookmarks = useCallback(async () => {
+    setBookmarkStatus('loading');
+    try {
+      setBookmarks(await bookmarkStore.load());
+      setBookmarkStatus('ready');
+    } catch {
+      setBookmarkStatus('error');
+    }
+  }, []);
+  useEffect(() => { void loadBookmarks(); }, [loadBookmarks]);
   const [isSettingsSheetOpen, setIsSettingsSheetOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -666,10 +684,28 @@ function FolioApp() {
     upsertReadingSettingsToSupabase(updated);
   };
 
-  const handleToggleBookmark = () => {
-    const next = !isBookmarked;
-    setIsBookmarked(next);
-    showToast(next ? `Bookmark set for page ${currentBook?.currentPage ?? 1}` : 'Bookmark removed');
+  const writeBookmarks = async (operation: () => Promise<Bookmark[]>, message: (items: Bookmark[]) => string) => {
+    if (bookmarkStatus !== 'ready' || bookmarkWritePending.current) return;
+    bookmarkWritePending.current = true;
+    setBookmarkSaving(true);
+    try {
+      const saved = await operation();
+      setBookmarks(saved);
+      showToast(message(saved));
+    } catch {
+      showToast("Couldn't save bookmarks. Try again.");
+    } finally {
+      bookmarkWritePending.current = false;
+      setBookmarkSaving(false);
+    }
+  };
+  const handleToggleBookmark = (bookId: string, page: BookContentPage) => {
+    const bookmark = createBookmark(bookId, page);
+    void writeBookmarks(() => bookmarkStore.toggle(bookmark), saved =>
+      saved.some(item => item.id === bookmark.id) ? 'Bookmark saved on this device' : 'Bookmark removed');
+  };
+  const handleRemoveBookmark = (id: string) => {
+    void writeBookmarks(() => bookmarkStore.remove(id), () => 'Bookmark removed');
   };
 
   const handleAddHighlight = (newHl: Omit<HighlightEntry, 'id' | 'dateAdded'>) => {
@@ -731,6 +767,13 @@ function FolioApp() {
   const handleRemoveBook = async (bookId: string) => {
     const book = books.find((item) => item.id === bookId);
     if (!book) return;
+
+    try {
+      setBookmarks(await bookmarkStore.removeBook(bookId));
+    } catch {
+      showToast("Couldn't remove this book's bookmarks. Try again.");
+      return;
+    }
 
     const remainingBooks = books.filter((item) => item.id !== bookId);
     setBooks(remainingBooks);
@@ -821,7 +864,11 @@ function FolioApp() {
             onAddHighlight={handleAddHighlight}
             onDeleteHighlight={handleDeleteHighlight}
             onAddReflectionNote={handleAddReflectionNote}
-            isBookmarked={isBookmarked}
+            bookmarks={bookmarks}
+            bookmarkStatus={bookmarkStatus}
+            bookmarkSaving={bookmarkSaving}
+            onRetryBookmarks={loadBookmarks}
+            onRemoveBookmark={handleRemoveBookmark}
             onToggleBookmark={handleToggleBookmark}
             isNavVisible={isNavVisible && !isImmersiveMode}
             isImmersiveMode={isImmersiveMode}
