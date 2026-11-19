@@ -15,14 +15,36 @@ Folio Dev deletes its local data; you do not need to uninstall the main app.
    until per-account isolation is implemented. The backup table has account RLS.
 2. Get the test project's URL and publishable key (or legacy anon key). Never use
    a service-role key, `sb_secret_` key, or database password in the app.
-3. In the existing Expo/EAS project's **development** environment, add:
-   - `EXPO_PUBLIC_DEV_SUPABASE_URL`: the test project URL
-   - `EXPO_PUBLIC_DEV_SUPABASE_KEY`: the test project's publishable/anon key
+3. The `dev-preview` profile in `eas.json` contains this test project's URL and
+   publishable key. These are public client values, compiled into the APK; they
+   are intentionally versioned only for that test profile. Database passwords,
+   service-role keys, and Expo access tokens must never go in this file.
 
-Use Plain text or Sensitive visibility so EAS can resolve the app configuration.
-These public client values are compiled into the APK. Dev builds select only the
-DEV variables; they never fall back to production credentials. The known production
-host and any supplied production host are rejected for a development build.
+Dev builds select only the DEV variables; they never fall back to production
+credentials. The known production host and any supplied production host are
+rejected for a development build. When changing test projects, update the two
+public values in the `dev-preview` profile and rebuild.
+
+## Build from your phone using GitHub Actions
+
+Save an Expo token with access to this app's EAS project as the repository's
+`EXPO_TOKEN` Actions secret. The workflow never stores this token in source files.
+
+**Build Folio Dev APK** starts automatically when its workflow or `eas.json` is
+pushed to `development`. It runs tests and TypeScript checks, then submits an EAS
+Android build and waits for completion. It does not publish an app-store release.
+The workflow only builds `development`, and intentionally does not rebuild on
+every application commit. To build later app changes, open a previous run of this
+workflow, use **View workflow file**, edit a comment on the `development` branch,
+and commit it to trigger a new build. **Re-run jobs** rebuilds the old run's commit,
+not the latest branch tip. Manual dispatch is also declared, but GitHub normally
+requires the workflow to exist on the default branch before exposing that button.
+
+Open the run under the repository's **Actions** tab. After it turns green, open its
+summary and tap **Download the Android APK** on your phone. Install **Folio Dev**;
+the main Folio app stays installed. The token must have Developer access and the
+EAS account must have available build quota. If a step fails, inspect that error
+before retrying; never paste the token into the logs or chat.
 
 ## Build and install
 

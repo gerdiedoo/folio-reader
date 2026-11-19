@@ -1,0 +1,104 @@
+name: Build Folio Dev APK
+
+on:
+  push:
+    branches: [development]
+    paths:
+      - .github/workflows/build-folio-dev.yml
+      - eas.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: folio-dev-apk
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/development'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      EXPO_PUBLIC_APP_VARIANT: development
+      EAS_BUILD_PROFILE: dev-preview
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run regression tests
+        run: npm test
+      - name: Check TypeScript
+        run: npm run typecheck
+      - name: Check Expo token is configured
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo '::error::Add the EXPO_TOKEN repository secret before rerunning this workflow.'
+            exit 1
+          fi
+      - name: Load the test profile for local EAS config evaluation
+        run: |
+          node <<'JS'
+          const fs = require('node:fs');
+          const env = require('./eas.json').build['dev-preview'].env;
+          for (const name of ['EXPO_PUBLIC_APP_VARIANT', 'EXPO_PUBLIC_DEV_SUPABASE_URL', 'EXPO_PUBLIC_DEV_SUPABASE_KEY']) {
+            const value = env[name];
+            if (!value || /[\r\n]/.test(value)) throw new Error(`Missing or invalid ${name}`);
+            fs.appendFileSync(process.env.GITHUB_ENV, `${name}=${value}\n`);
+          }
+          JS
+      - name: Set up authenticated EAS CLI
+        uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
+        with:
+          eas-version: 24.13.0
+          packager: npm
+          token: ${{ secrets.EXPO_TOKEN }}
+      - name: Build standalone Android APK
+        run: eas build --platform android --profile dev-preview --non-interactive --wait --json > "$RUNNER_TEMP/folio-dev-build.json"
+      - name: Show APK download
+        run: |
+          node <<'JS'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const result = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'folio-dev-build.json'), 'utf8'));
+          const build = Array.isArray(result) ? result[0] : result;
+          if (build?.status !== 'FINISHED' || !build.artifacts?.buildUrl) {
+            throw new Error('EAS did not return a finished APK download. Check the build logs.');
+          }
+          const url = new URL(build.artifacts.buildUrl);
+          if (url.protocol !== 'https:') throw new Error('Expected an HTTPS APK download.');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
+            '# Folio Dev is ready to install',
+            '',
+            `[Download the Android APK](${url.href})`,
+            '',
+            'Open this link on your Android phone and install **Folio Dev**.',
+            'It installs alongside Folio; you do not need to uninstall your main app.',
+            '',
+            `EAS build ID: ${build.id}`,
+            `Source commit: ${process.env.GITHUB_SHA}`,
+            '',
+            'Use the phone checklist in docs/android-testing.md. Google sign-in requires separate test-project provider setup.',
+            '',
+          ].join('\n'));
+          JS
+      - name: Explain build failure
+        if: failure()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF_SUMMARY'
+          ## Folio Dev build did not complete
+
+          Open the failed step above for the error. Check that the saved Expo token
+          belongs to an account/robot with Developer access to this app's EAS project.
+          EAS quota, Android signing setup, or project permissions may also block a build.
+          Fix the reported issue, then use **Re-run failed jobs**. Do not post tokens in logs or chat.
+          EOF_SUMMARY

@@ -27,7 +27,9 @@
       "distribution": "internal",
       "environment": "development",
       "env": {
-        "EXPO_PUBLIC_APP_VARIANT": "development"
+        "EXPO_PUBLIC_APP_VARIANT": "development",
+        "EXPO_PUBLIC_DEV_SUPABASE_URL": "https://ntdhzgjkmfohgjzymdgh.supabase.co",
+        "EXPO_PUBLIC_DEV_SUPABASE_KEY": "sb_publishable_9Y9vXw8A1skE2jzIc04DIA_slzNc75l"
       },
       "android": {
         "buildType": "apk"
