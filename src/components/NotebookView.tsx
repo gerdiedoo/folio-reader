@@ -14,7 +14,7 @@ import {
 import { colors, F, NAV_SPACE, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
 import { Book, HighlightEntry, LexiconEntry } from '../types';
-import { HIGHLIGHT_COLORS } from './PassageSheet';
+import { HIGHLIGHT_COLORS, highlightTextStyle } from '../lib/highlights';
 import { Chip } from './ui/Chip';
 import { Icon } from './ui/Icon';
 import { ModalShell } from './ui/ModalShell';
@@ -279,9 +279,9 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
       {filteredHighlights.map((hl) => (
         <View key={hl.id} style={styles.card}>
           <View style={styles.cardTop}>
-            <View style={[styles.tag, { backgroundColor: `${hl.colorHex}80` }]}>
+            <View style={[styles.tag, { backgroundColor: highlightTextStyle(hl.colorHex).backgroundColor }]}>
               <View style={[styles.tagDot, { backgroundColor: hl.colorHex }]} />
-              <Text style={styles.tagText}>{hl.colorName}</Text>
+              <Text style={[styles.tagText, { color: highlightTextStyle(hl.colorHex).color }]}>{hl.colorName}</Text>
             </View>
             <Text style={styles.meta} numberOfLines={1}>
               {hl.chapter} · p. {hl.page}

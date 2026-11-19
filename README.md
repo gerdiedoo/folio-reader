@@ -123,3 +123,22 @@ or Pages to save; opening an existing bookmark switches Line mode to Scroll.
 Bookmarks are local only and are not part of Supabase backup/restore. Removing a
 book removes its bookmarks; re-importing creates a new book identity. The old
 unsaved bookmark toggle cannot be migrated because it never stored a location.
+
+## Reader typography and selection
+
+The available typefaces are Literata, EB Garamond, Manrope, System Serif, and
+System Sans. The first three are bundled fonts; the system choices use the
+platform's own fonts. Older preferences are automatically relabeled to match
+what was actually rendered: Bookerly/Georgia → System Serif, Inter → Manrope,
+and OpenDyslexic → System Sans. No OpenDyslexic font is bundled or advertised.
+
+The live preview shares the reader's font-size/line-height calculation and paper
+colors. It demonstrates typography, not the exact page width or device text
+scaling. Publisher-layout controls are hidden because EPUB text is still
+reflowed without publisher layout. The legacy stored flag is normalized to false;
+no database schema migration is required.
+
+Passage selection, saved reader highlights, and notebook highlight labels use
+opaque colors with contrasting text. Tests verify normal-text contrast of at
+least 4.5:1 for the palette and representative saved colors. This is a targeted
+contrast improvement, not certification of the whole app's accessibility.

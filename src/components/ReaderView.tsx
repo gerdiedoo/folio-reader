@@ -12,6 +12,8 @@ import {
   View,
   ViewToken,
 } from 'react-native';
+import { readerTextMetrics } from '../lib/readerPreferences';
+import { HIGHLIGHT_COLORS, highlightTextStyle } from '../lib/highlights';
 import { findBookmarkPage } from '../lib/bookmarks';
 import { BookmarkSheet } from './BookmarkSheet';
 import { useAppTheme } from '../AppTheme';
@@ -26,7 +28,7 @@ import {
   ReadingFlowMode,
   ReadingSettings,
 } from '../types';
-import { HIGHLIGHT_COLORS, PassageSheet } from './PassageSheet';
+import { PassageSheet } from './PassageSheet';
 import { ChapterInfo, ChapterSheet, ScrubBar } from './ReaderNavigator';
 import { SingleLineReader } from './SingleLineReader';
 import { Icon } from './ui/Icon';
@@ -67,7 +69,6 @@ interface ReaderViewProps {
 }
 
 const MARGINS = { narrow: 14, regular: 20, wide: 30 } as const;
-const LINE_MULT = { compact: 1.45, standard: 1.7, loose: 2.0 } as const;
 const NO_HIGHLIGHTS: HighlightEntry[] = [];
 
 const fmt = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
@@ -241,10 +242,7 @@ const Paragraph = React.memo<ParagraphProps>(
 
     segs.forEach((seg, i) => {
       pushPlain(cursor, seg.start, `p${i}`);
-      const mark = {
-        backgroundColor: seg.hl ? `${seg.hl.colorHex}dd` : 'rgba(248,232,162,0.75)',
-        color: '#1c1c18',
-      };
+      const mark = highlightTextStyle(seg.hl?.colorHex ?? HIGHLIGHT_COLORS[0].hex);
       const text = full.slice(seg.start, seg.end);
       const onPress = seg.hl
         ? () => onOpen(full, seg.hl, undefined)
@@ -521,8 +519,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   );
 
   // ---- typography ----
-  const baseSize = 14 + settings.fontSizeStep * 1.5;
-  const lineHeight = Math.round(baseSize * LINE_MULT[settings.lineSpacing]);
+  const { fontSize: baseSize, lineHeight } = readerTextMetrics(settings);
   const fontFamily = readerFontFamily(settings.font);
   const hPad = MARGINS[settings.margins];
 

@@ -1,7 +1,7 @@
 export type TabType = 'library' | 'reading' | 'notebook' | 'settings';
 
 export type PaperTheme = 'parchment' | 'white' | 'sepia' | 'charcoal';
-export type Typeface = 'Literata' | 'Bookerly' | 'Georgia' | 'Inter' | 'OpenDyslexic';
+export type Typeface = 'Literata' | 'EB Garamond' | 'Manrope' | 'System Serif' | 'System Sans';
 export type LineSpacing = 'compact' | 'standard' | 'loose';
 export type Margins = 'narrow' | 'regular' | 'wide';
 
@@ -19,6 +19,7 @@ export interface ReadingSettings {
   fontSizeStep: number; // 1 to 8, default 4
   lineSpacing: LineSpacing;
   margins: Margins;
+  /** Legacy storage field; publisher layout is not implemented and this stays false. */
   usePublisherDefaults: boolean;
   displayReadingPace: boolean;
   defaultCoverStyle?: 'image' | 'typographic';

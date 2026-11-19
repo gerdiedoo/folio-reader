@@ -35,6 +35,7 @@ import {
   INITIAL_LEXICON,
   INITIAL_SETTINGS,
 } from './src/data/initialData';
+import { normalizeReaderSettings } from './src/lib/readerPreferences';
 import { createBookmark, createBookmarkStore } from './src/lib/bookmarks';
 import { loadJSON, loadPages, removeBookFiles, saveJSON, savePages } from './src/lib/localStore';
 import { parseEpubFile } from './src/lib/epubParser';
@@ -222,7 +223,7 @@ function FolioApp() {
       ]);
       if (cancelled) return;
 
-      let mergedSettings: ReadingSettings = { ...INITIAL_SETTINGS, ...(lSettings ?? {}) };
+      const mergedSettings = normalizeReaderSettings({ ...INITIAL_SETTINGS, ...(lSettings ?? {}) });
       if (lBooks?.length) setBooks(lBooks);
       if (lGoal) setReadingGoal(lGoal);
       if (lHighlights) setHighlights(lHighlights);
@@ -272,7 +273,7 @@ function FolioApp() {
           mergedGoal = sbGoal;
           setReadingGoal(sbGoal);
         }
-        if (sbSettings) setSettings((prev) => ({ ...prev, ...sbSettings }));
+        if (sbSettings) setSettings((prev) => normalizeReaderSettings({ ...prev, ...sbSettings }));
       } catch (err) {
         console.warn('Initial Supabase fetch note:', err);
       }
@@ -679,7 +680,7 @@ function FolioApp() {
   };
 
   const handleUpdateSettings = (partial: Partial<ReadingSettings>) => {
-    const updated = { ...settings, ...partial };
+    const updated = normalizeReaderSettings({ ...settings, ...partial });
     setSettings(updated);
     upsertReadingSettingsToSupabase(updated);
   };
@@ -796,8 +797,9 @@ function FolioApp() {
   };
 
   const saveSettingsFromSheet = (newSettings: ReadingSettings, message: string) => {
-    setSettings(newSettings);
-    upsertReadingSettingsToSupabase(newSettings);
+    const normalized = normalizeReaderSettings(newSettings);
+    setSettings(normalized);
+    upsertReadingSettingsToSupabase(normalized);
     showToast(message);
   };
 
@@ -908,7 +910,7 @@ function FolioApp() {
       {isSettingsSheetOpen && (
         <SettingsSheet
           settings={settings}
-          onSave={(s) => saveSettingsFromSheet(s, 'Typography preferences applied & synced')}
+          onSave={(s) => saveSettingsFromSheet(s, 'Typography preferences applied')}
           onClose={() => setIsSettingsSheetOpen(false)}
           isSheetOnly
         />

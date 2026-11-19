@@ -1,5 +1,6 @@
 import { Platform, TextStyle } from 'react-native';
-import { PaperTheme, Typeface } from './types';
+import { PaperTheme } from './types';
+import { normalizeTypeface } from './lib/readerPreferences';
 
 /** Folio design tokens (ported from the Tailwind @theme block). */
 export const colors = {
@@ -100,29 +101,19 @@ export const readerPaper: Record<PaperTheme, { bg: string; fg: string }> = {
   charcoal: { bg: '#23221e', fg: '#e4e0d7' },
 };
 
-/** Slightly different swatches used by the settings preview card. */
-export const previewPaper: Record<PaperTheme, { bg: string; fg: string }> = {
-  parchment: { bg: '#fdf9f2', fg: '#1c1c18' },
-  white: { bg: '#ffffff', fg: '#1a1a18' },
-  sepia: { bg: '#ffddb6', fg: '#2a1800' },
-  charcoal: { bg: '#31302c', fg: '#f4f0e9' },
-};
+/** Preview uses the same paper colors as the actual reader. */
+export const previewPaper = readerPaper;
 
 const SYSTEM_SERIF = Platform.select({ ios: 'Georgia', default: 'serif' }) as string;
 
 /** Maps the user-facing typeface setting to a loaded font family. */
-export function readerFontFamily(font: Typeface): string | undefined {
-  switch (font) {
-    case 'Literata':
-      return F.literata;
-    case 'Bookerly':
-    case 'Georgia':
-      return SYSTEM_SERIF;
-    case 'Inter':
-      return F.sans;
-    case 'OpenDyslexic':
-    default:
-      return undefined; // system default sans
+export function readerFontFamily(font: unknown): string | undefined {
+  switch (normalizeTypeface(font)) {
+    case 'Literata': return F.literata;
+    case 'EB Garamond': return F.serif;
+    case 'Manrope': return F.sans;
+    case 'System Serif': return SYSTEM_SERIF;
+    case 'System Sans': return undefined;
   }
 }
 

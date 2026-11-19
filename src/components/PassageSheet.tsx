@@ -1,17 +1,11 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { colors, F, type } from '../theme';
+import { F, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
-import { HighlightColorName, HighlightEntry } from '../types';
+import { HighlightEntry } from '../types';
+import { HIGHLIGHT_COLORS, highlightTextStyle } from '../lib/highlights';
 import { Icon } from './ui/Icon';
 import { ModalShell } from './ui/ModalShell';
-
-export const HIGHLIGHT_COLORS: { name: HighlightColorName; hex: string; label: string }[] = [
-  { name: 'Amber Crayon', hex: '#F8E8A2', label: 'Amber' },
-  { name: 'Terracotta Ink', hex: '#ffb59c', label: 'Terracotta' },
-  { name: 'Sage Pencil', hex: '#d8ebd5', label: 'Sage' },
-  { name: 'Lavender Quill', hex: '#e5dbff', label: 'Lavender' },
-];
 
 interface PassageSheetProps {
   /** The paragraph the user long-pressed. */
@@ -47,7 +41,7 @@ const PassageWord = React.memo<PassageWordProps>(
   ({ token, index, selected, selectedStyle, onPressWord }) => {
     const handlePress = useCallback(() => onPressWord(index), [index, onPressWord]);
     return (
-      <Text onPress={handlePress} style={selected ? selectedStyle : undefined}>
+      <Text onPress={handlePress} accessibilityRole="button" accessibilityState={{ selected }} style={selected ? selectedStyle : undefined}>
         {token.gap}
         {token.word}
       </Text>
@@ -135,8 +129,8 @@ export const PassageSheet: React.FC<PassageSheetProps> = ({
   };
 
   const selectedStyle = useMemo(
-    () => ({ backgroundColor: activeColor.hex, color: colors.onSurface }),
-    [activeColor.hex, colors.onSurface]
+    () => highlightTextStyle(activeColor.hex),
+    [activeColor.hex]
   );
   const rendered = tokens.map((token, index) => (
     <PassageWord
@@ -154,7 +148,7 @@ export const PassageSheet: React.FC<PassageSheetProps> = ({
       <View style={styles.handle} />
       <View style={styles.titleRow}>
         <Text style={styles.title}>{existing ? 'Highlight' : 'Select Passage'}</Text>
-        <Pressable onPress={onClose} style={styles.closeBtn} hitSlop={8}>
+        <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close passage selection" style={styles.closeBtn}>
           <Icon name="close" size={20} color={colors.muted} />
         </Pressable>
       </View>
@@ -172,7 +166,9 @@ export const PassageSheet: React.FC<PassageSheetProps> = ({
             <Pressable
               key={c.name}
               onPress={() => setActiveColor(c)}
-              accessibilityLabel={c.label}
+              accessibilityRole="button"
+              accessibilityState={{ selected: activeColor.name === c.name }}
+              accessibilityLabel={`${c.label} highlight color`}
               style={[
                 styles.colorDot,
                 { backgroundColor: c.hex },
@@ -249,6 +245,9 @@ const ActionButton: React.FC<{
     <Pressable
       onPress={onPress}
       disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: Boolean(disabled), selected: Boolean(active) }}
       style={[
         styles.action,
         active && { backgroundColor: colors.primaryFixed },
@@ -278,9 +277,9 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     paddingTop: 10,
   },
   title: { ...type.headlineSm, color: colors.onSurface },
-  closeBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  closeBtn: { width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   hint: { ...type.bodySm, color: colors.muted, paddingHorizontal: 20, paddingBottom: 8 },
-  passageScroll: { maxHeight: 240, flexGrow: 0 },
+  passageScroll: { maxHeight: 240, flexGrow: 0, flexShrink: 1 },
   passageBox: {
     marginHorizontal: 16,
     padding: 14,
@@ -291,13 +290,15 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   },
   passage: { fontFamily: F.serif, fontSize: 18, lineHeight: 28, color: colors.onSurface },
   actions: { padding: 16, gap: 12 },
-  colorRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  colorDot: { width: 26, height: 26, borderRadius: 13, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+  colorRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
+  colorDot: { width: 48, height: 48, borderRadius: 24, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   colorDotActive: { borderWidth: 2, borderColor: colors.primary, transform: [{ scale: 1.1 }] },
   colorLabel: { ...type.labelMd, color: colors.muted, marginLeft: 4 },
-  buttonRow: { flexDirection: 'row', gap: 8 },
+  buttonRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   action: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: 48,
+    minHeight: 48,
     alignItems: 'center',
     gap: 2,
     paddingVertical: 8,

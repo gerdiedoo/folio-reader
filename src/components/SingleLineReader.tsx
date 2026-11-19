@@ -155,7 +155,7 @@ export const SingleLineReader: React.FC<SingleLineReaderProps> = ({
             <Text
               style={[
                 styles.focusWord,
-                { fontFamily: F.serifMedium, fontSize: ACTIVE_SIZE[String(fontSizeOffset) as keyof typeof ACTIVE_SIZE] },
+                { fontFamily, fontSize: ACTIVE_SIZE[String(fontSizeOffset) as keyof typeof ACTIVE_SIZE] },
               ]}
             >
               {currentWord}

@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { READER_FONTS, normalizeReaderSettings, readerTextMetrics } from '../lib/readerPreferences';
 import { INITIAL_SETTINGS } from '../data/initialData';
 import { colors, F, previewPaper, readerFontFamily, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
-import { LineSpacing, Margins, PaperTheme, ReadingSettings, Typeface } from '../types';
+import { LineSpacing, Margins, PaperTheme, ReadingSettings } from '../types';
 import { Icon, IconName } from './ui/Icon';
 import { ModalShell } from './ui/ModalShell';
 
@@ -40,7 +41,6 @@ const MARGIN_OPTIONS: { id: Margins; icon: IconName }[] = [
   { id: 'wide', icon: 'vertical_split' },
 ];
 
-const FONTS: Typeface[] = ['Literata', 'Bookerly', 'Georgia', 'Inter', 'OpenDyslexic'];
 
 export const SettingsSheet: React.FC<SettingsSheetProps> = ({
   settings,
@@ -51,16 +51,16 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
 }) => {
   const colors = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const [local, setLocal] = useState<ReadingSettings>({ ...settings });
+  const [local, setLocal] = useState<ReadingSettings>(() => normalizeReaderSettings(settings));
   const [activeTab, setActiveTab] = useState<SheetTab>('font');
 
   const step = local.fontSizeStep;
-  const fontPt = Math.round(14 + step * 1.5);
+  const metrics = readerTextMetrics(local);
   const flowMode = local.readingFlowMode || 'continuous';
   const coverStyle = local.defaultCoverStyle || 'image';
   const paper = previewPaper[local.theme];
 
-  const update = (partial: Partial<ReadingSettings>) => setLocal((prev) => ({ ...prev, ...partial }));
+  const update = (partial: Partial<ReadingSettings>) => setLocal((prev) => normalizeReaderSettings({ ...prev, ...partial }));
 
   const apply = () => {
     onSave(local);
@@ -98,6 +98,8 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
               <Pressable
                 key={t.id}
                 onPress={() => setActiveTab(t.id)}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: active }}
                 style={[styles.segBtn, active && styles.segBtnActive]}
               >
                 <Icon name={t.icon} size={16} color={active ? colors.primary : colors.muted} />
@@ -117,17 +119,17 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
         {/* Live preview */}
         <View style={[styles.preview, { backgroundColor: paper.bg }]}>
           <View style={styles.previewHead}>
-            <Text style={styles.previewLabel}>LIVE TYPOGRAPHY PREVIEW</Text>
-            <Text style={styles.previewFont}>
-              {local.font} · {fontPt}pt
+            <Text style={[styles.previewLabel, { color: paper.fg }]}>LIVE TYPOGRAPHY PREVIEW</Text>
+            <Text style={[styles.previewFont, { color: paper.fg }]}>
+              {local.font} · Size {metrics.fontSize}
             </Text>
           </View>
           <Text
             style={{
               color: paper.fg,
               fontFamily: readerFontFamily(local.font),
-              fontSize: fontPt,
-              lineHeight: fontPt * (local.lineSpacing === 'compact' ? 1.45 : local.lineSpacing === 'loose' ? 1.95 : 1.65),
+              fontSize: metrics.fontSize,
+              lineHeight: metrics.lineHeight,
             }}
           >
             “There is no frigate like a book to take us lands away, nor any coursers like a page of prancing poetry.”
@@ -142,29 +144,36 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
               <View style={styles.rowBetween}>
                 <Text style={styles.fieldLabel}>TYPEFACE</Text>
                 <Text style={styles.fieldHint}>
-                  {local.font === 'Literata' || local.font === 'Bookerly' || local.font === 'Georgia'
-                    ? 'Serif Classic'
-                    : 'Modern Neutral'}
+                  {local.font === 'Literata' || local.font === 'EB Garamond' || local.font === 'System Serif'
+                    ? 'Serif'
+                    : 'Sans serif'}
                 </Text>
               </View>
               <View style={styles.pillWrap}>
-                {FONTS.map((f) => {
+                {READER_FONTS.map((f) => {
                   const selected = local.font === f;
                   return (
                     <Pressable
                       key={f}
                       onPress={() => update({ font: f })}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${f} typeface`}
+                      accessibilityState={{ selected }}
                       style={[styles.fontPill, { backgroundColor: selected ? colors.primaryContainer : colors.surface }]}
                     >
                       {selected && <Icon name="check_small" size={16} color="#fff" />}
                       <Text style={[styles.fontPillText, { color: selected ? '#fff' : colors.onSurface }]}>
-                        {f === 'Inter' ? 'Inter (Sans)' : f}
+                        {f}
                       </Text>
                     </Pressable>
                   );
                 })}
               </View>
             </View>
+
+            <Text style={[type.bodySm, { color: colors.muted }]}>
+              Publisher layout and ornamentation are not preserved in this reader.
+            </Text>
 
             {/* Font size */}
             <View style={styles.card}>
@@ -305,25 +314,11 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
           <View style={styles.card}>
             <View style={styles.switchRow}>
               <View style={{ flex: 1, paddingRight: 8 }}>
-                <Text style={styles.switchTitle}>Use Publisher Defaults</Text>
-                <Text style={styles.switchSub}>Preserve author layout, drops, and ornamentation</Text>
-              </View>
-              <Switch
-                value={local.usePublisherDefaults}
-                onValueChange={(v) => update({ usePublisherDefaults: v })}
-                trackColor={{ false: colors.secondaryFixedDim, true: colors.primary }}
-                thumbColor="#fff"
-              />
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.switchRow}>
-              <View style={{ flex: 1, paddingRight: 8 }}>
                 <Text style={styles.switchTitle}>Display Reading Pace</Text>
-                <Text style={styles.switchSub}>Calculate “Minutes left in chapter” via telemetry</Text>
+                <Text style={styles.switchSub}>Show an approximate time based on passage length</Text>
               </View>
               <Switch
+                accessibilityLabel="Display estimated reading time"
                 value={local.displayReadingPace}
                 onValueChange={(v) => update({ displayReadingPace: v })}
                 trackColor={{ false: colors.secondaryFixedDim, true: colors.primary }}
@@ -457,8 +452,8 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   headerTitle: { ...type.headlineSm, color: colors.onSurface },
   closeBtn: {
-    width: 36,
-    height: 36,
+    width: 48,
+    height: 48,
     borderRadius: 18,
     backgroundColor: colors.surfaceContainer,
     alignItems: 'center',
@@ -474,6 +469,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   },
   segBtn: {
     flex: 1,
+    minHeight: 48,
     paddingVertical: 7,
     borderRadius: 8,
     flexDirection: 'row',
@@ -497,7 +493,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.borderSoft,
   },
-  previewHead: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
+  previewHead: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, justifyContent: 'space-between', marginBottom: 8 },
   previewLabel: { ...type.labelSm, color: colors.muted },
   previewFont: { ...type.labelSm, color: colors.primary },
   previewAuthor: { ...type.labelSm, opacity: 0.7, fontStyle: 'italic', textAlign: 'right', marginTop: 8 },
@@ -506,7 +502,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   fieldHint: { ...type.labelSm, color: colors.primary },
   pillWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   fontPill: {
-    flexDirection: 'row',
+    minHeight: 48,    flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     paddingHorizontal: 12,
@@ -525,8 +521,8 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   stepText: { ...type.labelMd, color: colors.primary, fontFamily: F.sansBold },
   stepper: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingTop: 4 },
   stepBtn: {
-    width: 40,
-    height: 36,
+    width: 48,
+    height: 48,
     borderRadius: 8,
     backgroundColor: colors.surfaceContainer,
     alignItems: 'center',

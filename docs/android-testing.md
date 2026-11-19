@@ -139,3 +139,35 @@ are not included in cloud backup. Remove books only using disposable test data;
 removal should clear that book's bookmarks. Storage failures are covered by mocked
 adapter tests; native persistence, screen-reader focus and visual layout still
 need this phone check. A failed load offers **Try again** and must not erase data.
+
+## Typography and contrast check
+
+Install the updated Folio Dev APK over the existing installation; no schema
+change or EPUB re-import is needed.
+
+1. Open Settings → Font & Layout. Confirm only Literata, EB Garamond, Manrope,
+   System Serif and System Sans are offered. If you previously chose Inter,
+   Bookerly/Georgia or OpenDyslexic, expect Manrope, System Serif or System Sans,
+   respectively. These names reflect the fonts the old options actually rendered.
+2. Choose each font and apply it. Compare the preview and reader; restart and
+   confirm the preference remains. Test both Scroll and Pages modes. In Line
+   mode, confirm the focus word also follows the selected font.
+3. Test size steps 1 and 8 and all three line-spacing options. The preview and
+   reader use the same size/spacing values, although viewport width and system
+   text scaling can change wrapping. Check that changing type does not prevent
+   returning to a saved bookmark.
+4. Confirm Reading Info no longer offers Use Publisher Defaults. The reading-time
+   setting should describe an approximate estimate based on passage length.
+5. Select Charcoal, then long-press a paragraph. Select a word/range and try all
+   four highlight colors. Selected words must remain legible. Save a highlight,
+   close the sheet, and inspect it in the reader and its color label in Notebook.
+   Repeat on the other three paper themes. Existing annotations keep their colors.
+6. With large Android text and TalkBack, check font selection, the close button,
+   color selection states, and disabled Highlight/Define actions. Verify the larger
+   color controls and wrapped actions remain reachable, including with the note
+   keyboard open. Report clipping, inaccessible words or focus problems; native
+   screen-reader behavior has not been established by the automated tests.
+
+Highlights now use opaque fills to keep text contrast independent of the theme.
+This step does not implement native text-selection handles, reduced-motion support,
+full document formatting, or a complete screen-reader interaction model.
