@@ -608,6 +608,13 @@ Read the [word-position behavior and limits](word-resume.md). Install over Folio
 Dev without clearing data; no new SQL is needed. Precise anchors begin after
 navigating in this APK, since earlier versions saved only a passage.
 
+For a repeatable test book, download
+[Folio Resume Check.epub](https://github.com/gerdiedoo/folio-reader/raw/refs/heads/development/docs/fixtures/folio-resume-check.epub)
+and import it into Folio Dev. It contains two chapters with long paragraphs and
+unique markers such as **Amber-037** and **Fern-042**. Use Find in book to select a
+marker in Pages or Line, then compare it before/after reopening. The fixture is
+synthetic text and can be removed after testing.
+
 1. In Pages, reach the second or third display page of a long passage. Note its
    first sentence. Return to Library and reopen, then repeat using the Reading
    tab. The measured page should contain the saved sentence instead of resetting

@@ -149,6 +149,22 @@ test('the phone-test EPUB retains its entire expected text sequence', async () =
 });
 
 
+test('numbered resume-check EPUB retains all eight long paragraphs and both chapters', async () => {
+  const bytes = fs.readFileSync(path.join(__dirname, '../docs/fixtures/folio-resume-check.epub'));
+  const result = await parser(bytes).parse();
+  const text = paragraphs(result);
+  assert.equal(result.book.title, 'Folio Resume Check');
+  assert.equal(text.length, 10);
+  const numbered = text.filter(paragraph => paragraph.includes('This numbered sentence'));
+  assert.equal(numbered.length, 8);
+  for (const [index, name] of ['Amber', 'Brook', 'Cedar', 'Dawn', 'Ember', 'Fern', 'Grove', 'Harbor'].entries()) {
+    assert.ok(numbered[index].startsWith(`${name}-001.`));
+    assert.ok(numbered[index].includes(`${name}-080.`));
+    assert.equal((numbered[index].match(/numbered sentence/g) || []).length, 80);
+  }
+  assert.equal(new Set(result.pages.map(p => p.chapterNumber)).size, 2);
+});
+
 test('EPUB copy failure rejects parsing and attempts rollback', async () => {
   const input = parser(await fixture('<p>Readable text.</p>'), { copyFails: true });
   await assert.rejects(input.parse, /Could not save the EPUB file/);
