@@ -8,18 +8,16 @@ interface ChipProps {
   label: string;
   active: boolean;
   onPress: () => void;
-  activeBg?: string;
   icon?: IconName;
   dotColor?: string;
   style?: StyleProp<ViewStyle>;
 }
 
-/** Rounded filter pill used on the Library and Notebook screens. */
+/** Compact rounded rectangle shared by Library, Notebook and free-book filters. */
 export const Chip: React.FC<ChipProps> = ({
   label,
   active,
   onPress,
-  activeBg,
   icon,
   dotColor,
   style,
@@ -31,25 +29,37 @@ export const Chip: React.FC<ChipProps> = ({
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ selected: active }}
-      style={[styles.chip, { backgroundColor: active ? activeBg ?? palette.primaryContainer : palette.surfaceContainer }, style]}
+      style={[styles.target, style]}
     >
-      {dotColor ? <View style={[styles.dot, { backgroundColor: dotColor }]} /> : null}
-      {icon ? <Icon name={icon} size={14} color={active ? palette.white : palette.muted} /> : null}
-      <Text style={[styles.label, { color: active ? palette.white : palette.muted }]}>{label}</Text>
+      <View style={[styles.chip, {
+        backgroundColor: active ? palette.primaryContainer : palette.surface,
+        borderColor: active ? palette.primaryContainer : palette.borderSoft,
+      }]} pointerEvents="none">
+        {dotColor ? <View style={[styles.dot, { backgroundColor: dotColor }]} /> : null}
+        {icon ? <Icon name={icon} size={14} color={active ? palette.onPrimaryContainer : palette.onSurface} /> : null}
+        <Text style={[styles.label, { color: active ? palette.onPrimaryContainer : palette.onSurface }]}>{label}</Text>
+      </View>
     </Pressable>
   );
 };
 
 const styles = StyleSheet.create({
-  chip: {
+  target: {
     minHeight: 48,
+    minWidth: 48,
+    paddingVertical: 6,
+    justifyContent: 'center',
+  },
+  chip: {
+    minHeight: 36,
     justifyContent: 'center',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 999,
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   dot: { width: 6, height: 6, borderRadius: 3 },
   label: { ...type.labelMd },

@@ -311,7 +311,6 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
             icon={f.icon}
             active={activeFilter === f.id}
             onPress={() => setActiveFilter(f.id)}
-            activeBg={f.id === 'lexicon' ? colors.tertiaryContainer : colors.primaryContainer}
           />
         ))}
       </ScrollView>
@@ -673,7 +672,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   },
   pickerItem: { paddingHorizontal: 14, paddingVertical: 12 },
   pickerItemText: { fontFamily: F.sans, fontSize: 14, color: colors.onSurface },
-  chipRow: { gap: 8, paddingRight: 8 },
+  chipRow: { gap: 6, paddingRight: 6 },
 
   emptyCard: {
     padding: 24,

@@ -96,13 +96,13 @@ export const BookRow = React.memo<RowProps>(({ item, status, disabled, progressP
           <Text style={styles.rowAuthor} numberOfLines={1}>
             {item.author}
           </Text>
-          <Text style={styles.rowMeta}>{CATALOG_SOURCES.find(source => source.id === (item.source ?? 'gutenberg'))?.label} · EPUB{item.downloads > 0 ? ` · ${compact(item.downloads)} downloads` : ''}</Text>
+          <Text style={styles.rowMeta}>EPUB{item.downloads > 0 ? ` · ${compact(item.downloads)} downloads` : ''}</Text>
         </View>
         <View style={styles.rowAction}>
           {status === 'added' ? (
             <Pressable onPress={() => onRead(item)} accessibilityRole="button" accessibilityLabel={`Read ${item.title}`} style={[styles.btn, styles.btnOutline]}>
               <Icon name="check_circle" size={16} color={palette.primary} />
-              <Text style={[styles.btnText, { color: palette.primary }]}>In library · Read</Text>
+              <Text style={[styles.btnText, { color: palette.primary }]}>Read</Text>
             </Pressable>
           ) : (
             <Pressable
@@ -418,7 +418,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     </View>
   );
 
-  const browserHeader = <View style={{ gap: 12, paddingBottom: 12, marginHorizontal: -20 }}>
+  const browserHeader = <View style={{ gap: 6, paddingBottom: 8, marginHorizontal: -20 }}>
     <View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow} keyboardShouldPersistTaps="handled">
         {CATALOG_SOURCES.map(item => <Chip key={item.id} label={item.label} active={source === item.id} onPress={() => setSource(item.id)} />)}
@@ -665,7 +665,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
 
 const createStyles = (p: AppPalette) =>
   StyleSheet.create({
-    screen: { flex: 1, backgroundColor: p.background, gap: 12 },
+    screen: { flex: 1, backgroundColor: p.background, gap: 8 },
     header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 8 },
     backBtn: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
     title: { ...type.headlineSm, color: p.onSurface },
@@ -680,13 +680,13 @@ const createStyles = (p: AppPalette) =>
       marginHorizontal: 20,
     },
     searchInput: { flex: 1, paddingVertical: 12, fontFamily: F.sans, fontSize: 14, color: p.onSurface },
-    chipRow: { gap: 8, paddingHorizontal: 20 },
+    chipRow: { gap: 6, paddingHorizontal: 20 },
     sortRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: 20 },
     sortGroup: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
-    sortOptions: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingRight: 8 },
+    sortOptions: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingRight: 6 },
     sortText: { ...type.labelMd, color: p.muted },
     sortActive: { color: p.primary },
-    sortNote: { ...type.bodySm, color: p.muted, marginTop: -8, paddingHorizontal: 20 },
+    sortNote: { ...type.bodySm, color: p.muted, marginTop: 0, paddingHorizontal: 20 },
     countRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -695,21 +695,21 @@ const createStyles = (p: AppPalette) =>
     count: { ...type.labelSm, color: p.muted, flex: 1 },
     viewToggle: { flexDirection: 'row', backgroundColor: p.surfaceContainer, padding: 3, borderRadius: 10, gap: 2 },
     viewToggleButton: { width: 48, height: 48, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
-    resultsContent: { paddingHorizontal: 20, paddingTop: 6, paddingBottom: 28, gap: 16 },
+    resultsContent: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 24, gap: 12 },
     resultsList: { gap: 12 },
     gridColumn: { justifyContent: 'space-between', gap: 12 },
 
     row: {
       flexDirection: 'row',
-      gap: 14,
-      padding: 12,
-      borderRadius: 16,
+      gap: 10,
+      padding: 10,
+      borderRadius: 12,
       backgroundColor: p.surfaceLow,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: p.borderSoft,
     },
-    gridCard: { flexDirection: 'column', alignItems: 'stretch', gap: 10 },
-    gridCardCopy: { minHeight: 148 },
+    gridCard: { flexDirection: 'column', alignItems: 'stretch', gap: 8 },
+    gridCardCopy: { minHeight: 124 },
     rowTitle: { fontFamily: F.serifSemi, fontSize: 17, lineHeight: 21, color: p.onSurface },
     rowAuthor: { ...type.bodyMd, color: p.onSurfaceVariant, marginTop: 2 },
     rowMeta: { ...type.bodySm, color: p.muted, marginTop: 2 },
@@ -728,7 +728,7 @@ const createStyles = (p: AppPalette) =>
       gap: 6,
       paddingHorizontal: 14,
       paddingVertical: 8,
-      borderRadius: 999,
+      borderRadius: 8,
     },
     btnFilled: { backgroundColor: p.primaryContainer },
     btnOutline: { borderWidth: 1.5, borderColor: p.primary },

@@ -854,7 +854,7 @@ export const CoverEditor: React.FC<{
 };
 
 const createStyles = (colors: AppPalette) => StyleSheet.create({
-  scroll: { paddingTop: 4, gap: 18 },
+  scroll: { paddingTop: 4, gap: 12 },
   statusCard: { padding: 16, borderRadius: 12, backgroundColor: colors.surfaceContainer },
   statusText: { ...type.bodyMd, color: colors.onSurface },
   librarySearch: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceContainer, borderRadius: 12, paddingLeft: 12 },
@@ -865,19 +865,19 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   goalCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
-    padding: 16,
-    borderRadius: 16,
+    gap: 12,
+    padding: 12,
+    borderRadius: 12,
     backgroundColor: colors.surfaceLow,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.borderSoft,
   },
   readingTimeIcon: {
-    width: 56,
-    height: 56,
+    width: 40,
+    height: 40,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 28,
+    borderRadius: 10,
     backgroundColor: colors.primaryFixed,
   },
   goalTitle: { ...type.headlineSm, fontSize: 19, lineHeight: 24, color: colors.onSurface },
@@ -904,7 +904,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     paddingLeft: 12,
     paddingRight: 6,
     paddingVertical: 6,
-    borderRadius: 999,
+    borderRadius: 8,
   },
   continueText: { ...type.labelMd, color: '#fff' },
 
@@ -957,7 +957,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     gap: 4,
     paddingHorizontal: 8,
     paddingVertical: 5,
-    borderRadius: 999,
+    borderRadius: 8,
   },
   reimportBadgeText: { ...type.labelSm },
   detailsPage: { flex: 1, backgroundColor: colors.surface },
@@ -1025,7 +1025,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   },
   detailsReadButtonText: { ...type.labelLg, color: colors.white },
 
-  chipRow: { gap: 8, paddingRight: 8 },
+  chipRow: { gap: 6, paddingRight: 6 },
   toolRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   viewToggle: {
     flexDirection: 'row',

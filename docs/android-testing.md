@@ -773,3 +773,27 @@ keep the current app data. No new SQL or credentials are required.
    screens: the search form, errors and book actions must remain reachable by
    scrolling. Real provider availability, redirects, native image rendering,
    cancellation and filesystem behavior still require these phone checks.
+
+## Compact shared filter chips (step 21)
+
+Install over Folio Dev. Library, Notebook and Free Books source/topic filters now
+share one rounded rectangle: 36-point minimum visible height, 8-point corners,
+consistent padding, 6-point horizontal gaps and a common selected color. The
+transparent button around each chip retains a 48-point minimum touch target.
+Text can increase the chip height at larger system font sizes; labels are not
+forced into a clipped fixed height. Selected text uses the theme's contrast color.
+
+1. Compare Library filters, Notebook filters, Free Books sources and Free Books
+   topics. All should use the same compact shape and selected colors, including
+   the Notebook vocabulary filter. Check the typeface buttons as the shape reference.
+2. Switch filters/sources, search and change grid/list view. Existing selection,
+   sorting and source behavior should remain. Check that tapping just above or
+   below the visible chip still selects it and adjacent chips remain distinct.
+3. Check Charcoal and large system text with TalkBack. Names and selection should
+   remain clear, labels should expand without clipping, and horizontal chip rows
+   should stay scrollable. Check landscape and a narrow screen.
+4. Free Books has tighter header/card spacing, shorter metadata and rectangular
+   Get/Retry/Read actions. Confirm long titles, progress and download errors can
+   still expand cards. Library's reading summary is smaller with closer section
+   spacing. Native layout and touch behavior require this phone check; automated
+   regression tests and bundle exports do not verify visual appearance.
