@@ -2,25 +2,23 @@ import { File, Paths } from 'expo-file-system';
 import { loadJSON, saveJSON } from './localStore';
 import type { LocalStore } from './localStore';
 
-/**
- * Free book catalog: Project Gutenberg (public-domain books) through the open Gutendex API.
- * https://gutendex.com  — no API key, JSON, and every result links straight to an EPUB.
- *
- * Everything here is source-agnostic on purpose (CatalogBook / searchCatalog / downloadEpub),
- * so another legal source such as Standard Ebooks or the Internet Archive can be added later
- * by returning the same shape.
- */
+import { starterBooks } from '../data/freeBooks';
+import { archiveEpubLinks, archiveSearchUrl, gutenbergBook, parseArchivePage, parseGutenbergPage, parseStandardPage, standardEpubLinks, standardSearchUrl, sourceUrl } from './catalogProviders';
+import { CatalogError, catalogCancelled, catalogRequest } from './catalogRequest';
+export { CATALOG_SOURCES } from './catalogProviders';
 
 const API = 'https://gutendex.com/books/';
 const EPUB_MIME = 'application/epub+zip';
-const REQUEST_TIMEOUT_MS = 30000;
 const CACHE_TTL_MS = 2 * 60 * 1000;
 const MAX_CACHED_PAGES = 60;
 const pageCache = new Map<string, { page: CatalogPage; cachedAt: number }>();
+export type CatalogSource = 'gutenberg' | 'standard' | 'archive';
 
 export interface CatalogBook {
   /** Stable id across sessions, e.g. "gutenberg-1342". */
   id: string;
+  source?: CatalogSource;
+  detailUrl?: string;
   title: string;
   author: string;
   coverUrl: string;
@@ -70,7 +68,8 @@ export interface LibraryRestoreResult {
 export interface CatalogPage {
   books: CatalogBook[];
   hasMore: boolean;
-  total: number;
+  total: number | null;
+  notice?: string;
 }
 
 export type CatalogSort = 'popular' | 'ascending' | 'descending';
@@ -101,120 +100,51 @@ export const TOPICS: CatalogTopic[] = [
 // Search / browse
 // ---------------------------------------------------------------------------
 
-interface GutendexBook {
-  id: number;
-  title: string;
-  authors: { name: string }[];
-  subjects?: string[];
-  download_count?: number;
-  formats: Record<string, string>;
-}
-
-/** "Austen, Jane" → "Jane Austen" */
-function tidyAuthor(raw: string | undefined): string {
-  if (!raw) return 'Unknown Author';
-  const parts = raw.split(',').map((s) => s.trim()).filter(Boolean);
-  if (parts.length === 2) return `${parts[1]} ${parts[0]}`;
-  return raw.trim();
-}
-
-function toHttps(url: string): string {
-  return url.replace(/^http:\/\//i, 'https://');
-}
-
-function mapBook(b: GutendexBook): CatalogBook | null {
-  const epub = b.formats?.[EPUB_MIME];
-  if (!epub) return null;
-  return {
-    id: `gutenberg-${b.id}`,
-    title: (b.title || 'Untitled').replace(/\s+/g, ' ').trim(),
-    author: tidyAuthor(b.authors?.[0]?.name),
-    coverUrl: b.formats['image/jpeg'] ? toHttps(b.formats['image/jpeg']) : '',
-    epubUrl: toHttps(epub),
-    downloads: b.download_count ?? 0,
-    subjects: b.subjects ?? [],
-  };
-}
-
-async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (signal?.aborted) {
-      const error = new Error('The catalog request was cancelled.');
-      error.name = 'AbortError';
-      throw error;
-    }
-
-    const controller = new AbortController();
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, REQUEST_TIMEOUT_MS);
-    const onAbort = () => controller.abort();
-    signal?.addEventListener('abort', onAbort);
-    try {
-      const res = await fetch(url, { signal: controller.signal, headers: { Accept: 'application/json' } });
-      if (!res.ok) {
-        const error = new Error(`The catalog returned an error (${res.status}).`);
-        if (attempt === 0 && (res.status === 429 || res.status >= 500)) continue;
-        throw error;
-      }
-      return (await res.json()) as T;
-    } catch (err) {
-      if (signal?.aborted) throw err;
-      if (timedOut) throw new Error('The catalog took too long to respond. Please try again.');
-      lastError = err;
-      if (attempt === 1) {
-        throw lastError instanceof Error ? lastError : new Error('Could not reach the catalog.');
-      }
-    } finally {
-      clearTimeout(timeout);
-      signal?.removeEventListener('abort', onAbort);
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error('Could not reach the catalog.');
-}
-
 export async function searchCatalog(
-  opts: { query?: string; topic?: string; page?: number; sort?: CatalogSort },
+  opts: { query?: string; topic?: string; page?: number; sort?: CatalogSort; source?: CatalogSource },
   signal?: AbortSignal
 ): Promise<CatalogPage> {
-  const params = new URLSearchParams();
-  const q = opts.query?.trim();
-  if (q) params.set('search', q);
-  if (opts.topic) params.set('topic', opts.topic);
-  params.set('languages', 'en');
-  params.set('mime_type', EPUB_MIME);
-  params.set('sort', opts.sort ?? 'popular');
-  params.set('page', String(opts.page ?? 1));
-
-  const url = `${API}?${params.toString()}`;
+  if (signal?.aborted) throw catalogCancelled();
+  const source = opts.source ?? 'gutenberg';
+  const query = (opts.query ?? '').trim().slice(0, 200);
+  const topic = opts.topic ?? '';
+  const pageNumber = Number.isSafeInteger(opts.page) && opts.page! > 0 ? opts.page! : 1;
+  const sort = opts.sort ?? 'popular';
+  const params = new URLSearchParams({ languages: 'en', mime_type: EPUB_MIME, sort, page: String(pageNumber) });
+  if (query) params.set('search', query);
+  if (topic) params.set('topic', topic);
+  const url = source === 'standard' ? standardSearchUrl(query, topic, pageNumber, sort)
+    : source === 'archive' ? archiveSearchUrl(query, topic, pageNumber, sort) : `${API}?${params}`;
   const cached = pageCache.get(url);
-  if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
-    pageCache.delete(url);
-    pageCache.set(url, cached);
-    return cached.page;
+  if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return cached.page;
+  try {
+    const data = await catalogRequest(url, source === 'standard' ? 'text' : 'json', signal);
+    let page: CatalogPage;
+    try { page = source === 'standard' ? parseStandardPage(data as string) : source === 'archive' ? parseArchivePage(data, pageNumber) : parseGutenbergPage(data); }
+    catch { throw new CatalogError('invalid'); }
+    if (signal?.aborted) throw catalogCancelled();
+    pageCache.set(url, { page, cachedAt: Date.now() });
+    if (pageCache.size > MAX_CACHED_PAGES) pageCache.delete(pageCache.keys().next().value!);
+    return page;
+  } catch (error) {
+    if (signal?.aborted) throw catalogCancelled();
+    if (pageNumber !== 1) throw error; // Never append a fallback as another page.
+    const reason = error instanceof Error ? error.message : 'The source could not be reached.';
+    if (cached) return { ...cached.page, notice: `Showing a previously loaded catalog. ${reason}` };
+    if (source === 'gutenberg') {
+      const books = starterBooks(query, topic);
+      return { books, hasMore: false, total: books.length, notice: `Gutenberg’s live catalog is unavailable. Showing matches from a small starter collection; downloads still require a connection. ${reason}` };
+    }
+    throw error;
   }
-
-  const data = await fetchJson<{ count: number; next: string | null; results: GutendexBook[] }>(url, signal);
-  const books = (data.results ?? []).map(mapBook).filter((b): b is CatalogBook => b !== null);
-  const page = { books, hasMore: !!data.next, total: data.count ?? books.length };
-  pageCache.set(url, { page, cachedAt: Date.now() });
-  if (pageCache.size > MAX_CACHED_PAGES) {
-    const oldest = pageCache.keys().next().value;
-    if (oldest) pageCache.delete(oldest);
-  }
-  return page;
 }
 
 export async function getCatalogBook(gutenbergId: number): Promise<CatalogBook | null> {
-  try {
-    const data = await fetchJson<GutendexBook>(`${API}${gutenbergId}/`);
-    return mapBook(data);
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('(404)')) return null;
-    throw err;
+  if (!Number.isSafeInteger(gutenbergId) || gutenbergId < 1) return null;
+  try { return gutenbergBook(await catalogRequest(`${API}${gutenbergId}/`, 'json')); }
+  catch (error) {
+    if (error instanceof CatalogError && error.kind === 'unavailable') return null;
+    throw error;
   }
 }
 
@@ -247,30 +177,84 @@ export async function findCatalogBook(title: string, author: string): Promise<Ca
  * Downloads the EPUB into the cache folder and returns its file:// URI, ready for
  * `parseEpubFile`. The caller should `deleteDownloaded` it once the book is imported.
  */
-export async function downloadEpub(book: CatalogBook, onProgress?: (percent: number) => void): Promise<string> {
-  const safeId = book.id.replace(/[^a-z0-9-]/gi, '');
-  const dest = new File(Paths.cache, `catalog-${safeId}-${Date.now()}.epub`);
-  let lastReportedPercent = -1;
-  const task = File.createDownloadTask(book.epubUrl, dest, {
-    onProgress: ({ bytesWritten, totalBytes }) => {
-      if (!onProgress || totalBytes <= 0) return;
-      const percent = Math.min(100, Math.floor((bytesWritten / totalBytes) * 100));
-      if (percent >= lastReportedPercent + 1) {
-        lastReportedPercent = percent;
-        onProgress(percent);
-      }
-    },
-  });
-  try {
-    const file = await task.downloadAsync();
-    if (!file || !file.exists || file.size < 1024) {
-      throw new Error('The download looks incomplete. Please try again.');
-    }
-    onProgress?.(100);
-    return file.uri;
-  } finally {
-    task.release();
+async function epubLinks(book: CatalogBook, signal?: AbortSignal): Promise<string[]> {
+  if (book.source === 'standard') {
+    const detail = sourceUrl(book.detailUrl, ['standardebooks.org']);
+    if (!detail) throw new CatalogError('unavailable');
+    const links = standardEpubLinks(await catalogRequest(detail, 'text', signal) as string, detail);
+    if (!links.length) throw new CatalogError('unavailable');
+    return links;
   }
+  if (book.source === 'archive') {
+    const identifier = book.id.replace(/^archive-/, '');
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$/.test(identifier)) throw new CatalogError('unavailable');
+    const links = archiveEpubLinks(await catalogRequest(`https://archive.org/metadata/${encodeURIComponent(identifier)}`, 'json', signal), identifier);
+    if (!links.length) throw new CatalogError('unavailable');
+    return links;
+  }
+  const id = /^gutenberg-(\d+)$/.exec(book.id)?.[1];
+  const supplied = sourceUrl(book.epubUrl, ['www.gutenberg.org', 'gutenberg.org']);
+  return [...new Set([...(id ? [`https://www.gutenberg.org/ebooks/${id}.epub3.images`] : []), supplied, ...(id ? [`https://www.gutenberg.org/ebooks/${id}.epub.images`] : [])].filter(Boolean))].slice(0, 3);
+}
+
+/** Bounded, cancellable transfers. Reject HTML error pages before EPUB parsing. */
+export async function downloadEpub(book: CatalogBook, onProgress?: (percent: number) => void, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw catalogCancelled();
+  const links = await epubLinks(book, signal);
+  if (!links.length) throw new CatalogError('unavailable');
+  let lastError: unknown;
+  for (const [attempt, url] of links.entries()) {
+    if (signal?.aborted) throw catalogCancelled();
+    const dest = new File(Paths.cache, `catalog-${book.id.replace(/[^a-z0-9-]/gi, '').slice(0, 100)}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}.epub`);
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>, onAbort: () => void;
+    let completed = false;
+    let expired = false;
+    const clean = () => { try { if (dest.exists) dest.delete(); } catch { /* disposable cache */ } };
+    let rejectStopped: (error: Error) => void;
+    const stopped = new Promise<never>((_resolve, reject) => {
+      rejectStopped = reject;
+      onAbort = () => { expired = true; reject(catalogCancelled()); controller.abort(); };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      timer = setTimeout(() => { expired = true; reject(new CatalogError('timeout')); controller.abort(); }, 60000);
+    });
+    let task: ReturnType<typeof File.createDownloadTask> | undefined;
+    try {
+      onProgress?.(0);
+      task = File.createDownloadTask(url, dest, { signal: controller.signal, headers: { Accept: EPUB_MIME },
+        onProgress: ({ bytesWritten, totalBytes }) => {
+          if (expired) return;
+          if (bytesWritten > 40 * 1024 * 1024 || totalBytes > 40 * 1024 * 1024) { expired = true; rejectStopped(new CatalogError('size')); controller.abort(); return; }
+          if (totalBytes > 0) onProgress?.(Math.max(0, Math.min(99, Math.floor(bytesWritten / totalBytes * 100))));
+        } });
+      const transfer = task.downloadAsync().then(file => {
+        if (expired || signal?.aborted) { clean(); throw catalogCancelled(); }
+        return file;
+      });
+      const file = await Promise.race([transfer, stopped]);
+      if (!file || !file.exists || file.size < 22) throw new CatalogError('file');
+      if (file.size > 40 * 1024 * 1024) throw new CatalogError('size');
+      const handle = file.open();
+      let signature: Uint8Array;
+      try { signature = handle.readBytes(4); } finally { handle.close(); }
+      if (signature[0] !== 80 || signature[1] !== 75 || signature[2] !== 3 || signature[3] !== 4) throw new CatalogError('file');
+      completed = true;
+      onProgress?.(100);
+      return file.uri;
+    } catch (error) {
+      if (signal?.aborted) throw catalogCancelled();
+      lastError = error instanceof CatalogError ? error : new CatalogError(/429/.test(String(error)) ? 'rate' : 'file');
+      if (lastError instanceof CatalogError && ['timeout', 'rate', 'size'].includes(lastError.kind)) throw lastError;
+      if (attempt === links.length - 1) throw lastError;
+    } finally {
+      clearTimeout(timer!);
+      signal?.removeEventListener('abort', onAbort!);
+      controller.abort();
+      try { task?.release(); } catch { /* Cleanup must not mask the transfer result. */ }
+      if (!completed) clean();
+    }
+  }
+  throw lastError ?? new CatalogError('file');
 }
 
 export function deleteDownloaded(uri: string): void {
@@ -290,16 +274,18 @@ const ADDED_KEY = 'catalog.added';
 
 /** catalog id → library book id, persisted so the Browse screen can show "Read" instead of "Get". */
 export async function loadAdded(storage: Pick<LocalStore, 'loadJSON' | 'saveJSON'> = { loadJSON, saveJSON }): Promise<Record<string, string>> {
-  return (await storage.loadJSON<Record<string, string>>(ADDED_KEY)) ?? {};
+  const value = await storage.loadJSON<unknown>(ADDED_KEY);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([key, id]) => /^(gutenberg-|standard-|archive-)/.test(key) && typeof id === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(id)));
 }
 
 export async function rememberAdded(
   current: Record<string, string>,
   catalogId: string,
   bookId: string,
-  storage: Pick<LocalStore, 'loadJSON' | 'saveJSON'> = { loadJSON, saveJSON }
+  storage: Pick<LocalStore, 'loadJSON' | 'saveJSON'> & Partial<Pick<LocalStore, 'saveJSONStrict'>> = { loadJSON, saveJSON }
 ): Promise<Record<string, string>> {
   const next = { ...current, [catalogId]: bookId };
-  await storage.saveJSON(ADDED_KEY, next);
+  await (storage.saveJSONStrict ?? storage.saveJSON)(ADDED_KEY, next);
   return next;
 }

@@ -5,6 +5,7 @@ import { colors, F, type } from '../theme';
 import { Book, CoverTint } from '../types';
 import { normalizeCoverTint } from '../lib/bookCover';
 import { Icon } from './ui/Icon';
+import { CoverIllustration } from './CoverIllustration';
 
 export type ClothTint = CoverTint;
 
@@ -38,7 +39,7 @@ export const SpineShadow: React.FC<{ width?: number }> = ({ width = 10 }) => (
   />
 );
 
-/** Illustrated cover, or the "Invisible Cities" typographic cloth binding. */
+/** Publisher artwork, a bundled illustration, or an explicitly selected cloth binding. */
 export const BookCover: React.FC<BookCoverProps> = ({
   book,
   style,
@@ -50,11 +51,12 @@ export const BookCover: React.FC<BookCoverProps> = ({
   containerStyle,
 }) => {
   const uri = uriOverride ?? book.coverUrl;
-  const [imageFailed, setImageFailed] = useState(false);
+  const [failedUri, setFailedUri] = useState<string | null>(null);
 
-  useEffect(() => setImageFailed(false), [uri]);
+  useEffect(() => setFailedUri(null), [uri]);
 
-  const showTypographic = style === 'typographic' || !uri || imageFailed;
+  const showTypographic = style === 'typographic';
+  const showIllustration = !uri || failedUri === uri;
   const compact = size === 'compact';
   const palette = CLOTH[normalizeCoverTint(tint ?? book.coverTint)];
 
@@ -92,6 +94,8 @@ export const BookCover: React.FC<BookCoverProps> = ({
           </View>
           <Icon name="auto_stories" size={compact ? 13 : 16} color={palette.fg} style={{ opacity: 0.45 }} />
         </View>
+      ) : showIllustration ? (
+        <CoverIllustration title={book.title} author={book.author} compact={compact} />
       ) : (
         <View style={StyleSheet.absoluteFill}>
           <Image
@@ -99,7 +103,7 @@ export const BookCover: React.FC<BookCoverProps> = ({
             accessibilityLabel={book.coverAlt}
             style={styles.image}
             resizeMode="cover"
-            onError={() => setImageFailed(true)}
+            onError={() => setFailedUri(uri)}
           />
           <SpineShadow />
         </View>

@@ -6,6 +6,8 @@ import { useReducedMotion } from '../MotionPreferences';
 import {
   CatalogBook,
   CatalogSort,
+  CatalogSource,
+  CATALOG_SOURCES,
   deleteDownloaded,
   downloadEpub,
   loadAdded,
@@ -26,6 +28,7 @@ import { ProgressBar } from './ui/ProgressBar';
 interface Props {
   storage: LocalStore;
   books: Book[];
+  availableBookIds: readonly string[];
   viewMode: BrowseViewMode;
   onViewModeChange: (mode: BrowseViewMode) => void;
   onAddEpubBook: (book: Book, pages: BookContentPage[]) => Promise<void>;
@@ -41,7 +44,7 @@ type BrowseSort = 'popularity' | 'title' | 'releaseDate' | 'author';
 const SORT_OPTIONS: { id: BrowseSort; label: string }[] = [
   { id: 'popularity', label: 'Popularity' },
   { id: 'title', label: 'Title' },
-  { id: 'releaseDate', label: 'Release date' },
+  { id: 'releaseDate', label: 'Newest added' },
   { id: 'author', label: 'Author' },
 ];
 
@@ -69,9 +72,10 @@ interface RowProps {
   onRead: (item: CatalogBook) => void;
   viewMode: BrowseViewMode;
   cardWidth: number;
+  error?: string;
 }
 
-const BookRow = React.memo<RowProps>(({ item, status, disabled, progressPercent, onGet, onRead, viewMode, cardWidth }) => {
+export const BookRow = React.memo<RowProps>(({ item, status, disabled, progressPercent, onGet, onRead, viewMode, cardWidth, error }) => {
   const palette = useAppTheme();
   const styles = useMemo(() => createStyles(palette), [palette]);
   const busy = status === 'downloading' || status === 'preparing';
@@ -92,11 +96,11 @@ const BookRow = React.memo<RowProps>(({ item, status, disabled, progressPercent,
           <Text style={styles.rowAuthor} numberOfLines={1}>
             {item.author}
           </Text>
-          <Text style={styles.rowMeta}>{compact(item.downloads)} downloads · EPUB</Text>
+          <Text style={styles.rowMeta}>{CATALOG_SOURCES.find(source => source.id === (item.source ?? 'gutenberg'))?.label} · EPUB{item.downloads > 0 ? ` · ${compact(item.downloads)} downloads` : ''}</Text>
         </View>
         <View style={styles.rowAction}>
           {status === 'added' ? (
-            <Pressable onPress={() => onRead(item)} style={[styles.btn, styles.btnOutline]}>
+            <Pressable onPress={() => onRead(item)} accessibilityRole="button" accessibilityLabel={`Read ${item.title}`} style={[styles.btn, styles.btnOutline]}>
               <Icon name="check_circle" size={16} color={palette.primary} />
               <Text style={[styles.btnText, { color: palette.primary }]}>In library · Read</Text>
             </Pressable>
@@ -105,15 +109,18 @@ const BookRow = React.memo<RowProps>(({ item, status, disabled, progressPercent,
               onPress={() => onGet(item)}
               disabled={disabled || busy}
               style={[styles.btn, styles.btnFilled, (disabled && !busy) && { opacity: 0.45 }]}
-              accessibilityLabel={`Add ${item.title} to library`}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: disabled || busy, busy }}
+              accessibilityLabel={`${error ? 'Retry downloading' : 'Add'} ${item.title}${error ? '' : ' to library'}`}
             >
               <Icon name={busy ? 'sync' : 'download'} size={16} color="#fff" spin={busy} />
               <Text style={[styles.btnText, { color: '#fff' }]}>
-                {status === 'downloading' ? 'Downloading…' : status === 'preparing' ? 'Preparing…' : 'Get'}
+                {status === 'downloading' ? 'Downloading…' : status === 'preparing' ? 'Preparing…' : error ? 'Retry' : 'Get'}
               </Text>
             </Pressable>
           )}
         </View>
+        {error && <Text accessibilityRole="alert" style={styles.rowError}>{error}</Text>}
         {busy ? (
           <View style={styles.downloadProgress}>
             <ProgressBar percent={progressPercent ?? 0} height={3} />
@@ -137,6 +144,7 @@ const BookRow = React.memo<RowProps>(({ item, status, disabled, progressPercent,
 export const BrowseBooksScreen: React.FC<Props> = ({
   storage,
   books,
+  availableBookIds,
   viewMode,
   onViewModeChange,
   onAddEpubBook,
@@ -148,9 +156,13 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   const palette = useAppTheme();
   const styles = useMemo(() => createStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
-  const cardWidth = Math.floor((width - 52) / 2);
+  const { width, fontScale } = useWindowDimensions();
+  const columns = viewMode === 'grid' && width >= 340 && fontScale <= 1.3 ? 2 : 1;
+  const cardWidth = Math.floor((width - 40 - (columns - 1) * 12) / columns);
 
+  const [source, setSource] = useState<CatalogSource>('gutenberg');
+  const [notice, setNotice] = useState<string | null>(null);
+  const [downloadErrors, setDownloadErrors] = useState<Record<string, string>>({});
   const [queryInput, setQueryInput] = useState('');
   const [query, setQuery] = useState('');
   const [topicId, setTopicId] = useState('popular');
@@ -158,7 +170,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   const [items, setItems] = useState<CatalogBook[]>([]);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
-  const [total, setTotal] = useState(0);
+  const [total, setTotal] = useState<number | null>(0);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState(false);
@@ -171,6 +183,18 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     progressPercent: number | null;
   } | null>(null);
   const pendingGet = useRef(false);
+  const alive = useRef(true);
+  const transfer = useRef<AbortController | null>(null);
+  const phase = useRef<'downloading' | 'preparing' | null>(null);
+  const close = () => {
+    if (phase.current === 'preparing') return;
+    transfer.current?.abort();
+    onClose();
+  };
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; transfer.current?.abort(); };
+  }, []);
   const [duplicateBook, setDuplicateBook] = useState<{ existing: Book; catalog: CatalogBook } | null>(null);
 
   // searching ignores the topic chip (the two filters together would be confusing)
@@ -186,7 +210,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     });
   }, [items, sortBy]);
 
-  const libraryIds = useMemo(() => new Set(books.map((b) => b.id)), [books]);
+  const libraryIds = useMemo(() => new Set(books.filter(book => availableBookIds.includes(book.id)).map(book => book.id)), [books, availableBookIds]);
 
   // ---- load: first page whenever the search text / topic changes ----
   const generation = useRef(0);
@@ -200,19 +224,22 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     setLoadingMore(false);
     setLoadMoreError(false);
     setError(null);
+    setNotice(null);
+    setTotal(0);
     setItems([]);
     setPage(1);
     setHasMore(false);
-    searchCatalog({ query, topic: effectiveTopic, page: 1, sort: catalogSort }, ctrl.signal)
+    searchCatalog({ query, topic: effectiveTopic, page: 1, sort: catalogSort, source }, ctrl.signal)
       .then((res) => {
-        if (gen !== generation.current) return;
+        if (!alive.current || ctrl.signal.aborted || gen !== generation.current) return;
         setItems(res.books);
         setHasMore(res.hasMore);
         setTotal(res.total);
+        setNotice(res.notice ?? null);
         setLoading(false);
       })
       .catch((err: unknown) => {
-        if (gen !== generation.current) return;
+        if (!alive.current || ctrl.signal.aborted || gen !== generation.current) return;
         setError(err instanceof Error ? err.message : 'Could not reach the catalog.');
         setLoading(false);
       });
@@ -222,7 +249,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       moreRequest.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, effectiveTopic, catalogSort, reloadNonce]);
+  }, [query, effectiveTopic, catalogSort, source, reloadNonce]);
 
   // debounce the search box
   useEffect(() => {
@@ -231,21 +258,20 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   }, [queryInput]);
 
   useEffect(() => {
-    loadAdded(storage).then(setAdded);
+    loadAdded(storage).then(saved => { if (alive.current) setAdded(current => ({ ...saved, ...current })); });
   }, []);
 
   // ---- infinite scroll ----
   const loadMore = useCallback(async () => {
-    if (loading || loadingMore || !hasMore || error) return;
+    if (loading || loadingMore || moreRequest.current || !hasMore || error) return;
     const gen = generation.current;
     const ctrl = new AbortController();
-    moreRequest.current?.abort();
     moreRequest.current = ctrl;
     setLoadingMore(true);
     setLoadMoreError(false);
     try {
-      const res = await searchCatalog({ query, topic: effectiveTopic, page: page + 1, sort: catalogSort }, ctrl.signal);
-      if (gen !== generation.current) return;
+      const res = await searchCatalog({ query, topic: effectiveTopic, page: page + 1, sort: catalogSort, source }, ctrl.signal);
+      if (!alive.current || ctrl.signal.aborted || gen !== generation.current) return;
       setItems((prev) => {
         const seen = new Set(prev.map((b) => b.id));
         return [...prev, ...res.books.filter((b) => !seen.has(b.id))];
@@ -253,55 +279,68 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       setPage((p) => p + 1);
       setHasMore(res.hasMore);
     } catch {
-      if (gen === generation.current && !ctrl.signal.aborted) {
+      if (alive.current && gen === generation.current && !ctrl.signal.aborted) {
         setLoadMoreError(true);
         showToast('Could not load more books. Tap to retry.');
       }
     } finally {
-      if (moreRequest.current === ctrl) {
+      if (alive.current && moreRequest.current === ctrl) {
         moreRequest.current = null;
         setLoadingMore(false);
       }
     }
-  }, [loading, loadingMore, hasMore, error, query, effectiveTopic, catalogSort, page, showToast]);
+  }, [loading, loadingMore, hasMore, error, query, effectiveTopic, catalogSort, source, page, showToast]);
 
   // ---- download + import ----
   const downloadAndImport = async (item: CatalogBook) => {
     let uri: string | null = null;
+    const ctrl = new AbortController();
+    transfer.current = ctrl;
+    phase.current = 'downloading';
+    setDownloadErrors(current => { const next = { ...current }; delete next[item.id]; return next; });
     setActive({ id: item.id, phase: 'downloading', progressPercent: 0 });
     try {
       uri = await downloadEpub(item, (progressPercent) => {
-        setActive((current) =>
-          current?.id === item.id ? { ...current, progressPercent } : current
-        );
-      });
+        if (alive.current && !ctrl.signal.aborted) setActive(current => current?.id === item.id ? { ...current, progressPercent } : current);
+      }, ctrl.signal);
+      if (!alive.current || ctrl.signal.aborted) return;
+      phase.current = 'preparing';
       setActive({ id: item.id, phase: 'preparing', progressPercent: 100 });
-      // let "Preparing…" paint before unzipping a big book occupies the JS thread
-      await new Promise((r) => setTimeout(r, 60));
+      await new Promise(resolve => setTimeout(resolve, 60));
+      if (!alive.current || ctrl.signal.aborted) return;
       const { book, pages } = await parseEpubFile(uri, `${item.title}.epub`, storage);
-      if (!book.coverUrl && item.coverUrl) {
-        book.coverUrl = item.coverUrl;
-        book.coverStyle = 'image';
+      if (!alive.current || ctrl.signal.aborted) {
+        storage.removeBookFiles(book.id, book.coverUrl);
+        return;
       }
+      // Prefer the EPUB's permanent embedded art; the catalog is a remote fallback.
+      if (!book.coverUrl && item.coverUrl) book.coverUrl = item.coverUrl;
+      book.coverStyle = 'image';
       await onAddEpubBook(book, pages);
-      setAdded(await rememberAdded(added, item.id, book.id, storage));
+      if (!alive.current) return;
+      const next = { ...added, [item.id]: book.id };
+      setAdded(next); // The library save is confirmed even if bookkeeping fails.
+      try { await rememberAdded(next, item.id, book.id, storage); }
+      catch { if (alive.current) showToast('Book saved in Library. Its catalog shortcut could not be saved; open it from Library.'); }
     } catch (err: unknown) {
-      console.warn('Catalog download failed:', err);
+      if (!alive.current || ctrl.signal.aborted) return;
       const msg = err instanceof Error ? err.message : '';
-      showToast(
-        err instanceof ImportStorageError ? msg
-          : /Invalid EPUB/i.test(msg) ? 'That file could not be read as an EPUB.'
-          : msg || 'Download failed. Check your connection and try again.'
-      );
+      const message = err instanceof ImportStorageError ? msg
+        : /Invalid EPUB|zip|central directory/i.test(msg) ? 'This source did not send a readable EPUB. Retry or try another edition or source.'
+        : msg || 'Download failed. Check your connection and try again.';
+      setDownloadErrors(current => ({ ...current, [item.id]: message }));
+      showToast(message);
     } finally {
       if (uri) deleteDownloaded(uri);
-      setActive(null);
+      if (alive.current) setActive(null);
+      phase.current = null;
+      transfer.current = null;
       pendingGet.current = false;
     }
   };
 
   const handleGet = (item: CatalogBook) => {
-    if (active || pendingGet.current) return;
+    if (!alive.current || active || pendingGet.current) return;
     pendingGet.current = true;
     const existingBook = books.find((book) => normalizeTitle(book.title) === normalizeTitle(item.title));
     if (existingBook) {
@@ -313,7 +352,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
 
   const handleRead = (item: CatalogBook) => {
     const bookId = added[item.id];
-    if (!bookId) return;
+    if (!bookId || !libraryIds.has(bookId)) return;
     onClose();
     onOpenBook(bookId);
   };
@@ -340,6 +379,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       onRead={onRead}
       viewMode={viewMode}
       cardWidth={cardWidth}
+      error={downloadErrors[item.id]}
     />
   );
 
@@ -363,7 +403,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       <Icon name="cloud_off" size={40} color={palette.secondaryFixedDim} />
       <Text style={styles.stateTitle}>Can’t reach the catalog</Text>
       <Text style={styles.stateBody}>{error}</Text>
-      <Pressable onPress={() => setReloadNonce((n) => n + 1)} style={[styles.btn, styles.btnFilled, { marginTop: 6 }]}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Retry catalog" onPress={() => setReloadNonce((n) => n + 1)} style={[styles.btn, styles.btnFilled, { marginTop: 6 }]}>
         <Icon name="refresh" size={16} color="#fff" />
         <Text style={[styles.btnText, { color: '#fff' }]}>Try again</Text>
       </Pressable>
@@ -378,6 +418,126 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     </View>
   );
 
+  const browserHeader = <View style={{ gap: 12, paddingBottom: 12, marginHorizontal: -20 }}>
+    <View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow} keyboardShouldPersistTaps="handled">
+        {CATALOG_SOURCES.map(item => <Chip key={item.id} label={item.label} active={source === item.id} onPress={() => setSource(item.id)} />)}
+      </ScrollView>
+    </View>
+    {/* Search */}
+    <View style={styles.searchBox}>
+      <Icon name="search" size={20} color={palette.muted} />
+      <TextInput
+        value={queryInput}
+        onChangeText={value => setQueryInput(value.slice(0, 200))}
+        maxLength={200}
+        accessibilityLabel="Search free books by title or author"
+        onSubmitEditing={() => setQuery(queryInput.trim())}
+        placeholder="Search titles or authors…"
+        placeholderTextColor={palette.muted}
+        style={styles.searchInput}
+        returnKeyType="search"
+        autoCorrect={false}
+        autoCapitalize="none"
+      />
+      {queryInput ? (
+        <Pressable
+          onPress={() => {
+            setQueryInput('');
+            setQuery('');
+          }}
+          accessibilityRole="button" accessibilityLabel="Clear free book search" style={styles.smallAction}
+        >
+          <Icon name="close" size={18} color={palette.muted} />
+        </Pressable>
+      ) : null}
+    </View>
+
+    {/* Topics */}
+    <View>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chipRow}
+        keyboardShouldPersistTaps="handled"
+      >
+        {TOPICS.map((t) => (
+          <Chip
+            key={t.id}
+            label={t.label}
+            active={!query && topicId === t.id}
+            onPress={() => {
+              setQueryInput('');
+              setQuery('');
+              setTopicId(t.id);
+            }}
+          />
+        ))}
+      </ScrollView>
+    </View>
+
+    <View style={styles.sortRow}>
+      <View style={styles.sortGroup}>
+        <Icon name="sort" size={16} color={palette.muted} />
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.sortOptions}
+          keyboardShouldPersistTaps="handled"
+        >
+          {SORT_OPTIONS.map((option) => (
+            <Pressable
+              key={option.id}
+              onPress={() => setSortBy(option.id)}
+              style={styles.smallAction}
+              accessibilityLabel={`Sort free books by ${option.label}`}
+              accessibilityRole="button"
+              accessibilityState={{ selected: sortBy === option.id }}
+            >
+              <Text style={[styles.sortText, sortBy === option.id && styles.sortActive]}>
+                {option.label}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      </View>
+      <View style={styles.viewToggle}>
+        {(['grid', 'list'] as const).map((mode) => (
+          <Pressable
+            key={mode}
+            onPress={() => onViewModeChange(mode)}
+            style={[styles.viewToggleButton, viewMode === mode && { backgroundColor: palette.surface }]}
+            accessibilityRole="button"
+            accessibilityLabel={`${mode === 'grid' ? 'Grid' : 'List'} view`}
+            accessibilityState={{ selected: viewMode === mode }}
+          >
+            <Icon
+              name={mode === 'grid' ? 'view_module' : 'view_list'}
+              size={19}
+              color={viewMode === mode ? palette.primary : palette.muted}
+            />
+          </Pressable>
+        ))}
+      </View>
+    </View>
+    {sortBy === 'releaseDate' && source === 'gutenberg' ? (
+      <Text style={styles.sortNote}>Approximate order of addition, based on Gutenberg ID.</Text>
+    ) : null}
+
+    {notice && <View style={styles.notice}>
+      <Text accessibilityLiveRegion="polite" style={styles.noticeText}>{notice}</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel="Retry live catalog" onPress={() => setReloadNonce(value => value + 1)} style={styles.smallAction}><Text style={styles.sortActive}>Retry live catalog</Text></Pressable>
+    </View>}
+    <View style={styles.countRow}>
+      {!loading && !error && items.length > 0 ? (
+        <Text style={styles.count}>
+          {query ? `Results for “${query}”` : topicLabel} · {total === null ? `${items.length} books loaded` : `${total.toLocaleString()} books`}
+        </Text>
+      ) : <View style={{ flex: 1 }} />}
+    </View>
+
+  </View>;
+
   return (
     <Modal
       visible
@@ -387,7 +547,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
           setDuplicateBook(null);
           pendingGet.current = false;
         } else {
-          onClose();
+          close();
         }
       }}
       statusBarTranslucent
@@ -395,128 +555,30 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       <View style={[styles.screen, { paddingTop: insets.top }]}>
         {/* Header */}
         <View style={styles.header}>
-          <Pressable onPress={onClose} hitSlop={10} style={styles.backBtn} accessibilityLabel="Back to library">
+          <Pressable onPress={close} disabled={active?.phase === 'preparing'} accessibilityState={{ disabled: active?.phase === 'preparing' }} accessibilityRole="button" style={styles.backBtn} accessibilityLabel="Back to library">
             <Icon name="arrow_back" size={22} color={palette.onSurface} />
           </Pressable>
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>Free books</Text>
-            <Text style={styles.subtitle}>Public-domain classics from Project Gutenberg</Text>
+            <Text style={styles.subtitle}>{CATALOG_SOURCES.find(item => item.id === source)?.description}</Text>
           </View>
         </View>
 
-        {/* Search */}
-        <View style={styles.searchBox}>
-          <Icon name="search" size={20} color={palette.muted} />
-          <TextInput
-            value={queryInput}
-            onChangeText={setQueryInput}
-            onSubmitEditing={() => setQuery(queryInput.trim())}
-            placeholder="Search titles or authors…"
-            placeholderTextColor={palette.muted}
-            style={styles.searchInput}
-            returnKeyType="search"
-            autoCorrect={false}
-            autoCapitalize="none"
-          />
-          {queryInput ? (
-            <Pressable
-              onPress={() => {
-                setQueryInput('');
-                setQuery('');
-              }}
-              hitSlop={8}
-            >
-              <Icon name="close" size={18} color={palette.muted} />
-            </Pressable>
-          ) : null}
-        </View>
-
-        {/* Topics */}
-        <View>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.chipRow}
-            keyboardShouldPersistTaps="handled"
-          >
-            {TOPICS.map((t) => (
-              <Chip
-                key={t.id}
-                label={t.label}
-                active={!query && topicId === t.id}
-                onPress={() => {
-                  setQueryInput('');
-                  setQuery('');
-                  setTopicId(t.id);
-                }}
-              />
-            ))}
-          </ScrollView>
-        </View>
-
-        <View style={styles.sortRow}>
-          <View style={styles.sortGroup}>
-            <Icon name="sort" size={16} color={palette.muted} />
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.sortOptions}
-              keyboardShouldPersistTaps="handled"
-            >
-              {SORT_OPTIONS.map((option) => (
-                <Pressable
-                  key={option.id}
-                  onPress={() => setSortBy(option.id)}
-                  hitSlop={6}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: sortBy === option.id }}
-                >
-                  <Text style={[styles.sortText, sortBy === option.id && styles.sortActive]}>
-                    {option.label}
-                  </Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-          </View>
-          <View style={styles.viewToggle}>
-            {(['grid', 'list'] as const).map((mode) => (
-              <Pressable
-                key={mode}
-                onPress={() => onViewModeChange(mode)}
-                style={[styles.viewToggleButton, viewMode === mode && { backgroundColor: palette.surface }]}
-                accessibilityLabel={`${mode === 'grid' ? 'Grid' : 'List'} view`}
-                accessibilityState={{ selected: viewMode === mode }}
-              >
-                <Icon
-                  name={mode === 'grid' ? 'view_module' : 'view_list'}
-                  size={19}
-                  color={viewMode === mode ? palette.primary : palette.muted}
-                />
-              </Pressable>
-            ))}
-          </View>
-        </View>
-        {sortBy === 'releaseDate' ? (
-          <Text style={styles.sortNote}>Approximate release order, based on Gutenberg ID.</Text>
-        ) : null}
-
-        <View style={styles.countRow}>
-          {!loading && !error && items.length > 0 ? (
-            <Text style={styles.count}>
-              {query ? `Results for “${query}”` : topicLabel} · {total.toLocaleString()} books
-            </Text>
-          ) : <View style={{ flex: 1 }} />}
-        </View>
-
+        {active && <View style={styles.notice}>
+          <Text accessibilityLiveRegion="polite" style={styles.noticeText}>{active.phase === 'preparing' ? 'Saving your book. Please wait…' : 'Downloading your book…'}</Text>
+          {active.phase === 'downloading' && <Pressable accessibilityRole="button" accessibilityLabel="Cancel book download" onPress={() => transfer.current?.abort()} style={styles.smallAction}><Text style={styles.sortActive}>Cancel download</Text></Pressable>}
+        </View>}
         {/* Results */}
         <FlatList
-          key={viewMode}
+          key={`${viewMode}-${columns}`}
+          accessibilityLabel={`${CATALOG_SOURCES.find(item => item.id === source)?.label} books`}
           data={sortedItems}
-          extraData={[active, added, libraryIds]}
-          numColumns={viewMode === 'grid' ? 2 : 1}
-          columnWrapperStyle={viewMode === 'grid' ? styles.gridColumn : undefined}
+          extraData={[active, added, libraryIds, downloadErrors]}
+          numColumns={columns}
+          columnWrapperStyle={columns === 2 ? styles.gridColumn : undefined}
           keyExtractor={(b) => b.id}
           renderItem={renderItem}
+          ListHeaderComponent={browserHeader}
           ListEmptyComponent={empty}
           ListFooterComponent={
             loadingMore ? (
@@ -524,7 +586,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
                 <Icon name="sync" size={20} color={palette.muted} spin />
               </View>
             ) : loadMoreError ? (
-              <Pressable onPress={loadMore} style={[styles.btn, styles.btnOutline, { alignSelf: 'center', marginTop: 8 }]}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Retry loading more books" onPress={loadMore} style={[styles.btn, styles.btnOutline, { alignSelf: 'center', marginTop: 8 }]}>
                 <Icon name="refresh" size={16} color={palette.primary} />
                 <Text style={[styles.btnText, { color: palette.primary }]}>Retry loading more</Text>
               </Pressable>
@@ -576,15 +638,18 @@ export const BrowseBooksScreen: React.FC<Props> = ({
                     setDuplicateBook(null);
                     pendingGet.current = false;
                   }}
+                  accessibilityRole="button" accessibilityLabel="Cancel duplicate download"
                   style={[styles.btn, styles.btnOutline, styles.confirmationButton]}
                 >
                   <Text style={[styles.btnText, { color: palette.primary }]}>Cancel</Text>
                 </Pressable>
                 <Pressable
                   onPress={() => {
+                    if (!alive.current || phase.current || !pendingGet.current) return;
                     setDuplicateBook(null);
                     void downloadAndImport(duplicateBook.catalog);
                   }}
+                  accessibilityRole="button" accessibilityLabel="Download another copy"
                   style={[styles.btn, styles.btnFilled, styles.confirmationButton]}
                 >
                   <Text style={[styles.btnText, { color: palette.white }]}>Download anyway</Text>
@@ -602,7 +667,7 @@ const createStyles = (p: AppPalette) =>
   StyleSheet.create({
     screen: { flex: 1, backgroundColor: p.background, gap: 12 },
     header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 8 },
-    backBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+    backBtn: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
     title: { ...type.headlineSm, color: p.onSurface },
     subtitle: { ...type.bodySm, color: p.muted },
     searchBox: {
@@ -629,7 +694,7 @@ const createStyles = (p: AppPalette) =>
     },
     count: { ...type.labelSm, color: p.muted, flex: 1 },
     viewToggle: { flexDirection: 'row', backgroundColor: p.surfaceContainer, padding: 3, borderRadius: 10, gap: 2 },
-    viewToggleButton: { width: 34, height: 30, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
+    viewToggleButton: { width: 48, height: 48, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
     resultsContent: { paddingHorizontal: 20, paddingTop: 6, paddingBottom: 28, gap: 16 },
     resultsList: { gap: 12 },
     gridColumn: { justifyContent: 'space-between', gap: 12 },
@@ -648,10 +713,16 @@ const createStyles = (p: AppPalette) =>
     rowTitle: { fontFamily: F.serifSemi, fontSize: 17, lineHeight: 21, color: p.onSurface },
     rowAuthor: { ...type.bodyMd, color: p.onSurfaceVariant, marginTop: 2 },
     rowMeta: { ...type.bodySm, color: p.muted, marginTop: 2 },
+    rowError: { ...type.bodySm, color: p.onSurface, marginTop: 8 },
+    smallAction: { minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
+    notice: { padding: 12, marginHorizontal: 20, borderRadius: 12, backgroundColor: p.surfaceContainer },
+    noticeText: { ...type.bodySm, color: p.onSurface },
     rowAction: { flexDirection: 'row', marginTop: 8 },
     downloadProgress: { gap: 5, marginTop: 7 },
 
     btn: {
+      minHeight: 48,
+      justifyContent: 'center',
       flexDirection: 'row',
       alignItems: 'center',
       gap: 6,

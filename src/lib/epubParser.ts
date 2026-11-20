@@ -252,8 +252,20 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
     }
 
     if (coverHref) {
-      const coverZipFile = zip.file(resolvePath(basePath, coverHref)) || zip.file(coverHref);
-      if (coverZipFile) {
+      let coverPath = resolvePath(basePath, coverHref);
+      let coverZipFile = zip.file(coverPath) || zip.file(coverHref);
+      if (/\.svg$/i.test(coverHref) && coverZipFile) {
+        const svg = parseHtml(await coverZipFile.async('string'));
+        const image = svg.querySelector('image');
+        const href = image?.getAttribute('href') || image?.getAttribute('xlink:href') || '';
+        const folder = coverPath.includes('/') ? coverPath.slice(0, coverPath.lastIndexOf('/') + 1) : '';
+        if (href && !/^(?:[a-z]+:|\/)/i.test(href)) {
+          coverPath = resolvePath(folder, href);
+          coverZipFile = zip.file(coverPath);
+          coverHref = coverPath;
+        } else coverZipFile = null;
+      }
+      if (coverZipFile && !/\.svg$/i.test(coverHref)) {
         const coverBytes = await coverZipFile.async('uint8array');
         const ext = (coverHref.split('.').pop() || 'jpg').toLowerCase().slice(0, 4);
         const dest = new File(coversDir(), `${bookId}.${ext}`);
@@ -284,7 +296,7 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
     title,
     author,
     coverUrl,
-    coverStyle: coverUrl ? 'image' : 'typographic',
+    coverStyle: 'image',
     progressPercent: 0,
     currentPage: 1,
     totalPages: pages.length,

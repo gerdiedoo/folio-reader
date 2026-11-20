@@ -26,10 +26,13 @@ async function fixture(body, { missingFile = false, missingReference = false, em
   return zip.generateAsync({ type: 'uint8array' });
 }
 
-function parser(bytes, { copyFails = false, cleanupFails = false } = {}) {
+function parser(bytes, { copyFails = false, cleanupFails = false, coverWrites = null } = {}) {
   const writes = [];
   class File {
-    constructor() { this.size = bytes.length; }
+    constructor(...parts) { this.size = bytes.length; this.uri = parts.join('/'); this.exists = false; }
+    create() { this.exists = true; }
+    write(value) { coverWrites.push({ uri: this.uri, bytes: Array.from(value) }); }
+    delete() { this.exists = false; }
     async bytes() { return bytes; }
   }
   const exports = {};
@@ -41,7 +44,7 @@ function parser(bytes, { copyFails = false, cleanupFails = false } = {}) {
       if (name === './bookImport') return importHelpers;
       if (name === 'expo-file-system') return { File };
       if (name === './localStore') return {
-        coversDir() { writes.push('cover'); throw new Error('Unexpected cover access'); },
+        coversDir() { writes.push('cover'); if (coverWrites) return 'file:///covers'; throw new Error('Unexpected cover access'); },
         persistBookFile() {
           writes.push('epub');
           if (copyFails) throw new importHelpers.ImportStorageError('Could not save the EPUB file. Check available storage.');
@@ -72,6 +75,7 @@ test('retains short dialogue, closing lines, and an unpaired final paragraph', a
   assert.deepEqual(paragraphs(result), ['Yes.', 'A longer sentence survives alongside the short dialogue.', 'THE END.']);
   assert.equal(result.book.totalPages, 2);
   assert.equal(result.book.progressPercent, 0);
+  assert.equal(result.book.coverStyle, 'image');
   assert.equal(result.book.lastOpened, 'Not yet read');
   assert.deepEqual(input.writes, ['epub']);
 });
@@ -183,4 +187,17 @@ test('EPUB copy failure reports incomplete cleanup instead of claiming success',
 test('unexpected cleanup errors do not mask the original EPUB copy failure', async () => {
   const input = parser(await fixture('<p>Readable text.</p>'), { copyFails: true, cleanupFails: 'throw' });
   await assert.rejects(input.parse, /Could not save the EPUB file.*Some incomplete import files could not be removed/);
+});
+
+
+test('EPUB 3 SVG cover wrappers save embedded raster artwork instead of an unsupported SVG thumbnail', async () => {
+  const zip = await JSZip.loadAsync(await fixture('<p>A story.</p>'));
+  zip.file('EPUB/content.opf', '<package><metadata><title>Illustrated book</title></metadata><manifest><item id="chapter" href="text/chapter.xhtml" media-type="application/xhtml+xml"/><item id="cover" href="images/cover.svg" media-type="image/svg+xml" properties="cover-image"/></manifest><spine><itemref idref="chapter"/></spine></package>');
+  zip.file('EPUB/images/cover.svg', '<svg xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="art.jpg"/></svg>');
+  zip.file('EPUB/images/art.jpg', Uint8Array.from([255, 216, 255, 224, 10, 20, 30, 40]));
+  const coverWrites = [], input = parser(await zip.generateAsync({ type: 'uint8array' }), { coverWrites });
+  const result = await input.parse();
+  assert.equal(coverWrites.length, 1); assert.match(coverWrites[0].uri, /\.jpg$/);
+  assert.deepEqual(coverWrites[0].bytes, [255, 216, 255, 224, 10, 20, 30, 40]);
+  assert.equal(result.book.coverUrl, coverWrites[0].uri); assert.equal(result.book.coverStyle, 'image');
 });

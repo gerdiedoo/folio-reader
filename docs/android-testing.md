@@ -740,3 +740,36 @@ over Folio Dev without uninstalling or clearing data. No new SQL is required.
    system text, controls should stay readable and reachable; the grid should
    use one column at larger text sizes. Query/view choices are not persisted
    after leaving Library for another tab or restarting.
+
+## Free books and initial covers (step 20)
+
+Read [source/error behavior and limits](free-books.md). Install over Folio Dev;
+keep the current app data. No new SQL or credentials are required.
+
+1. Open Library → Browse free books. Try Gutenberg, Standard Ebooks and Internet
+   Archive independently on Wi-Fi and mobile data. Search a known title/author,
+   change sources while loading, browse another page, then try a topic. Confirm
+   the source label matches the results and late results never replace a newer
+   source. Standard Ebooks reports loaded results rather than a false total.
+2. Download a short book from each source. Wait for Preparing to finish; it must
+   become Read only after saving. Open it, return to Library and restart offline
+   to confirm the text and extracted cover remain. Archive editions with no
+   unrestricted EPUB should give an actionable error, never a borrowing flow.
+3. With networking unavailable, Gutenberg should explain the starter/cached
+   fallback; search is then limited to those results. Standard/Archive should
+   offer retry and allow source switching. A failed later page should keep
+   earlier results and offer Retry loading more. Restore networking and retry.
+4. Interrupt a download or cancel it, then retry. Its error should remain on the
+   row until retry starts. Cancel/close while downloading must prevent a later
+   automatic import. During Preparing, back/close should wait for the import.
+   Check progress/cancel remains accessible while searching another source.
+5. Confirm illustrated initial thumbnails for newly added books. Books with
+   embedded art should use it. Books with absent/unavailable art should show a
+   Folio illustration offline. Existing explicit Typographic covers should stay
+   typographic, and custom photo/cloth editing should still work. For a book
+   whose cover is an SVG wrapper, confirm the extracted raster illustration.
+6. Test TalkBack names, source selection, retry/busy states and announcements.
+   Check Charcoal, largest system text, landscape, keyboard dismissal and short
+   screens: the search form, errors and book actions must remain reachable by
+   scrolling. Real provider availability, redirects, native image rendering,
+   cancellation and filesystem behavior still require these phone checks.

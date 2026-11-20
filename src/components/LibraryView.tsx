@@ -627,6 +627,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         <BrowseBooksScreen
           storage={storage}
           books={books}
+          availableBookIds={availableBookIds}
           viewMode={browseViewMode}
           onViewModeChange={setBrowseViewMode}
           onAddEpubBook={onAddEpubBook}

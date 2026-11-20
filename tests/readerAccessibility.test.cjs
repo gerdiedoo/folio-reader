@@ -108,6 +108,8 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
     '../theme': theme, '../../theme': theme,
     './ui/Icon': { Icon: 'Icon' }, './ui/ModalShell': { ModalShell: 'ModalShell' },
     './ui/SeekBar': { SeekBar: 'SeekBar' },
+    './CoverIllustration': { CoverIllustration: 'CoverIllustration' },
+    'react-native-svg': { default: 'Svg', Circle: 'Circle', Path: 'Path', Rect: 'Rect' },
     './Icon': { Icon: 'Icon' },
     '@expo/vector-icons': { MaterialCommunityIcons: 'MaterialCommunityIcons', MaterialIcons: 'MaterialIcons' },
     __clock: class extends Date { constructor(...args) { if (args.length) super(...args); else super(now); } static now() { return now; } },
@@ -168,7 +170,7 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
 function elements(root) {
   if (!root || typeof root !== 'object') return [];
   if (Array.isArray(root)) return root.flatMap(elements);
-  return [root, ...elements(root.props?.children)];
+  return [root, ...elements(root.props?.children), ...elements(root.props?.ListHeaderComponent)];
 }
 function labelled(root, label) {
   const found = elements(root).find(node => node.props?.accessibilityLabel === label);
@@ -1980,4 +1982,113 @@ test('Library and Notebook filter chips expose a named button and its selected s
     assert.deepEqual(control.accessibilityState, { selected: active }); control.onPress();
   }
   assert.equal(presses, 2);
+});
+
+function catalogHarness({ search, download, parse, save, remember } = {}) {
+  const calls = { searches: [], downloads: [], saved: [], deleted: [], closed: 0, toasts: [] };
+  const h = harness({ runEffects: true, moduleMocks: {
+    '../lib/catalog': {
+      CATALOG_SOURCES: [{ id: 'gutenberg', label: 'Project Gutenberg' }, { id: 'standard', label: 'Standard Ebooks' }, { id: 'archive', label: 'Internet Archive' }],
+      TOPICS: [{ id: 'popular', label: 'Popular', topic: '' }],
+      searchCatalog: (opts, signal) => { calls.searches.push({ opts, signal }); return search ? search(opts, signal) : Promise.resolve({ books: [item], total: 1, hasMore: false }); },
+      downloadEpub: async (...args) => { calls.downloads.push(args); return download ? download(...args) : 'file:///cache/book.epub'; },
+      deleteDownloaded: uri => calls.deleted.push(uri), loadAdded: async () => ({}),
+      rememberAdded: remember ?? (async current => current),
+    },
+    '../lib/epubParser': { parseEpubFile: parse ?? (async () => ({ book: { id: 'epub-new', title: 'A Book', coverUrl: 'file:///embedded/cover.jpg' }, pages: [{ pageNumber: 1 }] })) },
+    './BookCover': { BookCover: 'BookCover' }, './ui/Chip': { Chip: 'Chip' }, './ui/ProgressBar': { ProgressBar: 'ProgressBar' },
+  } });
+  const item = { id: 'gutenberg-1', title: 'A Book', author: 'An Author', source: 'gutenberg', coverUrl: 'https://www.gutenberg.org/cover.jpg', downloads: 10 };
+  const { BrowseBooksScreen, BookRow } = h.load('../src/components/BrowseBooksScreen.tsx');
+  const props = { storage: { removeBookFiles: id => calls.deleted.push(id) }, books: [], availableBookIds: [], viewMode: 'grid', onViewModeChange() {},
+    onAddEpubBook: async (book, pages) => { calls.saved.push({ book, pages }); if (save) await save(book, pages); props.books = [...props.books, book]; props.availableBookIds = [...props.availableBookIds, book.id]; },
+    onOpenBook() {}, onClose: () => calls.closed++, showToast: message => calls.toasts.push(message) };
+  return { h, calls, props, item, BookRow, render: () => h.render(BrowseBooksScreen, props) };
+}
+const freeBookList = root => elements(root).find(node => node.type === 'FlatList').props;
+const freeBookRow = (f, root) => freeBookList(root).renderItem({ item: f.item }).props;
+const flushNative = () => new Promise(resolve => setImmediate(resolve));
+function fireNativeTimer(h, ms) {
+  const entry = [...h.timers].find(([, timer]) => timer.ms === ms); assert.ok(entry, `Missing ${ms} ms timer`);
+  h.timers.delete(entry[0]); entry[1].fn();
+}
+
+test('free-book source changes cancel old results; provider errors keep retry and other sources available', async () => {
+  let first;
+  const f = catalogHarness({ search: opts => opts.source === 'gutenberg' ? new Promise(done => { first = done; }) : Promise.reject(Error('Source unavailable')) });
+  let root = f.render();
+  elements(root).find(node => node.type === 'Chip' && node.props.label === 'Standard Ebooks').props.onPress(); root = f.render();
+  assert.equal(f.calls.searches[0].signal.aborted, true);
+  first({ books: [f.item], total: 1, hasMore: false }); await flushNative(); root = f.render();
+  assert.equal(freeBookList(root).data.length, 0);
+  assert.ok(labelled(freeBookList(root).ListEmptyComponent, 'Retry catalog'));
+  labelled(freeBookList(root).ListEmptyComponent, 'Retry catalog').onPress(); f.render(); await flushNative();
+  assert.equal(f.calls.searches.length, 3); assert.equal(f.calls.searches[2].opts.source, 'standard'); f.h.unmount();
+});
+
+test('free-book failures remain on their row and retry saves artwork only after confirmed import', async () => {
+  let attempts = 0, release;
+  const f = catalogHarness({ download: async () => { if (++attempts === 1) throw Error('Connection interrupted'); return 'file:///cache/book.epub'; }, save: () => new Promise(done => { release = done; }) });
+  f.render(); await flushNative(); let root = f.render();
+  freeBookRow(f, root).onGet(f.item); freeBookRow(f, root).onGet(f.item); await flushNative(); root = f.render();
+  assert.equal(f.calls.downloads.length, 1); assert.equal(freeBookRow(f, root).error, 'Connection interrupted'); assert.equal(freeBookRow(f, root).status, 'get');
+  freeBookRow(f, root).onGet(f.item); await flushNative(); fireNativeTimer(f.h, 60); await flushNative(); root = f.render();
+  assert.equal(freeBookRow(f, root).status, 'preparing'); assert.equal(f.calls.saved.length, 1);
+  assert.equal(f.calls.saved[0].book.coverUrl, 'file:///embedded/cover.jpg'); assert.equal(f.calls.saved[0].book.coverStyle, 'image');
+  labelled(root, 'Back to library').onPress(); root.props.onRequestClose(); assert.equal(f.calls.closed, 0);
+  release(); await flushNative(); root = f.render(); assert.equal(freeBookRow(f, root).status, 'added');
+  assert.equal(freeBookRow(f, root).error, undefined); assert.deepEqual(f.calls.deleted, ['file:///cache/book.epub']); f.h.unmount();
+});
+
+test('closing or cancelling a download prevents a late transfer from importing', async () => {
+  for (const close of [true, false]) {
+    let finish;
+    const f = catalogHarness({ download: () => new Promise(done => { finish = done; }) });
+    f.render(); await flushNative(); let root = f.render(); freeBookRow(f, root).onGet(f.item); root = f.render();
+    labelled(root, close ? 'Back to library' : 'Cancel book download').onPress(); assert.equal(f.calls.downloads[0][2].aborted, true);
+    if (close) f.h.unmount();
+    const writes = f.h.stateWrites(); finish('file:///cache/book.epub'); await flushNative();
+    assert.equal(f.calls.saved.length, 0); assert.deepEqual(f.calls.deleted, ['file:///cache/book.epub']);
+    if (close) assert.equal(f.h.stateWrites(), writes); else f.h.unmount();
+  }
+});
+
+test('a failed catalog shortcut save does not label a confirmed library import as a failed download', async () => {
+  const f = catalogHarness({ remember: async () => { throw Error('storage full'); } });
+  f.render(); await flushNative(); let root = f.render(); freeBookRow(f, root).onGet(f.item);
+  await flushNative(); fireNativeTimer(f.h, 60); await flushNative(); root = f.render();
+  assert.equal(freeBookRow(f, root).status, 'added'); assert.equal(freeBookRow(f, root).error, undefined);
+  assert.match(f.calls.toasts[0], /Book saved in Library/); f.h.unmount();
+});
+
+test('free-book rows expose a named retry with persistent error and truthful busy state', () => {
+  const f = catalogHarness();
+  const props = { item: f.item, status: 'get', error: 'Source unavailable', disabled: false, onGet: () => f.calls.downloads.push('retry'), viewMode: 'list', cardWidth: 160 };
+  let root = f.h.render(f.BookRow.type, props);
+  const retry = labelled(root, 'Retry downloading A Book'); assert.equal(retry.accessibilityRole, 'button'); retry.onPress(); assert.equal(f.calls.downloads.length, 1);
+  assert.ok(elements(root).some(node => node.props?.accessibilityRole === 'alert' && node.props.children === 'Source unavailable'));
+  root = f.h.render(f.BookRow.type, { ...props, error: undefined, status: 'downloading' });
+  assert.deepEqual(labelled(root, 'Add A Book to library').accessibilityState, { disabled: true, busy: true });
+});
+
+test('image covers show bundled illustrations when missing or failed; explicit cloth styling remains available', () => {
+  const h = harness({ runEffects: true, moduleMocks: { 'expo-linear-gradient': { LinearGradient: 'LinearGradient' } } });
+  const { BookCover } = h.load('../src/components/BookCover.tsx');
+  const book = { title: 'A Book', author: 'An Author', coverUrl: '', coverAlt: 'A book cover' };
+  let root = h.render(BookCover, { book, style: 'image' });
+  assert.ok(elements(root).some(node => node.type === 'CoverIllustration'));
+  root = h.render(BookCover, { book: { ...book, coverUrl: 'https://example.com/cover.jpg' }, style: 'image' });
+  elements(root).find(node => node.type === 'Image').props.onError(); root = h.render(BookCover, { book: { ...book, coverUrl: 'https://example.com/cover.jpg' }, style: 'image' });
+  assert.ok(elements(root).some(node => node.type === 'CoverIllustration'));
+  root = h.render(BookCover, { book, style: 'typographic' });
+  assert.equal(elements(root).some(node => node.type === 'CoverIllustration'), false); h.unmount();
+});
+
+test('duplicate-download confirmation prevents repeated taps from starting concurrent imports', async () => {
+  const f = catalogHarness({ download: () => new Promise(() => {}) });
+  f.props.books = [{ id: 'existing', title: 'A Book' }];
+  f.render(); await flushNative(); let root = f.render();
+  freeBookRow(f, root).onGet(f.item); root = f.render(); assert.equal(f.calls.downloads.length, 0);
+  const confirm = labelled(root, 'Download another copy'); confirm.onPress(); confirm.onPress();
+  assert.equal(f.calls.downloads.length, 1); f.h.unmount();
 });
