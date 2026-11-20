@@ -3,6 +3,7 @@ export type TabType = 'library' | 'reading' | 'notebook' | 'settings';
 export type PaperTheme = 'parchment' | 'white' | 'sepia' | 'charcoal';
 export type Typeface = 'Literata' | 'EB Garamond' | 'Manrope' | 'System Serif' | 'System Sans';
 export type LineSpacing = 'compact' | 'standard' | 'loose';
+export type CoverTint = 'parchment' | 'terracotta' | 'slate' | 'sage';
 export type Margins = 'narrow' | 'regular' | 'wide';
 
 export type ReadingFlowMode = 'paginated' | 'continuous' | 'single-line';
@@ -41,6 +42,7 @@ export interface Book {
   author: string;
   coverUrl: string;
   coverStyle?: 'image' | 'typographic';
+  coverTint?: CoverTint;
   progressPercent: number;
   currentPage: number;
   readingPosition?: ReadingPosition;

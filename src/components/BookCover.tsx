@@ -2,10 +2,11 @@ import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useState } from 'react';
 import { Image, Pressable, StyleProp, StyleSheet, Text, View, ViewStyle } from 'react-native';
 import { colors, F, type } from '../theme';
-import { Book } from '../types';
+import { Book, CoverTint } from '../types';
+import { normalizeCoverTint } from '../lib/bookCover';
 import { Icon } from './ui/Icon';
 
-export type ClothTint = 'parchment' | 'terracotta' | 'slate' | 'sage';
+export type ClothTint = CoverTint;
 
 export const CLOTH: Record<ClothTint, { bg: string; fg: string }> = {
   parchment: { bg: '#f4efe6', fg: '#1c1c18' },
@@ -15,7 +16,7 @@ export const CLOTH: Record<ClothTint, { bg: string; fg: string }> = {
 };
 
 interface BookCoverProps {
-  book: Pick<Book, 'title' | 'author' | 'coverUrl' | 'coverAlt'>;
+  book: Pick<Book, 'title' | 'author' | 'coverUrl' | 'coverAlt' | 'coverTint'>;
   style: 'image' | 'typographic';
   /** Overrides cover URL (used by the live preview in the cover editor). */
   uriOverride?: string;
@@ -42,7 +43,7 @@ export const BookCover: React.FC<BookCoverProps> = ({
   book,
   style,
   uriOverride,
-  tint = 'parchment',
+  tint,
   size = 'regular',
   badge,
   onEdit,
@@ -55,7 +56,7 @@ export const BookCover: React.FC<BookCoverProps> = ({
 
   const showTypographic = style === 'typographic' || !uri || imageFailed;
   const compact = size === 'compact';
-  const palette = CLOTH[tint];
+  const palette = CLOTH[normalizeCoverTint(tint ?? book.coverTint)];
 
   return (
     <View style={[styles.cover, containerStyle]}>

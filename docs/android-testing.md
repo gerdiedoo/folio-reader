@@ -677,3 +677,35 @@ No new SQL or reinstall is required; install over the existing Folio Dev APK.
    system text size, in landscape and with Charcoal, the full confirmation/error
    and actions should remain reachable by scrolling. Native focus and modal/back
    behavior still require phone validation.
+
+## Book cover saves (step 18)
+
+Read the [cover-save behavior and limits](cover-saves.md). Install over Folio Dev;
+no uninstall, clearing data or new SQL is needed.
+
+1. Edit a disposable book's thumbnail. Choose Typographic and a different cloth
+   color, then Apply. It should show **Saving…**, reject duplicate taps and close
+   only after a local save. Check the saved color on the library cover, reopen
+   the editor and restart normally. Repeat with the other colors and Charcoal.
+2. Choose a photo on Android. It should use the system picker without requiring
+   access to the whole photo library. Cancel the picker and verify the previous
+   draft stays. Select a photo, then close without Apply: the library cover must
+   remain unchanged. Select again and Apply; restart offline and confirm it remains.
+   The source gallery photo must remain intact.
+3. Paste a valid HTTPS image URL and Apply. Invalid text, local file paths,
+   unsupported schemes and URLs with embedded credentials must produce an inline
+   error and keep the draft open. Blank text keeps the current image. A valid URL
+   can be saved while its image is unavailable; remote loading is a separate check.
+4. If copying or saving fails naturally, retain the current cover and editor draft,
+   show the failure and allow retry. Partial-file cleanup failures must be reported.
+   Do not fill storage or corrupt files to force this: tests inject these failures.
+   Unexpected errors should suggest checking Library before retrying.
+5. While Apply is pending, edits, photo selection, removal, close, backdrop and
+   Android back should not dismiss or modify the saving draft. Once complete,
+   retry the removal confirmation from step 17. Check that the book's reading
+   position and other library entries were not reset by a cover edit.
+6. Alternate Guest and disposable test accounts: local photo copies/colors should
+   remain scoped to that reading space. They are not a cloud photo/tint sync feature.
+   Test TalkBack control names/selection/pending states, large text, landscape and
+   photo-picker return on the phone. iOS permission/cropping behavior needs a
+   separate iOS device check.

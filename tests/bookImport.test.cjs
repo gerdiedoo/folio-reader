@@ -12,6 +12,8 @@ function compiled(name) {
 const helper = {};
 vm.runInNewContext(compiled('bookImport'), { exports: helper, Error });
 const { createImportCommitter, ImportStorageError } = helper;
+const coverHelpers = {};
+vm.runInNewContext(compiled('bookCover'), { exports: coverHelpers, Error, URL });
 const book = id => ({ id, title: id, coverUrl: '', fileLocation: `file:///docs/folio/books/${id}.epub` });
 const pages = [{ paragraph1: 'Saved text' }];
 function gate() {
@@ -19,7 +21,7 @@ function gate() {
   const promise = new Promise(done => { resolve = done; });
   return { promise, resolve };
 }
-function device() {
+function device({ fixedClock = false } = {}) {
   const files = new Map(), directories = new Set(), deleted = [], failingDeletes = new Set();
   const control = { failAt: '', failingDeletes, files, deleted };
   const uri = parts => parts.map(p => typeof p === 'string' ? p : p.uri).join('/').replace(/\/$/, '');
@@ -31,6 +33,7 @@ function device() {
   class File {
     constructor(...parts) { this.uri = uri(parts); }
     get exists() { return files.has(this.uri); }
+    get size() { return files.get(this.uri)?.length ?? 0; }
     create() { files.set(this.uri, ''); }
     write(data) {
       files.set(this.uri, control.failAt === 'write' ? 'partial' : data);
@@ -54,11 +57,12 @@ function device() {
   };
   const exports = {};
   vm.runInNewContext(compiled('localStore'), {
-    exports, Error, console: { warn() {} },
+    exports, Error, Date: fixedClock ? { now: () => 123 } : Date, Math: fixedClock ? { random: () => 0.5 } : Math, console: { warn() {} },
     require(name) {
       if (name === '@react-native-async-storage/async-storage') return asyncStorage;
       if (name === 'expo-file-system') return { File, Directory, Paths: { document: 'file:///docs' } };
       if (name === './bookImport') return helper;
+      if (name === './bookCover') return coverHelpers;
       throw Error('Unexpected dependency ' + name);
     },
   });
@@ -272,4 +276,70 @@ test('returning to A waits for its previous pending metadata write; B does not w
   assert.equal(returned, false);
   paused.resolve(); await saving;
   assert.equal((await reading)[0].title, 'Newest A');
+});
+
+test('picked cover photos are copied to unique scoped files and the source remains intact', () => {
+  const d = device(), scoped = d.store.createLocalStore('account-A');
+  d.files.set('file:///picked/photo.jpeg', 'photo bytes');
+  const first = scoped.persistCoverImage('file:///picked/photo.jpeg', 'book');
+  const second = scoped.persistCoverImage('file:///picked/photo.jpeg', 'book');
+  assert.notEqual(first, second); assert.ok(first.startsWith('file:///docs/folio/accounts/account-A/covers/custom-book-'));
+  assert.equal(d.files.get(first), 'photo bytes'); assert.equal(d.files.get('file:///picked/photo.jpeg'), 'photo bytes');
+  assert.equal(scoped.removeCustomCover('book', first), true); assert.ok(!d.files.has(first)); assert.ok(d.files.has(second));
+});
+
+for (const failure of ['mkdir', 'copy']) {
+  test(`a cover ${failure} failure rejects instead of returning a cache URI and cleans any partial copy`, () => {
+    const d = device(); d.files.set('file:///picked/photo.jpg', 'original'); d.setFailure(failure);
+    assert.throws(() => d.store.persistCoverImage('file:///picked/photo.jpg', 'book'), /Could not save the selected photo/);
+    assert.equal(d.files.get('file:///picked/photo.jpg'), 'original');
+    assert.ok(![...d.files.keys()].some(uri => uri.includes('/covers/custom-')));
+  });
+}
+
+test('custom-cover cleanup never removes original, imported, other-book, other-account or traversal paths', () => {
+  const d = device(), scoped = d.store.createLocalStore('account-A');
+  const paths = ['file:///picked/photo.jpg', 'file:///docs/folio/accounts/account-A/covers/book.jpg',
+    'file:///docs/folio/accounts/account-A/covers/custom-other-123.jpg',
+    'file:///docs/folio/accounts/account-B/covers/custom-book-123.jpg',
+    'file:///docs/folio/accounts/account-A/covers/custom-book-123/../../private.jpg',
+    'file:///docs/folio/accounts/account-A/covers/custom-BOOK--123-abc.jpg',
+    'file:///docs/folio/accounts/account-A/covers/custom-book-123-1763670000000.jpg',
+    'file:///docs/folio/accounts/account-A/covers/custom-book--123--1763670000000-abc.jpg'];
+  for (const uri of paths) { d.files.set(uri, 'keep'); scoped.removeCustomCover('book', uri); assert.equal(d.files.get(uri), 'keep'); }
+  const owned = 'file:///docs/folio/accounts/account-A/covers/custom-book-1763670000000.jpg';
+  d.files.set(owned, 'old custom cover'); assert.equal(scoped.removeCustomCover('book', owned), true); assert.ok(!d.files.has(owned));
+});
+
+test('invalid photo sources and empty copies cannot become saved cover paths', () => {
+  for (const uri of ['https://example.com/photo.jpg', 'file:///empty.jpg']) {
+    const d = device(); d.files.set('file:///empty.jpg', '');
+    assert.throws(() => d.store.persistCoverImage(uri, 'book'), /Could not save the selected photo/);
+    assert.ok(![...d.files.keys()].some(file => file.includes('/covers/custom-')));
+  }
+});
+
+test('a cover filename collision never overwrites or cleans up the pre-existing cover', () => {
+  const d = device({ fixedClock: true });
+  const existing = 'file:///docs/folio/covers/custom-book--123-i.jpg';
+  d.files.set(existing, 'current cover'); d.files.set('file:///picked/photo.jpg', 'new photo');
+  assert.throws(() => d.store.persistCoverImage('file:///picked/photo.jpg', 'book'), /Could not save/);
+  assert.equal(d.files.get(existing), 'current cover'); assert.ok(!d.deleted.includes(existing));
+});
+
+test('a failed partial cover cleanup is reported without deleting the original photo', () => {
+  const d = device({ fixedClock: true });
+  d.files.set('file:///picked/photo.jpg', 'original photo');
+  d.failingDeletes.add('file:///docs/folio/covers/custom-book--123-i.jpg'); d.setFailure('copy');
+  assert.throws(() => d.store.persistCoverImage('file:///picked/photo.jpg', 'book'), /incomplete cover files could not be removed/);
+  assert.equal(d.files.get('file:///picked/photo.jpg'), 'original photo');
+});
+
+test('book removal also rejects custom-cover paths owned by IDs with matching prefixes or different case', () => {
+  const d = device(), scoped = d.store.createLocalStore('account-A');
+  for (const name of ['custom-BOOK--123-abc.jpg', 'custom-book-123-1763670000000.jpg', 'custom-book--123--1763670000000-abc.jpg']) {
+    const uri = `file:///docs/folio/accounts/account-A/covers/${name}`;
+    d.files.set(uri, 'another book'); scoped.removeBookFiles('book', uri);
+    assert.equal(d.files.get(uri), 'another book');
+  }
 });

@@ -29,6 +29,7 @@ import { SearchModal } from './src/components/SearchModal';
 import { SettingsSheet } from './src/components/SettingsSheet';
 import { Toast } from './src/components/ui/Toast';
 import { INITIAL_BOOKS, INITIAL_GOAL } from './src/data/initialData';
+import { saveBookCover, type BookCoverDraft, type CoverSaveResult } from './src/lib/bookCover';
 import { removeBookLocally, type BookRemovalResult } from './src/lib/bookRemoval';
 import { applyReadingPosition, createReadingProgressWriter, mergeCloudBookForDevice } from './src/lib/readingPosition';
 import { useReaderSettings } from './src/lib/useReaderSettings';
@@ -154,6 +155,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   const [currentBookId, setCurrentBookId] = useState<string>('');
   const [bookDetailsId, setBookDetailsId] = useState<string | null>(null);
   const removingBook = useRef(false);
+  const savingCover = useRef(false);
   const [customPagesMap, setCustomPagesMap] = useState<Record<string, BookContentPage[]>>({});
   const [readingGoal, setReadingGoal] = useState<ReadingGoal>(INITIAL_GOAL);
   const [recoveryBooks, setRecoveryBooks] = useState<LibraryRecoveryBook[]>([]);
@@ -706,21 +708,36 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
     showToast(`Added "${newBook.title}" to your Library`);
   };
 
-  const handleUpdateBookCover = (bookId: string, coverStyle: 'image' | 'typographic', newCoverUrl?: string) => {
-    const target = books.find((b) => b.id === bookId);
-    if (!target) return;
-    const updated: Book = {
-      ...target,
-      coverStyle,
-      coverUrl: newCoverUrl !== undefined ? newCoverUrl : target.coverUrl,
-    };
-    setBooks((prev) => prev.map((b) => (b.id === bookId ? updated : b)));
-    upsertBookToSupabase(updated);
+  const handleUpdateBookCover = async (bookId: string, draft: BookCoverDraft): Promise<CoverSaveResult> => {
+    if (!spaceActive.current || libraryLoadState.current !== 'ready') {
+      return { saved: false, message: 'The saved library is unavailable. Wait for it to load, or restart Folio before saving a cover.' };
+    }
+    if (savingCover.current || removingBook.current) return { saved: false, message: 'A book change is still saving. Try again shortly.' };
+    savingCover.current = true;
+    try {
+      const result = await saveBookCover(bookId, draft, {
+        getBooks: () => booksRef.current,
+        persistPhoto: storage.persistCoverImage,
+        removeCustomCover: storage.removeCustomCover,
+        saveBooks: async updated => {
+          if (!spaceActive.current) throw new Error('Reading space changed');
+          await saveJSONStrict('books', updated);
+        },
+        publish: (id, patch) => {
+          booksRef.current = booksRef.current.map(book => book.id === id ? { ...book, ...patch } : book);
+          setBooks(current => current.map(book => book.id === id ? { ...book, ...patch } : book));
+        },
+        upload: upsertBookToSupabase,
+      });
+      if (result.saved && spaceActive.current) showToast(result.message);
+      return result;
+    } finally { savingCover.current = false; }
   };
 
   const handleRemoveBook = async (bookId: string): Promise<BookRemovalResult> => {
     const book = booksRef.current.find(item => item.id === bookId);
     if (!spaceActive.current || !book) return { removed: false, message: 'This book is no longer available in this Library.' };
+    if (savingCover.current) return { removed: false, message: 'The book cover is still saving. Try removal again shortly.' };
     if (removingBook.current) return { removed: false, message: 'Another book removal is still in progress. Try again shortly.' };
     if (libraryLoadState.current !== 'ready') {
       return { removed: false, message: libraryLoadState.current === 'error'

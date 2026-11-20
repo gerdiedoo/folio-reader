@@ -3,6 +3,7 @@ import * as ImagePicker from 'expo-image-picker';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BackHandler,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,6 +12,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { coverImageUrl, normalizeCoverTint, type BookCoverDraft, type CoverSaveResult } from '../lib/bookCover';
 import type { BookRemovalResult } from '../lib/bookRemoval';
 import { parseEpubFile } from '../lib/epubParser';
 import type { LocalStore } from '../lib/localStore';
@@ -42,7 +44,7 @@ interface LibraryViewProps {
     book: Book,
     pages: BookContentPage[]
   ) => Promise<void>;
-  onUpdateBookCover: (bookId: string, style: 'image' | 'typographic', url?: string) => void;
+  onUpdateBookCover: (bookId: string, draft: BookCoverDraft) => Promise<CoverSaveResult>;
   onRemoveBook: (bookId: string) => Promise<BookRemovalResult>;
   showToast: (msg: string) => void;
   bottomInset: number;
@@ -608,15 +610,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
       {editing && (
         <CoverEditor
-          storage={storage}
           book={editing}
           globalStyle={globalCoverStyle}
           onClose={() => setEditing(null)}
-          onSave={(style, url) => {
-            onUpdateBookCover(editing.id, style, url);
-            showToast('Book thumbnail updated');
-            setEditing(null);
-          }}
+          onSave={draft => onUpdateBookCover(editing.id, draft)}
           onRemove={() => onRemoveBook(editing.id)}
         />
       )}
@@ -629,28 +626,34 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 // Cover editor
 // ---------------------------------------------------------------------------
 export const CoverEditor: React.FC<{
-  storage: LocalStore;
   book: Book;
   globalStyle: 'image' | 'typographic';
   onClose: () => void;
-  onSave: (style: 'image' | 'typographic', url?: string) => void;
+  onSave: (draft: BookCoverDraft) => Promise<CoverSaveResult>;
   onRemove: () => Promise<BookRemovalResult>;
-}> = ({ storage, book, globalStyle, onClose, onSave, onRemove }) => {
+}> = ({ book, globalStyle, onClose, onSave, onRemove }) => {
   const colors = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [style, setStyle] = useState<'image' | 'typographic'>(book.coverStyle || globalStyle);
   const [url, setUrl] = useState(book.coverUrl?.startsWith('http') ? book.coverUrl : '');
   const [pickedUri, setPickedUri] = useState<string | undefined>(undefined);
-  const [tint, setTint] = useState<ClothTint>('parchment');
+  const [tint, setTint] = useState<ClothTint>(() => normalizeCoverTint(book.coverTint));
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [removalError, setRemovalError] = useState<string | null>(null);
   const removalPending = useRef(false);
+  const savePending = useRef(false);
+  const photoPending = useRef(false);
+  const [saving, setSaving] = useState(false);
+  const [choosingPhoto, setChoosingPhoto] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const busy = removing || saving || choosingPhoto;
+  const working = () => removalPending.current || savePending.current || photoPending.current;
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const close = () => { if (!removalPending.current) onClose(); };
+  const close = () => { if (!working()) onClose(); };
   const remove = async () => {
-    if (!mounted.current || removalPending.current) return;
+    if (!mounted.current || working()) return;
     removalPending.current = true; setRemoving(true); setRemovalError(null);
     try {
       const result = await onRemove();
@@ -661,28 +664,52 @@ export const CoverEditor: React.FC<{
     finally { removalPending.current = false; if (mounted.current) setRemoving(false); }
   };
 
-  const remoteUrl = /^https?:\/\//i.test(url.trim()) ? url.trim() : '';
-  const previewUri = pickedUri ?? (remoteUrl || book.coverUrl);
+  // URL text is separate from the picked image draft; nothing is copied until Apply.
+  const previewUri = pickedUri ?? (/^https?:\/\//i.test(url.trim()) ? url.trim() : book.coverUrl);
+  const apply = async () => {
+    if (!mounted.current || working()) return;
+    setSaveError(null);
+    let draft: BookCoverDraft;
+    try {
+      const image: BookCoverDraft['image'] = style !== 'image' ? { kind: 'keep' }
+        : pickedUri ? { kind: 'photo', uri: pickedUri }
+        : url.trim() ? { kind: 'url', url: coverImageUrl(url) } : { kind: 'keep' };
+      draft = { style, tint, image };
+    } catch (error) { setSaveError(error instanceof Error ? error.message : 'Enter a valid image URL.'); return; }
+    savePending.current = true; setSaving(true);
+    try {
+      const result = await onSave(draft);
+      if (!mounted.current) return;
+      if (result.saved) onClose();
+      else setSaveError(result.message);
+    } catch { if (mounted.current) setSaveError('The cover change could not be confirmed. Your draft is still here; check the cover in Library before retrying.'); }
+    finally { savePending.current = false; if (mounted.current) setSaving(false); }
+  };
 
   const choosePhoto = async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) return;
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [2, 3],
-      quality: 0.8,
-    });
-    if (res.canceled || !res.assets?.[0]) return;
-    setPickedUri(storage.persistCoverImage(res.assets[0].uri, book.id));
-    setStyle('image');
+    if (!mounted.current || working()) return;
+    photoPending.current = true; setChoosingPhoto(true); setSaveError(null);
+    try {
+      // Android's system picker grants access to the selected photo without broad gallery access.
+      if (Platform.OS === 'ios') {
+        const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!mounted.current) return;
+        if (!perm.granted) { setSaveError('Photo access was not granted. You can paste an image URL instead.'); return; }
+      }
+      const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [2, 3], quality: 0.8 });
+      if (!mounted.current || res.canceled) return;
+      const uri = res.assets?.[0]?.uri;
+      if (!uri || !/^(?:file|content):\/\//i.test(uri)) { setSaveError('This photo could not be opened. Choose another image.'); return; }
+      setPickedUri(uri); setUrl(''); setStyle('image');
+    } catch { if (mounted.current) setSaveError('The photo picker could not be opened. Your current draft has been kept. Try again.'); }
+    finally { photoPending.current = false; if (mounted.current) setChoosingPhoto(false); }
   };
 
   return (
     <ModalShell onClose={close} maxWidth={400} cardStyle={{ maxHeight: '88%' }}>
       <View style={styles.editHead}>
         <Text accessibilityRole="header" style={styles.editTitle}>{confirmingRemove ? 'Remove book?' : 'Customize Thumbnail'}</Text>
-        <Pressable onPress={close} disabled={removing} accessibilityRole="button" accessibilityLabel="Close book editor" accessibilityState={{ disabled: removing }} style={{ minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' }}>
+        <Pressable onPress={close} disabled={busy} accessibilityRole="button" accessibilityLabel="Close book editor" accessibilityState={{ disabled: busy }} style={{ minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' }}>
           <Icon name="close" size={20} color={colors.muted} />
         </Pressable>
       </View>
@@ -698,10 +725,10 @@ export const CoverEditor: React.FC<{
             an unremoved cloud copy may return after reloading.
           </Text>
           <View style={styles.removeConfirmActions}>
-            <Pressable onPress={() => { if (!removalPending.current) { setConfirmingRemove(false); setRemovalError(null); } }} disabled={removing} accessibilityRole="button" accessibilityLabel="Keep this book" accessibilityState={{ disabled: removing }} style={[styles.cancelRemoveBtn, removing && { opacity: 0.5 }]}>
+            <Pressable onPress={() => { if (!working()) { setConfirmingRemove(false); setRemovalError(null); } }} disabled={busy} accessibilityRole="button" accessibilityLabel="Keep this book" accessibilityState={{ disabled: busy }} style={[styles.cancelRemoveBtn, removing && { opacity: 0.5 }]}>
               <Text style={styles.cancelRemoveText}>Cancel</Text>
             </Pressable>
-            <Pressable onPress={remove} disabled={removing} accessibilityRole="button" accessibilityLabel={`Remove ${book.title} from Library`} accessibilityState={{ disabled: removing, busy: removing }} style={styles.confirmRemoveBtn}>
+            <Pressable onPress={remove} disabled={busy} accessibilityRole="button" accessibilityLabel={`Remove ${book.title} from Library`} accessibilityState={{ disabled: busy, busy: removing }} style={styles.confirmRemoveBtn}>
               <Text style={styles.confirmRemoveText}>{removing ? 'Removing…' : 'Remove'}</Text>
             </Pressable>
           </View>
@@ -724,11 +751,15 @@ export const CoverEditor: React.FC<{
             {(['image', 'typographic'] as const).map((s) => (
               <Pressable
                 key={s}
-                onPress={() => setStyle(s)}
-                style={[styles.toggleBtn, { flex: 1, flexDirection: 'row', gap: 6 }, style === s && { backgroundColor: colors.surface }]}
+                onPress={() => { if (!working()) { setStyle(s); setSaveError(null); } }}
+                disabled={busy}
+                accessibilityRole="button"
+                accessibilityLabel={`${s === 'image' ? 'Illustrated' : 'Typographic'} cover`}
+                accessibilityState={{ selected: style === s, disabled: busy }}
+                style={[styles.toggleBtn, { flex: 1, minHeight: 48, flexDirection: 'row', gap: 6 }, style === s && { backgroundColor: colors.surface }]}
               >
                 <Icon name={s === 'image' ? 'image' : 'title'} size={16} color={style === s ? colors.primary : colors.muted} />
-                <Text style={[styles.sortText, style === s && styles.sortActive]}>
+                <Text style={[styles.sortText, { flexShrink: 1 }, style === s && styles.sortActive]}>
                   {s === 'image' ? 'Illustrated' : 'Typographic'}
                 </Text>
               </Pressable>
@@ -739,7 +770,11 @@ export const CoverEditor: React.FC<{
             <View style={{ gap: 8 }}>
               <TextInput
                 value={url}
+                editable={!busy}
+                accessibilityLabel="Cover image URL"
                 onChangeText={(t) => {
+                  if (working()) return;
+                  setSaveError(null);
                   setUrl(t);
                   setPickedUri(undefined);
                 }}
@@ -749,9 +784,10 @@ export const CoverEditor: React.FC<{
                 autoCorrect={false}
                 style={styles.urlInput}
               />
-              <Pressable onPress={choosePhoto} style={styles.photoBtn}>
+              <Text style={{ ...type.bodySm, color: colors.muted }}>{pickedUri ? 'The selected photo will be saved when you Apply.' : 'Leave blank to keep the current image. Remote image availability depends on its host.'}</Text>
+              <Pressable onPress={choosePhoto} disabled={busy} accessibilityRole="button" accessibilityLabel="Choose cover from photos" accessibilityState={{ disabled: busy, busy: choosingPhoto }} style={styles.photoBtn}>
                 <Icon name="upload" size={18} color={colors.primary} />
-                <Text style={styles.photoText}>Choose from photos</Text>
+                <Text style={styles.photoText}>{choosingPhoto ? 'Choosing…' : 'Choose from photos'}</Text>
               </Pressable>
             </View>
           ) : (
@@ -759,7 +795,11 @@ export const CoverEditor: React.FC<{
               {(Object.keys(CLOTH) as ClothTint[]).map((t) => (
                 <Pressable
                   key={t}
-                  onPress={() => setTint(t)}
+                  onPress={() => { if (!working()) { setTint(t); setSaveError(null); } }}
+                  disabled={busy}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${t} cover color`}
+                  accessibilityState={{ selected: tint === t, disabled: busy }}
                   style={[
                     styles.tint,
                     { backgroundColor: CLOTH[t].bg },
@@ -770,10 +810,11 @@ export const CoverEditor: React.FC<{
             </View>
           )}
 
-          <Pressable onPress={() => onSave(style, style === 'image' ? previewUri : undefined)} style={styles.saveBtn}>
-            <Text style={styles.saveText}>Apply</Text>
+          {saveError && <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={{ ...type.bodySm, color: colors.onSurface }}>{saveError}</Text>}
+          <Pressable onPress={apply} disabled={busy} accessibilityRole="button" accessibilityLabel="Apply book cover" accessibilityState={{ disabled: busy, busy: saving }} style={styles.saveBtn}>
+            <Text style={styles.saveText}>{saving ? 'Saving…' : 'Apply'}</Text>
           </Pressable>
-          <Pressable onPress={() => { setRemovalError(null); setConfirmingRemove(true); }} accessibilityRole="button" accessibilityLabel="Remove book" style={styles.removeBtn}>
+          <Pressable onPress={() => { if (!working()) { setRemovalError(null); setConfirmingRemove(true); } }} disabled={busy} accessibilityRole="button" accessibilityLabel="Remove book" accessibilityState={{ disabled: busy }} style={styles.removeBtn}>
             <Icon name="delete_outline" size={18} color={colors.danger} />
             <Text style={styles.removeText}>Remove Book</Text>
           </Pressable>
@@ -1022,7 +1063,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   },
   editTitle: { ...type.headlineSm, fontSize: 19, color: colors.onSurface, flex: 1, flexShrink: 1 },
   urlInput: {
-    backgroundColor: colors.white,
+    backgroundColor: colors.surfaceContainer,
     borderRadius: 10,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
@@ -1033,6 +1074,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     color: colors.onSurface,
   },
   photoBtn: {
+    minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1043,8 +1085,8 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   },
   photoText: { ...type.labelMd, color: colors.primary },
   tintRow: { flexDirection: 'row', justifyContent: 'center', gap: 14 },
-  tint: { width: 38, height: 38, borderRadius: 19, borderWidth: 1, borderColor: colors.border },
-  saveBtn: { backgroundColor: colors.primaryContainer, paddingVertical: 12, borderRadius: 12, alignItems: 'center' },
+  tint: { width: 48, height: 48, borderRadius: 24, borderWidth: 1, borderColor: colors.border },
+  saveBtn: { minHeight: 48, justifyContent: 'center', backgroundColor: colors.primaryContainer, paddingVertical: 12, borderRadius: 12, alignItems: 'center' },
   saveText: { ...type.labelLg, color: '#fff' },
   removeBtn: {
     minHeight: 48,

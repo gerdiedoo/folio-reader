@@ -1753,3 +1753,126 @@ test('cancel before removal returns to editing and late completion cannot close 
   f.h.unmount(); const writes = f.h.stateWrites(); resolve({ removed: true, message: 'Removed' }); await pending;
   assert.equal(closed, false); assert.equal(f.h.stateWrites(), writes);
 });
+
+function coverEditorHarness({ onSave = async () => ({ saved: true, message: 'Saved' }), onClose = () => {}, picker = {}, book = {} } = {}) {
+  const h = harness({ runEffects: true, moduleMocks: {
+    'expo-document-picker': {}, 'expo-image-picker': picker,
+    '../lib/epubParser': {}, './BrowseBooksScreen': { BrowseBooksScreen: 'BrowseBooksScreen' },
+    './BookCover': { BookCover: 'BookCover', CLOTH: Object.fromEntries(['parchment', 'slate', 'sage', 'terracotta'].map(tint => [tint, { bg: '#fff' }])) },
+    './ui/Chip': { Chip: 'Chip' }, './ui/ProgressBar': { ProgressBar: 'ProgressBar' },
+  } });
+  const { CoverEditor } = h.load('../src/components/LibraryView.tsx');
+  const props = { book: { id: 'book', title: 'A book', coverUrl: 'https://example.com/old.jpg', ...book }, globalStyle: 'image', onSave, onClose,
+    onRemove: async () => assert.fail('Unexpected removal') };
+  let root;
+  const render = () => { root = h.render(CoverEditor, props); return root; };
+  render(); return { h, render, root: () => root };
+}
+
+test('Apply cover waits for confirmation, saves selected cloth color, and retains the draft on failure', async () => {
+  let resolve, calls = 0, closed = 0, draft;
+  const f = coverEditorHarness({ onSave: value => { draft = value; calls++; return new Promise(done => { resolve = done; }); }, onClose: () => { closed++; } });
+  labelled(f.root(), 'Typographic cover').onPress(); f.render();
+  labelled(f.root(), 'slate cover color').onPress(); f.render();
+  const pending = labelled(f.root(), 'Apply book cover').onPress();
+  labelled(f.root(), 'Apply book cover').onPress(); let root = f.render();
+  assert.deepEqual(draft, { style: 'typographic', tint: 'slate', image: { kind: 'keep' } }); assert.equal(calls, 1);
+  assert.deepEqual(labelled(root, 'Apply book cover').accessibilityState, { disabled: true, busy: true });
+  assert.equal(labelled(root, 'Remove book').disabled, true); assert.equal(labelled(root, 'Close book editor').disabled, true);
+  root.props.onClose(); labelled(root, 'Close book editor').onPress(); assert.equal(closed, 0);
+  resolve({ saved: false, message: 'Cover could not be saved. Your draft is still here.' }); await pending; root = f.render();
+  assert.equal(closed, 0); assert.equal(labelled(root, 'slate cover color').accessibilityState.selected, true);
+  assert.ok(elements(root).some(node => node.props?.children === 'Cover could not be saved. Your draft is still here.'));
+  const retry = labelled(root, 'Apply book cover').onPress(); resolve({ saved: true, message: 'Saved on this device' }); await retry;
+  assert.equal(closed, 1); f.h.unmount();
+});
+
+test('invalid cover URLs cannot be applied, and saving freezes the URL draft until acknowledgement', async () => {
+  let resolve, calls = 0, draft;
+  const f = coverEditorHarness({ onSave: value => { calls++; draft = value; return new Promise(done => { resolve = done; }); } });
+  labelled(f.root(), 'Cover image URL').onChangeText('file:///private/photo.jpg'); f.render();
+  await labelled(f.root(), 'Apply book cover').onPress(); let root = f.render();
+  assert.equal(calls, 0); assert.equal(labelled(root, 'Cover image URL').value, 'file:///private/photo.jpg');
+  assert.match(elements(root).find(node => node.props?.accessibilityRole === 'alert').props.children, /valid public HTTP or HTTPS/);
+  labelled(root, 'Cover image URL').onChangeText(' HTTPS://example.com/new.jpg '); f.render();
+  const pending = labelled(f.root(), 'Apply book cover').onPress(); root = f.render();
+  assert.equal(labelled(root, 'Cover image URL').editable, false);
+  labelled(root, 'Cover image URL').onChangeText('https://example.com/stale.jpg'); f.render();
+  assert.deepEqual(draft.image, { kind: 'url', url: 'https://example.com/new.jpg' });
+  resolve({ saved: false, message: 'Storage failed' }); await pending; root = f.render();
+  assert.equal(labelled(root, 'Cover image URL').value, ' HTTPS://example.com/new.jpg '); f.h.unmount();
+});
+
+test('choosing a photo remains a draft until Apply and duplicate picker requests are blocked', async () => {
+  let resolvePicker, launches = 0, saves = 0, draft, closed = 0;
+  const f = coverEditorHarness({ picker: {
+    requestMediaLibraryPermissionsAsync: async () => ({ granted: true }),
+    launchImageLibraryAsync: () => { launches++; return new Promise(done => { resolvePicker = done; }); },
+  }, onSave: async value => { saves++; draft = value; return { saved: false, message: 'Copy failed; draft retained' }; }, onClose: () => { closed++; } });
+  const choosing = labelled(f.root(), 'Choose cover from photos').onPress();
+  labelled(f.root(), 'Choose cover from photos').onPress(); await flushJobs(); let root = f.render();
+  assert.equal(launches, 1); assert.equal(labelled(root, 'Apply book cover').disabled, true);
+  root.props.onClose(); assert.equal(closed, 0);
+  resolvePicker({ canceled: false, assets: [{ uri: 'file:///picker/photo.jpg' }] }); await choosing; root = f.render();
+  assert.equal(saves, 0); assert.equal(labelled(root, 'Cover image URL').value, '');
+  assert.equal(elements(root).find(node => node.type === 'BookCover').props.uriOverride, 'file:///picker/photo.jpg');
+  await labelled(root, 'Apply book cover').onPress(); root = f.render();
+  assert.equal(saves, 1); assert.deepEqual(draft.image, { kind: 'photo', uri: 'file:///picker/photo.jpg' });
+  assert.equal(closed, 0); assert.equal(elements(root).find(node => node.type === 'BookCover').props.uriOverride, 'file:///picker/photo.jpg');
+  root.props.onClose(); assert.equal(closed, 1); f.h.unmount();
+});
+
+test('photo permission denial, cancellation and SDK errors keep the existing draft usable', async () => {
+  for (const scenario of ['denied', 'cancelled', 'error']) {
+    const f = coverEditorHarness({ picker: {
+      requestMediaLibraryPermissionsAsync: async () => ({ granted: scenario !== 'denied' }),
+      launchImageLibraryAsync: async () => { if (scenario === 'error') throw Error('Picker unavailable'); return { canceled: true }; },
+    } });
+    if (scenario === 'denied') f.h.native.Platform.OS = 'ios';
+    labelled(f.root(), 'Cover image URL').onChangeText('https://example.com/draft.jpg'); f.render();
+    await labelled(f.root(), 'Choose cover from photos').onPress(); const root = f.render();
+    assert.equal(labelled(root, 'Cover image URL').value, 'https://example.com/draft.jpg');
+    assert.equal(labelled(root, 'Apply book cover').disabled, false);
+    if (scenario !== 'cancelled') assert.ok(elements(root).some(node => node.props?.accessibilityRole === 'alert'));
+    f.h.unmount();
+  }
+});
+
+test('a late cover save or picker result cannot close/update an unmounted editor', async () => {
+  let resolve, closed = false;
+  const f = coverEditorHarness({ onSave: () => new Promise(done => { resolve = done; }), onClose: () => { closed = true; } });
+  const pending = labelled(f.root(), 'Apply book cover').onPress(); f.h.unmount(); const writes = f.h.stateWrites();
+  resolve({ saved: true, message: 'Saved' }); await pending;
+  assert.equal(closed, false); assert.equal(f.h.stateWrites(), writes);
+  let chosen;
+  const other = coverEditorHarness({ picker: {
+    requestMediaLibraryPermissionsAsync: async () => assert.fail('Android must use selected-photo access'),
+    launchImageLibraryAsync: () => new Promise(done => { chosen = done; }),
+  } });
+  const choosing = labelled(other.root(), 'Choose cover from photos').onPress(); other.h.unmount(); const count = other.h.stateWrites();
+  chosen({ canceled: false, assets: [{ uri: 'file:///picker/photo.jpg' }] }); await choosing;
+  assert.equal(other.h.stateWrites(), count);
+});
+
+test('actual library covers render saved cloth colors, reject invalid legacy colors, and honor preview overrides', () => {
+  const h = harness({ moduleMocks: { 'expo-linear-gradient': { LinearGradient: 'LinearGradient' } } });
+  const { BookCover, CLOTH } = h.load('../src/components/BookCover.tsx');
+  for (const color of ['parchment', 'slate', 'sage', 'terracotta', 'constructor']) {
+    const props = { style: 'typographic', book: { title: 'Book', author: 'Author', coverUrl: '', coverAlt: 'Cover', coverTint: color } };
+    const root = h.render(BookCover, props);
+    const expected = CLOTH[color === 'constructor' ? 'parchment' : color].bg;
+    assert.ok(elements(root).some(node => Array.isArray(node.props?.style) && node.props.style.some(style => style?.backgroundColor === expected)));
+  }
+  const preview = h.render(BookCover, { style: 'typographic', tint: 'sage', book: { title: 'Book', author: 'Author', coverUrl: '', coverAlt: 'Cover', coverTint: 'slate' } });
+  assert.ok(elements(preview).some(node => Array.isArray(node.props?.style) && node.props.style.some(style => style?.backgroundColor === CLOTH.sage.bg)));
+  h.unmount();
+});
+
+test('an unexpected cover callback error keeps the draft open without claiming a confirmed save', async () => {
+  let closed = false;
+  const f = coverEditorHarness({ onSave: async () => { throw Error('Unexpected failure'); }, onClose: () => { closed = true; } });
+  await labelled(f.root(), 'Apply book cover').onPress(); const root = f.render();
+  assert.equal(closed, false); assert.equal(labelled(root, 'Apply book cover').disabled, false);
+  assert.match(elements(root).find(node => node.props?.accessibilityRole === 'alert').props.children, /could not be confirmed.*draft is still here/);
+  f.h.unmount();
+});
