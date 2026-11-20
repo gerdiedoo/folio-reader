@@ -12,6 +12,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../../theme';
 import { useAppTheme } from '../../AppTheme';
+import { useReducedMotion } from '../../MotionPreferences';
 
 interface ModalShellProps {
   onClose: () => void;
@@ -38,12 +39,13 @@ export const ModalShell: React.FC<ModalShellProps> = ({
   const insets = useSafeAreaInsets();
   const palette = useAppTheme();
   const isBottom = align === 'bottom';
+  const reducedMotion = useReducedMotion();
 
   return (
     <Modal
       visible
       transparent
-      animationType={isBottom ? 'slide' : 'fade'}
+      animationType={reducedMotion ? 'none' : isBottom ? 'slide' : 'fade'}
       onRequestClose={onClose}
       statusBarTranslucent
     >

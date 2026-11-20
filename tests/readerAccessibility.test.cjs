@@ -8,7 +8,7 @@ const ts = require('typescript');
 
 // Exercise the actual components' native event handlers and exposed properties.
 // This lightweight hook harness does not simulate native focus or TalkBack speech.
-function harness({ runEffects = false } = {}) {
+function harness({ runEffects = false, reducedMotion: initialReducedMotion = true } = {}) {
   const slots = [];
   const effects = new Map();
   const timers = new Map();
@@ -16,9 +16,14 @@ function harness({ runEffects = false } = {}) {
   let nextTimer = 1;
   let pending = [];
   let cursor = 0;
+  let now = 0;
+  let reducedMotion = initialReducedMotion;
+  const animations = [];
+  const announcements = [];
   const react = {
     ...React,
     useMemo: fn => fn(),
+    useCallback: fn => fn,
     useEffect(fn, deps) {
       const at = cursor++;
       if (!runEffects) return;
@@ -49,10 +54,36 @@ function harness({ runEffects = false } = {}) {
   };
   theme.readerPaper = theme.previewPaper;
   const native = {
-    View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView: 'ScrollView', Switch: 'Switch',
+    View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView: 'ScrollView', Switch: 'Switch', Image: 'Image',
     Modal: 'Modal', KeyboardAvoidingView: 'KeyboardAvoidingView', Platform: { OS: 'android' },
     StyleSheet: { create: styles => styles, hairlineWidth: 1 },
-    Animated: { View: 'Animated.View', Value: class { interpolate() { return 0; } } },
+    Easing: { linear: x => x },
+    Animated: {
+      View: 'Animated.View',
+      Value: class {
+        constructor(value) { this.value = value; }
+        setValue(value) { this.value = value; }
+        stopAnimation() {}
+        interpolate(config) { return { source: this, config }; }
+      },
+      timing(value, config) {
+        const animation = { kind: 'timing', value, config, started: false, stopped: false,
+          start() { this.started = true; }, stop() { this.stopped = true; } };
+        animations.push(animation);
+        return animation;
+      },
+      loop(child) {
+        const animation = { kind: 'loop', child, started: false, stopped: false,
+          start() { this.started = true; }, stop() { this.stopped = true; } };
+        animations.push(animation);
+        return animation;
+      },
+    },
+    AccessibilityInfo: {
+      getRecommendedTimeoutMillis: async duration => duration,
+      announceForAccessibility: message => announcements.push({ message }),
+      announceForAccessibilityWithOptions: (message, options) => announcements.push({ message, options }),
+    },
     AppState: { currentState: 'active', addEventListener(_event, callback) { listeners.add(callback); return { remove: () => listeners.delete(callback) }; } },
   };
   const dependencies = {
@@ -61,9 +92,14 @@ function harness({ runEffects = false } = {}) {
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
     '../AppTheme': { useAppTheme: () => palette },
     '../../AppTheme': { useAppTheme: () => palette },
+    '../MotionPreferences': { useReducedMotion: () => reducedMotion },
+    '../../MotionPreferences': { useReducedMotion: () => reducedMotion },
     '../theme': theme, '../../theme': theme,
     './ui/Icon': { Icon: 'Icon' }, './ui/ModalShell': { ModalShell: 'ModalShell' },
     './ui/SeekBar': { SeekBar: 'SeekBar' },
+    './Icon': { Icon: 'Icon' },
+    '@expo/vector-icons': { MaterialCommunityIcons: 'MaterialCommunityIcons', MaterialIcons: 'MaterialIcons' },
+    __clock: { now: () => now },
     __timers: {
       setTimeout(fn, ms) { const id = nextTimer++; timers.set(id, { fn, ms }); return id; },
       clearTimeout(id) { timers.delete(id); },
@@ -83,11 +119,13 @@ function harness({ runEffects = false } = {}) {
     const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
       compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React, esModuleInterop: true },
     }).outputText;
-    loaded._compile((runEffects ? "const { setTimeout, clearTimeout } = require('__timers');\n" : '') + code, filename);
+    loaded._compile((runEffects ? "const { setTimeout, clearTimeout } = require('__timers'); const Date = require('__clock');\n" : '') + code, filename);
     return loaded.exports;
   }
   return {
-    load, timers, listeners,
+    load, timers, listeners, native, animations, announcements,
+    reduceMotion(value) { reducedMotion = value; },
+    elapse(ms) { now += ms; },
     render(component, props) {
       cursor = 0;
       pending = [];
@@ -99,6 +137,7 @@ function harness({ runEffects = false } = {}) {
       const [id, timer] = timers.entries().next().value ?? [];
       assert.ok(timer, 'No playback timer scheduled');
       timers.delete(id);
+      now += timer.ms;
       timer.fn();
     },
     appState(state) {
@@ -421,4 +460,148 @@ test('word-position actions move one word, clamp at bounds, and retain touch see
       assert.equal(changes.at(-1), count - 1);
     }
   }
+});
+
+test('header and bottom navigation settle immediately under reduced motion and cancel active transitions', () => {
+  for (const [file, name] of [['Header', 'Header'], ['BottomNav', 'BottomNav']]) {
+    const h = harness({ runEffects: true });
+    const Component = h.load(`../src/components/${file}.tsx`)[name];
+    const props = { activeTab: 'library', onTabChange() {}, onOpenSearch() {}, onOpenProfile() {}, visible: true };
+    let root = h.render(Component, props);
+    assert.equal(h.animations.length, 0);
+    h.reduceMotion(false);
+    root = h.render(Component, { ...props, visible: false });
+    assert.equal(h.animations.length, 1);
+    assert.equal(h.animations[0].config.duration, 260);
+    assert.equal(h.animations[0].started, true);
+    h.reduceMotion(true);
+    root = h.render(Component, { ...props, visible: false });
+    assert.equal(h.animations.length, 1);
+    assert.equal(h.animations[0].stopped, true);
+    assert.equal(h.animations[0].value.value, 1);
+    assert.equal(root.props.accessibilityElementsHidden, true);
+    assert.equal(root.props.importantForAccessibility, 'no-hide-descendants');
+    h.unmount();
+  }
+});
+
+test('sheets and dialogs omit their entrance animations when reduced motion is enabled', () => {
+  const h = harness();
+  const { ModalShell } = h.load('../src/components/ui/ModalShell.tsx');
+  const props = { onClose() {}, children: 'Content' };
+  for (const align of ['center', 'bottom']) {
+    assert.equal(h.render(ModalShell, { ...props, align }).props.animationType, 'none');
+  }
+  h.reduceMotion(false);
+  assert.equal(h.render(ModalShell, { ...props, align: 'bottom' }).props.animationType, 'slide');
+  assert.equal(h.render(ModalShell, props).props.animationType, 'fade');
+});
+
+test('spinning icons stop their loop when reduced motion changes and retain a static glyph', () => {
+  const h = harness({ runEffects: true });
+  const { Icon } = h.load('../src/components/ui/Icon.tsx');
+  const props = { name: 'sync', spin: true };
+  assert.equal(h.render(Icon, props).type, 'MaterialIcons');
+  assert.equal(h.animations.length, 0);
+  h.reduceMotion(false);
+  assert.equal(h.render(Icon, props).type, 'Animated.View');
+  const loop = h.animations.find(a => a.kind === 'loop');
+  assert.equal(loop.started, true);
+  h.reduceMotion(true);
+  assert.equal(h.render(Icon, props).type, 'MaterialIcons');
+  assert.equal(loop.stopped, true);
+  h.unmount();
+});
+
+test('feedback settles without a fade and never leaves an invisible message in accessibility focus', () => {
+  const h = harness({ runEffects: true });
+  const { Toast } = h.load('../src/components/ui/Toast.tsx');
+  let root = h.render(Toast, { message: 'Could not save. Try again.', bottom: 20 });
+  root = h.render(Toast, { message: 'Could not save. Try again.', bottom: 20 });
+  assert.equal(h.animations.length, 0);
+  assert.equal(root.props.accessibilityLabel, 'Could not save. Try again.');
+  assert.equal(root.props.accessibilityElementsHidden, false);
+  assert.equal(root.props.style[1].opacity.value, 1);
+  assert.equal(elements(root).find(node => node.type === 'Icon').props.name, 'info');
+  root = h.render(Toast, { message: null, bottom: 20 });
+  assert.equal(root.props.style[1].opacity.value, 0);
+  assert.equal(root.props.accessibilityElementsHidden, true);
+  assert.equal(root.props.importantForAccessibility, 'no-hide-descendants');
+  assert.equal(root.props.accessibilityLabel, undefined);
+  h.unmount();
+});
+
+test('feedback announces each requested message once and extends to the Android timeout from the original start', async () => {
+  const h = harness({ runEffects: true });
+  let resolve;
+  h.native.AccessibilityInfo.getRecommendedTimeoutMillis = duration => {
+    assert.equal(duration, 5000);
+    return new Promise(ok => { resolve = ok; });
+  };
+  const { useFeedbackMessage } = h.load('../src/lib/useFeedbackMessage.ts');
+  let result = h.render(useFeedbackMessage);
+  result.showMessage('Bookmark saved');
+  result = h.render(useFeedbackMessage);
+  assert.equal(result.message, 'Bookmark saved');
+  assert.equal([...h.timers.values()][0].ms, 5000);
+  assert.deepEqual(h.announcements, [{ message: 'Bookmark saved' }]);
+  h.render(useFeedbackMessage);
+  assert.equal(h.announcements.length, 1);
+  h.elapse(1000);
+  resolve(20000);
+  await Promise.resolve();
+  assert.equal(h.timers.size, 1);
+  assert.equal([...h.timers.values()][0].ms, 19000);
+  h.tick();
+  result = h.render(useFeedbackMessage);
+  assert.equal(result.message, null);
+  assert.equal(h.timers.size, 0);
+  h.unmount();
+});
+
+test('late timeout recommendations cannot extend a replaced message or schedule after unmount', async () => {
+  const h = harness({ runEffects: true });
+  const resolves = [];
+  h.native.AccessibilityInfo.getRecommendedTimeoutMillis = () => new Promise(ok => resolves.push(ok));
+  const { useFeedbackMessage } = h.load('../src/lib/useFeedbackMessage.ts');
+  let result = h.render(useFeedbackMessage);
+  result.showMessage('First');
+  result = h.render(useFeedbackMessage);
+  result.showMessage('Second');
+  result = h.render(useFeedbackMessage);
+  resolves[0](60000);
+  await Promise.resolve();
+  assert.equal([...h.timers.values()][0].ms, 5000);
+  assert.equal(result.message, 'Second');
+  h.unmount();
+  resolves[1](60000);
+  await Promise.resolve();
+  assert.equal(h.timers.size, 0);
+});
+
+test('failed or shorter native recommendations retain five seconds; iOS announcements are queued', async () => {
+  for (const value of [100, NaN, Infinity, 'reject']) {
+    const h = harness({ runEffects: true });
+    h.native.AccessibilityInfo.getRecommendedTimeoutMillis = () => value === 'reject' ? Promise.reject(new Error('Offline')) : Promise.resolve(value);
+    const { useFeedbackMessage } = h.load('../src/lib/useFeedbackMessage.ts');
+    let result = h.render(useFeedbackMessage);
+    result.showMessage('Done');
+    result = h.render(useFeedbackMessage);
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal([...h.timers.values()][0].ms, 5000);
+    h.unmount();
+  }
+  const h = harness({ runEffects: true });
+  h.native.Platform.OS = 'ios';
+  h.native.AccessibilityInfo.getRecommendedTimeoutMillis = () => assert.fail('Android API used on iOS');
+  const { useFeedbackMessage } = h.load('../src/lib/useFeedbackMessage.ts');
+  let result = h.render(useFeedbackMessage);
+  result.showMessage('Done');
+  result = h.render(useFeedbackMessage);
+  result.showMessage('Done');
+  h.render(useFeedbackMessage);
+  assert.deepEqual(h.announcements, [{ message: 'Done', options: { queue: true } }, { message: 'Done', options: { queue: true } }]);
+  assert.equal(h.timers.size, 1);
+  h.unmount();
 });

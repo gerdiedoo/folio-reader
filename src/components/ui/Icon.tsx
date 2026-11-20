@@ -1,6 +1,7 @@
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import React, { useEffect, useRef } from 'react';
 import { Animated, Easing, StyleProp, TextStyle } from 'react-native';
+import { useReducedMotion } from '../../MotionPreferences';
 
 /**
  * The web app used the Material Symbols webfont ("local_library", "menu_book", …).
@@ -106,9 +107,10 @@ interface IconProps {
 
 export const Icon: React.FC<IconProps> = ({ name, size = 24, color = '#1c1c18', spin, style }) => {
   const rotation = useRef(new Animated.Value(0)).current;
+  const reducedMotion = useReducedMotion();
 
   useEffect(() => {
-    if (!spin) {
+    if (!spin || reducedMotion) {
       rotation.setValue(0);
       return;
     }
@@ -122,7 +124,7 @@ export const Icon: React.FC<IconProps> = ({ name, size = 24, color = '#1c1c18', 
     );
     loop.start();
     return () => loop.stop();
-  }, [spin, rotation]);
+  }, [spin, rotation, reducedMotion]);
 
   const glyph = MCI[name] ? (
     <MaterialCommunityIcons name={MCI[name]} size={size} color={color} style={style} />
@@ -130,7 +132,7 @@ export const Icon: React.FC<IconProps> = ({ name, size = 24, color = '#1c1c18', 
     <MaterialIcons name={MI[name] ?? 'help-outline'} size={size} color={color} style={style} />
   );
 
-  if (!spin) return glyph;
+  if (!spin || reducedMotion) return glyph;
 
   const rotate = rotation.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
   return <Animated.View style={{ transform: [{ rotate }] }}>{glyph}</Animated.View>;

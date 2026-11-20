@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppPalette, useAppTheme } from '../AppTheme';
+import { useReducedMotion } from '../MotionPreferences';
 import {
   CatalogBook,
   CatalogSort,
@@ -143,6 +144,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   showToast,
   onClose,
 }) => {
+  const reducedMotion = useReducedMotion();
   const palette = useAppTheme();
   const styles = useMemo(() => createStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
@@ -379,7 +381,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   return (
     <Modal
       visible
-      animationType="slide"
+      animationType={reducedMotion ? 'none' : 'slide'}
       onRequestClose={() => {
         if (duplicateBook) {
           setDuplicateBook(null);

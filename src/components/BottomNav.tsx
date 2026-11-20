@@ -3,6 +3,7 @@ import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { type } from '../theme';
 import { useAppTheme } from '../AppTheme';
+import { useReducedMotion } from '../MotionPreferences';
 import { TabType } from '../types';
 import { Icon, IconName } from './ui/Icon';
 
@@ -22,11 +23,16 @@ const TABS: { id: TabType; label: string; icon: IconName }[] = [
 export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, onTabChange, visible = true }) => {
   const insets = useSafeAreaInsets();
   const palette = useAppTheme();
+  const reducedMotion = useReducedMotion();
   const anim = useRef(new Animated.Value(visible ? 0 : 1)).current;
 
   useEffect(() => {
-    Animated.timing(anim, { toValue: visible ? 0 : 1, duration: 260, useNativeDriver: true }).start();
-  }, [visible, anim]);
+    anim.stopAnimation();
+    if (reducedMotion) { anim.setValue(visible ? 0 : 1); return; }
+    const transition = Animated.timing(anim, { toValue: visible ? 0 : 1, duration: 260, useNativeDriver: true });
+    transition.start();
+    return () => transition.stop();
+  }, [visible, anim, reducedMotion]);
 
   const translateY = anim.interpolate({ inputRange: [0, 1], outputRange: [0, 120] });
   const opacity = anim.interpolate({ inputRange: [0, 1], outputRange: [1, 0] });

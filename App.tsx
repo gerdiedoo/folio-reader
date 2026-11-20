@@ -58,6 +58,8 @@ import {
 import { createAccountRepository, signInWithGoogle, signOutSupabase, supabase, toUserProfile, SUPABASE_URL } from './src/lib/supabase';
 import { colors, NAV_SPACE } from './src/theme';
 import { AppThemeProvider, createPalette } from './src/AppTheme';
+import { MotionPreferencesProvider } from './src/MotionPreferences';
+import { useFeedbackMessage } from './src/lib/useFeedbackMessage';
 import {
   Book,
   BookContentPage,
@@ -193,8 +195,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   const [flashcardItem, setFlashcardItem] = useState<LexiconEntry | null>(null);
 
   // Toast
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { message: toastMessage, showMessage: showToast } = useFeedbackMessage();
   const readingPositionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const readingGoalRef = useRef(readingGoal);
   readingGoalRef.current = readingGoal;
@@ -202,11 +203,6 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   const readingSecondsRef = useRef(0);
   const reportedReadingMinutesRef = useRef(0);
   const lastReadingTickRef = useRef<number | null>(null);
-  const showToast = useCallback((message: string) => {
-    setToastMessage(message);
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToastMessage(null), 2400);
-  }, []);
   const handleToggleNavVisibility = useCallback(() => {
     setIsNavVisible((prev) => !prev);
     setIsImmersiveMode((prev) => !prev);
@@ -1036,7 +1032,9 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <AccountBoundary />
+      <MotionPreferencesProvider>
+        <AccountBoundary />
+      </MotionPreferencesProvider>
     </SafeAreaProvider>
   );
 }

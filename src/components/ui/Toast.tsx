@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
 import { colors, type } from '../../theme';
 import { useAppTheme } from '../../AppTheme';
+import { useReducedMotion } from '../../MotionPreferences';
 import { Icon } from './Icon';
 
 interface ToastProps {
@@ -12,23 +13,31 @@ interface ToastProps {
 /** Floating confirmation pill. Replaces the reader-only "ambient toast" so every tab can use it. */
 export const Toast: React.FC<ToastProps> = ({ message, bottom }) => {
   const palette = useAppTheme();
+  const reducedMotion = useReducedMotion();
   const opacity = useRef(new Animated.Value(0)).current;
   const [shown, setShown] = useState('');
 
   useEffect(() => {
-    if (message) {
-      setShown(message);
-      Animated.timing(opacity, { toValue: 1, duration: 180, useNativeDriver: true }).start();
-    } else {
-      Animated.timing(opacity, { toValue: 0, duration: 220, useNativeDriver: true }).start();
-    }
-  }, [message, opacity]);
+    if (message) setShown(message);
+    opacity.stopAnimation();
+    if (reducedMotion) { opacity.setValue(message ? 1 : 0); return; }
+    const transition = Animated.timing(opacity, { toValue: message ? 1 : 0, duration: message ? 180 : 220, useNativeDriver: true });
+    transition.start();
+    return () => transition.stop();
+  }, [message, opacity, reducedMotion]);
 
   return (
-    <Animated.View pointerEvents="none" style={[styles.wrap, { bottom, opacity }]}>
+    <Animated.View
+      pointerEvents="none"
+      accessible={Boolean(message)}
+      accessibilityLabel={message ?? undefined}
+      accessibilityElementsHidden={!message}
+      importantForAccessibility={message ? 'auto' : 'no-hide-descendants'}
+      style={[styles.wrap, { bottom, opacity }]}
+    >
       <View style={[styles.pill, { backgroundColor: palette.onSurface }]}>
-        <Icon name="check_circle" size={14} color={palette.tertiary} />
-        <Text style={[styles.text, { color: palette.background }]} numberOfLines={2}>
+        <Icon name="info" size={14} color={palette.background} />
+        <Text style={[styles.text, { color: palette.background }]}>
           {shown}
         </Text>
       </View>

@@ -198,3 +198,18 @@ text and anchor; reading progress follows the active imported passage through th
 existing position-save path. Exact word progress and the temporary speed/display
 selection are not persisted. See the [single-line phone checks](docs/android-testing.md#single-line-playback-and-source-locations-step-8)
 for remaining native validation.
+
+## System motion and brief status messages
+
+Folio follows the system reduced-motion preference for its header/navigation,
+dialogs, catalog entrance, status fades and rotating icons. It avoids these
+animations until the initial preference is known and listens for changes. Explicit
+single-line playback still uses Play/Pause; reducing decorative motion does not
+disable that user-selected reading mode.
+
+Brief messages remain visible for at least five seconds and honor Android's
+recommended accessibility timeout when longer. They request a screen-reader
+announcement without moving focus (queued on iOS). Expired messages and hidden
+headers are excluded from accessibility focus. The generic information icon does
+not imply success when a message reports an error, and text is no longer limited
+to two lines. See the [motion and feedback phone checks](docs/android-testing.md#system-motion-and-accessible-feedback-step-9).

@@ -248,8 +248,8 @@ Automated component-handler tests cover adjustable actions, bounds, drag release
 and cancellation, selected chapter/settings states, hidden navigation, and modal
 escape. They do not run Android's accessibility service or prove native speech,
 focus order/return, layout, or switch-access behavior. Those checks remain on the
-phone. Paragraph selection, reduced motion and the remaining screens need separate
-accessibility work. The next section covers the single-line update.
+phone. Paragraph selection and the remaining screens need separate accessibility
+work. The following sections cover single-line playback, motion and feedback.
 
 ## Single-line playback and source locations (step 8)
 
@@ -296,3 +296,43 @@ callbacks, and cleanup. Pure source-mapping tests cover exact paragraph excerpts
 Unicode, empty text, and invalid speeds. These do not simulate Android process
 death, native timer scheduling, OAuth, or cloud sync reliability. Position and
 annotation durability still use the existing persistence paths.
+
+## System motion and accessible feedback (step 9)
+
+This step requires no new SQL or data migration. If upgrading from before step 6,
+follow the account-isolation rollout and export precautions first.
+
+1. In Android Settings, search for **Remove animations** (the name/location varies
+   by manufacturer). Enable it and return to Folio Dev. Open Settings, Contents,
+   Bookmarks and the catalog. Sheets/catalog should open without a slide or fade.
+   Enter/exit immersive reading: header and navigation should change immediately.
+   If sync/download is busy, rotating app icons should be static while the busy
+   text remains. Restart Folio with this preference already enabled and repeat.
+2. Turn the system option off and return. Ordinary transitions should return.
+   Toggle the preference while a transition or busy icon is active if possible;
+   the app should settle into the new state without getting stuck half-hidden.
+   Single-line reading still starts paused and plays only after Play; the system
+   motion preference does not disable deliberate word playback.
+3. Enable TalkBack. Save/remove a bookmark, copy a quote, or try an unsupported
+   import. The resulting message should be announced without moving focus to it.
+   Check success and error messages; the generic information icon must not be
+   interpreted as a success checkmark. Repeating an action should request a fresh
+   announcement; there should be no duplicate live-region announcement.
+4. Find Android's **Time to take action** setting (often under accessibility timing
+   controls). Select a longer duration and trigger another message. It should
+   remain visible for the timeout Android recommends, with a five-second minimum.
+   Trigger a second message before the first expires: the old timeout must not
+   clear the second early or restore old text. Test at a large system text size
+   with a longer error message; text should not be clipped to two lines.
+5. Once a message disappears, TalkBack should not focus its stale text. Hidden
+   headers should also stay out of focus in immersive reading, while Exit
+   immersive mode remains available. Check announcements with a sheet open and
+   after dismissing it; native modal/focus behavior still needs phone validation.
+
+Automated tests cover preference reads/events and their ordering, subscription
+cleanup, cancellation of custom animations, modal animation selection, feedback
+announcements, timeout extension/failure, replacement and unmount races. These use
+native adapters and a lightweight hook/component harness. Actual Android setting
+delivery, TalkBack speech, native modal transitions, built-in loading indicators
+and large-text layout remain device checks; iOS has only bundle/code validation
+in this cloud environment.
