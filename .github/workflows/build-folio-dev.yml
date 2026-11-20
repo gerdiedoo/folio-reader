@@ -91,41 +91,70 @@ jobs:
           eas-cache: false
           packager: npm
           token: ${{ secrets.EXPO_TOKEN }}
-      - name: Build standalone Android APK
+      - name: Set up Java for the Android build
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Check the runner Android SDK
+        run: |
+          if [ -z "${ANDROID_HOME:-}" ] || [ ! -d "$ANDROID_HOME" ]; then
+            echo '::error::The GitHub runner Android SDK is unavailable.'
+            exit 1
+          fi
+          java -version
+      - name: Build standalone Android APK on this runner
+        env:
+          GRADLE_OPTS: -Dorg.gradle.workers.max=2
+          CMAKE_BUILD_PARALLEL_LEVEL: '2'
         run: |
           set +e
-          # Keep JSON separate while streaming/capturing stderr for a readable failure.
-          eas build --platform android --profile dev-preview --non-interactive --wait --json 2>&1 > "$RUNNER_TEMP/folio-dev-build.json" | tee "$RUNNER_TEMP/folio-dev-build.stderr.log"
+          # Local EAS uses the existing Expo signing credentials without a cloud build slot.
+          eas build --platform android --profile dev-preview --non-interactive --local --output "$RUNNER_TEMP/folio-dev.apk" 2>&1 | tee "$RUNNER_TEMP/folio-dev-build.log"
           eas_build_status=${PIPESTATUS[0]}
           set -e
           if [ "$eas_build_status" -ne 0 ]; then
-            node scripts/report-eas-build-error.cjs "$RUNNER_TEMP/folio-dev-build.json" "$RUNNER_TEMP/folio-dev-build.stderr.log"
+            node scripts/report-eas-build-error.cjs "$RUNNER_TEMP/folio-dev-build.log"
+            exit "$eas_build_status"
           fi
-          exit "$eas_build_status"
+          if [ ! -s "$RUNNER_TEMP/folio-dev.apk" ]; then
+            echo '::error::The local build completed without producing folio-dev.apk.'
+            exit 1
+          fi
+      - name: Upload Folio Dev APK
+        id: apk
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: folio-dev-apk
+          path: ${{ runner.temp }}/folio-dev.apk
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
       - name: Show APK download
+        env:
+          APK_ARTIFACT_URL: ${{ steps.apk.outputs.artifact-url }}
         run: |
           node <<'JS'
           const fs = require('node:fs');
-          const path = require('node:path');
-          const result = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'folio-dev-build.json'), 'utf8'));
-          const build = Array.isArray(result) ? result[0] : result;
-          if (build?.status !== 'FINISHED' || !build.artifacts?.buildUrl) {
-            throw new Error('EAS did not return a finished APK download. Check the build logs.');
+          const url = new URL(process.env.APK_ARTIFACT_URL);
+          if (url.protocol !== 'https:' || url.hostname !== 'github.com') {
+            throw new Error('Expected a GitHub Actions artifact download.');
           }
-          const url = new URL(build.artifacts.buildUrl);
-          if (url.protocol !== 'https:') throw new Error('Expected an HTTPS APK download.');
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
             '# Folio Dev is ready to install',
             '',
-            `[Download the Android APK](${url.href})`,
+            `[Download folio-dev-apk (ZIP)](${url.href})`,
             '',
-            'Open this link on your Android phone and install **Folio Dev**.',
-            'It installs alongside Folio; you do not need to uninstall your main app.',
+            'On your Android phone, download the ZIP and extract **folio-dev.apk** in Files.',
+            'Tap the APK and install it over your existing **Folio Dev** app.',
+            'Keep the main Folio app installed; do not clear Folio Dev data.',
             '',
-            `EAS build ID: ${build.id}`,
+            'The APK was built on the GitHub runner using the existing Expo signing credentials.',
+            'This does not use an Expo cloud Android build slot. The artifact is kept for 7 days.',
+            '',
             `Source commit: ${process.env.GITHUB_SHA}`,
             '',
-            'Use the phone checklist in docs/android-testing.md. Google sign-in requires separate test-project provider setup.',
+            'Use the phone checklist in docs/android-testing.md.',
             '',
           ].join('\n'));
           JS
@@ -136,8 +165,9 @@ jobs:
           ## Folio Dev build did not complete
 
           Open the **EAS APK build failed** annotation or the failed step for the
-          actual error, including the captured EAS JSON response. Check that the saved Expo token
+          actual error from the local Android build. Check that the saved Expo token
           belongs to an account/robot with Developer access to this app's EAS project.
-          EAS quota, Android signing setup, or project permissions may also block a build.
+          Android signing setup, project permissions or the runner toolchain may block a build.
+          This workflow builds locally on GitHub and does not use the Expo cloud build quota.
           Fix the reported issue, then use **Re-run failed jobs**. Do not post tokens in logs or chat.
           EOF_SUMMARY

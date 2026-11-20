@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 
 function buildErrorAnnotation(stdout, stderr, secrets = []) {
-  let detail = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n\nEAS JSON output:\n');
+  let detail = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n\nBuild output:\n');
   for (const secret of secrets.filter(Boolean)) detail = detail.split(secret).join('[REDACTED]');
   detail = detail.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').replace(/Bearer\s+[^\s"'<>]+/gi, 'Bearer [REDACTED]');
   if (!detail) detail = 'EAS returned a failure without diagnostic output. Open the APK build step for details.';

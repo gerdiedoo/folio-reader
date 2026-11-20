@@ -33,26 +33,35 @@ Save an Expo token with access to this app's EAS project as the repository's
 
 **Build Folio Dev APK** starts automatically when application source, assets,
 dependency declarations, app/build configuration, or the workflow is pushed to
-`development`. It runs tests and TypeScript checks, then submits an EAS Android
-build and waits for completion. It does not publish an app-store release.
-The workflow only builds `development`; documentation-only commits do not trigger
-another build. Each triggered run may consume EAS build quota.
+`development`. It runs tests and TypeScript checks, then builds the APK on the
+GitHub runner with EAS local build, Java 17 and the runner's Android SDK. It uses
+this project's existing Expo signing credentials and does not use Expo's monthly
+cloud Android build quota. No paid Expo plan is needed for this build path.
+It does not publish an app-store release. The workflow only builds `development`;
+documentation-only commits do not trigger another build.
 **Re-run jobs** rebuilds that run's commit, not the latest branch tip.
 Manual dispatch is also declared, but GitHub normally requires the workflow to
 exist on the default branch before exposing that button.
 
-Open the run under the repository's **Actions** tab. After it turns green, open its
-summary and tap **Download the Android APK** on your phone. Install **Folio Dev**;
-the main Folio app stays installed. The token must have Developer access and the
-EAS account must have available build quota. If a step fails, inspect that error
-before retrying; never paste the token into the logs or chat.
+Open the run under the repository's **Actions** tab in your phone's browser. After
+it turns green, open its summary and tap **Download folio-dev-apk (ZIP)**, or find
+**folio-dev-apk** under **Artifacts**. GitHub requires sign-in for artifact downloads.
+Extract the ZIP in Android's Files app, then tap **folio-dev.apk** and install it
+over **Folio Dev**. Do not uninstall or clear app data; keep the main Folio app
+installed. The artifact is retained for seven days.
+
+The Expo token still needs Developer access to retrieve the existing signing
+credentials. On failure, inspect **EAS APK build failed** for captured diagnostics
+before retrying. A cloud-build quota error on an older run does not affect this
+local-build path. Never paste tokens into logs or chat.
 
 ## Build and install
 
-From the checkout with an authenticated Expo account authorized for the EAS project:
+On Linux/macOS with Java 17, Android SDK/NDK and an authenticated Expo account
+authorized for the EAS project:
 
 ```bash
-npx eas-cli@latest build --platform android --profile dev-preview
+npx eas-cli@24.13.0 build --platform android --profile dev-preview --local --output ./folio-dev.apk
 ```
 
 This uses the existing EAS project in app.json; it does not require another Expo
