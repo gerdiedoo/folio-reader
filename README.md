@@ -233,3 +233,19 @@ Search is debounced and cancellable, with yields between groups of passages and
 within long paragraphs. Tests cover original-text offsets, result limits, source
 navigation, cancellation and stale query/book results. Native keyboard/focus,
 layout and large-book responsiveness still need the [phone checks](docs/android-testing.md#offline-find-in-book-step-10).
+
+## Dictionary lookup reliability
+
+Dictionary results are tied to the normalized English lookup word. Changing the
+word hides the previous definition and disables Save until the new result is
+ready. Requests can be cancelled, have an eight-second timeout covering response
+and body reading, and offer Retry. Missing words, connectivity failures and
+unreadable responses have separate states; remote fields are validated before
+they can be displayed or saved.
+
+Bundled entries work offline. Other lookups use Free Dictionary API and require
+internet. The modal labels definition provenance, dictionary examples and the
+selected book passage separately. Pronunciation confirms native start/error
+callbacks and stops when the word changes, the modal closes or the app becomes
+inactive. Saved cards retain the selected book context through the existing
+Lexicon persistence/sync path. See the [dictionary phone checks](docs/android-testing.md#dictionary-lookup-and-pronunciation-step-11).

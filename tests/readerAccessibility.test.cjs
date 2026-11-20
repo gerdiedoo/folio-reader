@@ -725,3 +725,144 @@ test('Find in book exposes named input/close controls and opens the selected sou
   assert.equal(closed, true);
   h.unmount();
 });
+
+function dictionaryHarness() {
+  const actual = harness().load('../src/lib/dictionary.ts');
+  const jobs = [], voices = [], toasts = [];
+  let stops = 0;
+  const h = harness({ runEffects: true, moduleMocks: {
+    './dictionary': { ...actual, fetchDictionaryDefinition(word, { signal }) {
+      let resolve, reject;
+      const result = new Promise((ok, fail) => { resolve = ok; reject = fail; });
+      jobs.push({ word, signal, resolve, reject });
+      return result;
+    } },
+    'expo-speech': { stop: async () => { stops++; }, speak: (word, options) => voices.push({ word, options }) },
+  } });
+  const { useDictionaryLookup } = h.load('../src/lib/useDictionaryLookup.ts');
+  return { h, jobs, voices, toasts, stops: () => stops, hook: ({ term }) => useDictionaryLookup(term) };
+}
+const definition = word => ({ definition: `Definition for ${word}`, phonetic: '/word/', partOfSpeech: 'noun', synonyms: [], example: 'An example from the dictionary.' });
+
+test('dictionary results stay bound to their queried word even when old requests ignore abort', async () => {
+  const { h, jobs, hook } = dictionaryHarness();
+  h.render(hook, { term: 'first' });
+  assert.equal(jobs.length, 0);
+  assert.equal([...h.timers.values()][0].ms, 450);
+  h.tick();
+  h.render(hook, { term: 'second' });
+  h.tick();
+  assert.equal(jobs[0].signal.aborted, true);
+  jobs[1].resolve(definition('second'));
+  await Promise.resolve();
+  jobs[0].resolve(definition('first'));
+  await Promise.resolve();
+  const { lookup } = h.render(hook, { term: 'second' });
+  assert.equal(lookup.key, 'second');
+  assert.equal(lookup.status, 'found');
+  assert.equal(lookup.entry.definition, 'Definition for second');
+  h.unmount();
+});
+
+test('bundled words work without requests and cannot be replaced by a stale online error', async () => {
+  const { h, jobs, hook } = dictionaryHarness();
+  h.render(hook, { term: 'remote' });
+  h.tick();
+  h.render(hook, { term: ' QUIETUDE ' });
+  let result = h.render(hook, { term: ' QUIETUDE ' });
+  assert.equal(result.lookup.status, 'found');
+  assert.equal(result.lookup.source, 'bundled');
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].signal.aborted, true);
+  jobs[0].reject(new Error('Late network error'));
+  await Promise.resolve(); await Promise.resolve();
+  result = h.render(hook, { term: ' QUIETUDE ' });
+  assert.equal(result.lookup.source, 'bundled');
+  assert.equal(h.timers.size, 0);
+  h.unmount();
+});
+
+test('dictionary failure can retry the same word; missing entries stay separate from network errors', async () => {
+  const { h, jobs, hook } = dictionaryHarness();
+  h.render(hook, { term: 'word' }); h.tick();
+  jobs[0].reject(new Error('The dictionary took too long to respond. Try again.'));
+  await Promise.resolve(); await Promise.resolve();
+  let result = h.render(hook, { term: 'word' });
+  assert.equal(result.lookup.status, 'error');
+  assert.match(result.lookup.message, /too long/);
+  result.retry(); h.render(hook, { term: 'word' }); h.tick();
+  jobs[1].resolve(null); await Promise.resolve();
+  result = h.render(hook, { term: 'word' });
+  assert.equal(result.lookup.status, 'missing');
+  h.unmount();
+});
+
+test('closing dictionary cancels debounce/requests and suppresses late state updates', async () => {
+  const { h, jobs, hook } = dictionaryHarness();
+  h.render(hook, { term: 'word' });
+  h.tick();
+  const writes = h.stateWrites();
+  h.unmount();
+  assert.equal(jobs[0].signal.aborted, true);
+  jobs[0].resolve(definition('word'));
+  await Promise.resolve();
+  assert.equal(h.stateWrites(), writes);
+  assert.equal(h.timers.size, 0);
+});
+
+test('dictionary Save disables immediately for new input and saves a matching word/definition with book context', async () => {
+  const { h, jobs } = dictionaryHarness();
+  const { DictionaryModal } = h.load('../src/components/DictionaryModal.tsx');
+  const saved = [];
+  const props = { initialWord: 'first', contextPassage: 'Exact text from my book.', bookId: 'book-A', onSaveToLexicon: entry => saved.push(entry), onClose() {}, showToast() {} };
+  let root = h.render(DictionaryModal, props); h.tick();
+  jobs[0].resolve(definition('first')); await Promise.resolve();
+  root = h.render(DictionaryModal, props);
+  assert.equal(labelled(root, 'Save definition to Lexicon Cards').disabled, false);
+  labelled(root, 'English dictionary word').onChangeText('second');
+  root = h.render(DictionaryModal, props);
+  assert.equal(labelled(root, 'Save definition to Lexicon Cards').disabled, true);
+  labelled(root, 'Save definition to Lexicon Cards').onPress();
+  assert.equal(saved.length, 0);
+  assert.ok(!elements(root).some(n => n.props?.children === 'Definition for first'));
+  h.tick(); jobs[1].resolve(definition('second')); await Promise.resolve();
+  root = h.render(DictionaryModal, props);
+  const labels = elements(root).map(n => n.props?.children);
+  assert.ok(labels.includes('DICTIONARY EXAMPLE'));
+  assert.ok(labels.includes('SELECTED BOOK PASSAGE'));
+  labelled(root, 'Save definition to Lexicon Cards').onPress();
+  assert.equal(saved[0].word, 'Second');
+  assert.equal(saved[0].definition, 'Definition for second');
+  assert.equal(saved[0].contextPassage, 'Exact text from my book.');
+  assert.equal(saved[0].bookId, 'book-A');
+  h.unmount();
+});
+
+test('pronunciation confirms native start/errors and stops on background or dictionary close', async () => {
+  const { h, voices, toasts, stops } = dictionaryHarness();
+  const { DictionaryModal } = h.load('../src/components/DictionaryModal.tsx');
+  const props = { initialWord: 'quietude', bookId: 'book', onSaveToLexicon() {}, onClose() {}, showToast: text => toasts.push(text) };
+  let root = h.render(DictionaryModal, props);
+  root = h.render(DictionaryModal, props);
+  await labelled(root, 'Pronounce English word').onPress();
+  assert.equal(voices.length, 1);
+  assert.equal(voices[0].word, 'quietude');
+  assert.equal(toasts.length, 0);
+  voices[0].options.onStart();
+  assert.deepEqual(toasts, ['Pronouncing: quietude']);
+  const priorStops = stops();
+  h.appState('background');
+  assert.equal(stops(), priorStops + 1);
+  voices[0].options.onError();
+  assert.equal(toasts.length, 1);
+  h.appState('active');
+  assert.equal(voices.length, 1);
+  await labelled(root, 'Pronounce English word').onPress();
+  voices[1].options.onError();
+  assert.match(toasts.at(-1), /unavailable/);
+  h.unmount();
+  const count = toasts.length;
+  voices[1].options.onStart();
+  assert.equal(toasts.length, count);
+  assert.equal(h.listeners.size, 0);
+});

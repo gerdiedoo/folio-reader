@@ -380,3 +380,46 @@ paragraph boundaries, bounded snippets/results, Unicode code points, cancellatio
 within long paragraphs, reflowed target selection, debounce/retry, and stale
 query/book/unmount handling. Android/iOS bundle exports check packaging; they do
 not exercise native keyboard layout, TalkBack focus or actual phone performance.
+
+## Dictionary lookup and pronunciation (step 11)
+
+This step adds no SQL migration. It fixes lookup/result pairing and service
+recovery; Lexicon storage and cloud sync still use their existing paths.
+When upgrading from before step 6, follow the [account-isolation rollout](account-isolation.md)
+and export precautions first.
+
+1. In Reading, use **More → Look up a word**, or Define from a selected passage.
+   Enter an English word, then change it while a lookup is pending or showing a
+   definition. The old definition must disappear immediately and Save must be
+   disabled until the current word resolves. Try rapid changes with a slower
+   connection; a late result/error must not replace a newer word's definition.
+2. Try an unknown word and an offline lookup. A real missing result should say no
+   English definition was found; connection/service failures should offer Try
+   again. Retry the same word after reconnecting. If a request stalls, it should
+   report a timeout after about eight seconds; offline failures can return sooner.
+3. In airplane mode, try **quietude** (a bundled entry). It should display without
+   a request and label itself available offline. Other words may need internet;
+   this is not a full downloadable dictionary. Try **constructor** and
+   **__proto__**: each should follow the ordinary online/error path without a crash.
+4. From a book passage, look up a word whose definition has an example. Confirm
+   **Dictionary example** and **Selected book passage** stay separately labelled.
+   Save and inspect the card: word and definition should correspond, with the
+   original selected book context. Save should remain disabled for loading,
+   missing and failed results. Clear should return to the initial instructions.
+5. Tap Pronounce. Confirm speech starts, and check the unavailable message on a
+   device without a working English voice if applicable. Change the word, close
+   the dictionary, press Home or lock the phone while it speaks: pronunciation
+   should stop. Returning must not restart speech automatically. Close during a
+   pending lookup and reopen with another word to check for stale results/toasts.
+6. With TalkBack, verify the English word field, Close, Clear, Pronounce, Retry,
+   synonym and Save names/roles, disabled Save state and error announcements.
+   Check keyboard access and scrolling at a large text size, in landscape and
+   with Charcoal enabled. Native voice availability and modal focus need device
+   validation; cloud tests do not establish pronunciation quality.
+
+Automated tests cover response validation, prototype-named input, URL encoding,
+timeouts during transport/body reading, cancellation, stale completions, retry,
+word/definition saving, source-context labels and pronunciation callbacks/cleanup.
+Live Dictionary API access from this cloud was blocked by its outbound proxy
+(HTTP 403); the real service connection still needs testing on the phone. iOS was
+checked by bundle export, without a native runtime here.
