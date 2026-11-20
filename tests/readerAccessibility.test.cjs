@@ -315,7 +315,7 @@ function lineReaderProps(overrides = {}) {
   return {
     book: { id: 'book', title: 'A book', currentPage: 1, currentLoc: 100 },
     chapterTitle: 'Arrival', chapterPages: [page(1, 'one two'), page(2, 'three four')],
-    initialPageNumber: 1, onPassageChange() {},
+    initialPageNumber: 1, onPositionChange() {},
     settings: { theme: 'parchment', font: 'Literata', wpm: 240 },
     onExit() {}, onAddHighlight: async () => true, showToast() {}, ...overrides,
   };
@@ -326,7 +326,7 @@ test('single-line playback waits for Play, reports source passages and stops at 
   const h = harness({ runEffects: true });
   const { SingleLineReader } = h.load('../src/components/SingleLineReader.tsx');
   const passages = [];
-  const props = lineReaderProps({ onPassageChange: p => passages.push(p.pageNumber) });
+  const props = lineReaderProps({ onPositionChange: (p, word) => passages.push([p.pageNumber, word]) });
   let root = h.render(SingleLineReader, props);
   assert.equal(h.timers.size, 0);
   assert.equal(wordControl(root).index, 0);
@@ -338,7 +338,7 @@ test('single-line playback waits for Play, reports source passages and stops at 
   root = h.render(SingleLineReader, props);
   assert.equal(wordControl(root).index, 3);
   assert.equal(h.timers.size, 0);
-  assert.deepEqual(passages, [1, 2]);
+  assert.deepEqual(passages, [[1, 0], [1, 1], [2, 0], [2, 1]]);
   labelled(root, 'Replay chapter').onPress();
   root = h.render(SingleLineReader, props);
   assert.equal(wordControl(root).index, 0);
@@ -1500,7 +1500,7 @@ function scrollingReader(extra = {}) {
   let root;
   const render = () => { root = h.render(ReaderView, props); return root; };
   const list = () => elements(root).find(node => node.type === 'FlatList').props;
-  const settle = () => { for (let i = 0; i < 3; i++) render(); if (list().ref) list().ref.current = { scrollToOffset: value => restored.push(value) }; };
+  const settle = () => { for (let i = 0; i < 3; i++) render(); const scroll = elements(root).find(node => node.type === 'FlatList')?.props; if (scroll?.ref) scroll.ref.current = { scrollToOffset: value => restored.push(value) }; };
   settle();
   const measure = (pageNumber, y, height) => {
     const current = list();
@@ -1589,4 +1589,111 @@ test('Notebook jumps are acknowledged once and reopening Reading uses the later 
   const saved = f.positions.at(-1);
   const next = scrollingReader({ currentBook: { ...f.props().currentBook, currentPage: saved.page.pageNumber, readingPosition: saved.position }, jumpTarget: null });
   assert.equal(next.list().data[0].pageNumber, 8); next.h.unmount();
+});
+
+function preciseReader(mode, extra = {}) {
+  const customPages = Array.from({ length: 12 }, (_, index) => page(index + 1,
+    index === 7 ? Array.from({ length: 200 }, (_, word) => `word${word}`).join(' ') : `Source ${index + 1}.`));
+  const settings = { theme: 'parchment', font: 'Literata', fontSizeStep: 4, lineSpacing: 'standard', margins: 'regular',
+    usePublisherDefaults: false, displayReadingPace: false, readingFlowMode: mode };
+  const f = scrollingReader({ customPages, settings, ...extra });
+  const layout = (width = 400, height = 400) => {
+    const surface = elements(f.root()).find(node => node.type === 'View' && typeof node.props.onLayout === 'function');
+    assert.ok(surface, 'Pages must measure its surface');
+    surface.props.onLayout({ nativeEvent: { layout: { width, height } } }); f.settle();
+  };
+  const visible = () => elements(f.root()).find(node => node.props?.page?.pageNumber && node.props?.textStyle)?.props.page;
+  const text = () => { const p = visible(); return p.dropCap + p.paragraph1 + ' ' + p.paragraph2Lead + p.highlightedText + p.paragraph2Rest; };
+  const line = () => elements(f.root()).find(node => node.type === 'SingleLineReader').props;
+  return { ...f, layout, visible, text, line };
+}
+
+test('Pages saves a split passage word ordinal and reopens the same display page after measurement', () => {
+  const f = preciseReader('paginated'); f.layout();
+  labelled(f.root(), 'Next page').onPress(); f.settle();
+  labelled(f.root(), 'Next page').onPress(); f.settle();
+  const selected = f.text();
+  assert.equal(f.visible().pageNumber, 8); assert.ok(!selected.split(/\s+/).includes('word0'));
+  f.h.unmount();
+  assert.equal(f.positions.length, 1);
+  const saved = f.positions[0].position;
+  assert.equal(saved.pageNumber, 8); assert.ok(saved.wordOffset > 0); assert.equal(saved.scroll, undefined);
+  const next = preciseReader('paginated', { currentBook: { ...f.props().currentBook, readingPosition: saved } });
+  next.layout(); assert.equal(next.text(), selected);
+  assert.equal(next.positions.length, 0, 'Measured restoration must not rewrite the saved anchor'); next.h.unmount();
+});
+
+test('Pages preserves the saved word through viewport, text-size and system-scale reflow', () => {
+  const f = preciseReader('paginated', { currentBook: { id: 'reading-book', currentPage: 8, title: 'Read me', readingPosition: { pageNumber: 8, wordOffset: 170 } } });
+  const contains = () => assert.ok(f.text().split(/\s+/).includes('word170'));
+  f.layout(); contains();
+  f.layout(700, 700); contains();
+  f.change({ settings: { ...f.props().settings, fontSizeStep: 8, margins: 'wide', lineSpacing: 'loose' } }); contains();
+  f.h.native.useWindowDimensions = () => ({ width: 700, height: 700, fontScale: 1.7 }); f.settle(); contains();
+  f.h.unmount(); assert.equal(f.positions.length, 0);
+});
+
+test('backward page turns remain intentional and Notebook jumps release an earlier word anchor', () => {
+  const f = preciseReader('paginated', { currentBook: { id: 'reading-book', currentPage: 8, title: 'Read me', readingPosition: { pageNumber: 8, wordOffset: 100 } } });
+  f.layout(); labelled(f.root(), 'Previous page').onPress(); f.settle();
+  f.h.appState('background');
+  assert.ok(f.positions.at(-1).position.wordOffset < 100);
+  f.change({ jumpTarget: { bookId: 'reading-book', page: 8, nonce: 91 } });
+  f.h.unmount(); assert.equal(f.positions.at(-1).position.wordOffset, 0);
+});
+
+test('Find in book persists its exact matched word through reflow instead of restarting the passage', () => {
+  const f = preciseReader('paginated'); f.layout();
+  elements(f.root()).find(node => node.props?.label === 'More').props.onPress(); f.settle();
+  labelled(f.root(), 'Find in book').onPress(); f.settle();
+  const sheet = elements(f.root()).find(node => node.type === 'BookSearchSheet');
+  sheet.props.onSelect({ sourceIndex: 7, pageNumber: 8, wordIndex: 143 }); f.settle();
+  assert.ok(f.text().split(/\s+/).includes('word143'));
+  f.layout(700, 650); assert.ok(f.text().split(/\s+/).includes('word143'));
+  f.h.unmount(); assert.equal(f.positions.at(-1).position.wordOffset, 143);
+});
+
+test('Line reopens at a saved word paused, and seeking/playback report offsets within the source passage', () => {
+  const h = harness({ runEffects: true });
+  const { SingleLineReader } = h.load('../src/components/SingleLineReader.tsx');
+  const positions = [];
+  const props = lineReaderProps({ chapterPages: [page(1, 'one two three four'), page(2, 'five six')],
+    initialWordOffset: 2, onPositionChange: (source, wordOffset) => positions.push({ pageNumber: source.pageNumber, wordOffset }) });
+  let root = h.render(SingleLineReader, props);
+  assert.equal(wordControl(root).index, 2); assert.equal(h.timers.size, 0);
+  labelled(root, 'Play chapter').onPress(); root = h.render(SingleLineReader, props);
+  h.tick(); root = h.render(SingleLineReader, props);
+  assert.deepEqual(positions.at(-1), { pageNumber: 1, wordOffset: 3 });
+  wordControl(root).onChange(4); root = h.render(SingleLineReader, props);
+  assert.deepEqual(positions.at(-1), { pageNumber: 2, wordOffset: 0 }); assert.equal(h.timers.size, 0);
+  h.unmount();
+  const next = harness({ runEffects: true });
+  const { SingleLineReader: Reopened } = next.load('../src/components/SingleLineReader.tsx');
+  const saved = next.render(Reopened, { ...props, initialPageNumber: 2, initialWordOffset: 1 });
+  assert.equal(wordControl(saved).index, 5); assert.equal(next.timers.size, 0); next.unmount();
+});
+
+test('Reader forwards Line word positions, flushes on close and bounds continuous-playback save latency', () => {
+  const f = preciseReader('single-line', { currentBook: { id: 'reading-book', title: 'Read me', currentPage: 8, readingPosition: { pageNumber: 8, wordOffset: 17 } } });
+  assert.equal(f.line().initialWordOffset, 17);
+  for (const offset of [18, 19, 20, 21]) f.line().onPositionChange(f.props().customPages[7], offset);
+  assert.equal(f.positions.length, 0);
+  const deadline = [...f.h.timers.values()].find(timer => timer.ms === 2000);
+  assert.ok(deadline, 'Continuous word changes need a maximum save delay'); deadline.fn();
+  assert.equal(f.positions.at(-1).position.wordOffset, 21);
+  assert.equal(f.h.timers.size, 0);
+  f.line().onPositionChange(f.props().customPages[7], 22); f.h.unmount();
+  assert.equal(f.positions.at(-1).position.wordOffset, 22); assert.equal(f.h.timers.size, 0);
+  const next = preciseReader('single-line', { currentBook: { ...f.props().currentBook, readingPosition: f.positions.at(-1).position } });
+  assert.equal(next.line().initialWordOffset, 22); next.h.unmount();
+});
+
+test('Pages and Line hand off the same source word while Scroll retains its passage-based fallback', () => {
+  const f = preciseReader('single-line', { currentBook: { id: 'reading-book', title: 'Read me', currentPage: 8, readingPosition: { pageNumber: 8, wordOffset: 73 } } });
+  f.change({ settings: { ...f.props().settings, readingFlowMode: 'paginated' } }); f.layout();
+  assert.ok(f.text().split(/\s+/).includes('word73'));
+  f.change({ settings: { ...f.props().settings, readingFlowMode: 'single-line' } });
+  assert.equal(f.line().initialWordOffset, 73);
+  f.change({ settings: { ...f.props().settings, readingFlowMode: 'continuous' } });
+  assert.equal(f.list().data[0].pageNumber, 8); f.h.unmount();
 });

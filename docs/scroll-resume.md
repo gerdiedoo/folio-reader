@@ -45,8 +45,8 @@ to reconstruct an offset that an earlier version never stored.
 Offsets apply to the same window width, system font scale, typeface, text size,
 spacing and margins. If those change, resume falls back to the saved source
 passage rather than applying an obsolete pixel distance. This step does not
-provide word-level restoration across reflow, exact Pages/Line resume, or
-cross-device viewport synchronization. The cloud schema and Profile metadata
+provide word-level restoration across Scroll reflow or cross-device viewport
+synchronization. [Step 16](word-resume.md) adds word-based Pages/Line resume. The cloud schema and Profile metadata
 backup retain their passage-level progress fields. Device entries take precedence
 over startup cloud snapshots; full multi-device conflict resolution is separate.
 

@@ -9,7 +9,8 @@ export function savedReadingPosition(book: Book | undefined, pages: BookContentP
   const valid = saved?.pageNumber === pageNumber;
   const scroll = valid && saved.scroll && typeof saved.scroll.layout === 'string' &&
     Number.isFinite(saved.scroll.offset) && saved.scroll.offset >= 0 ? { ...saved.scroll } : undefined;
-  return { index, position: { pageNumber, ...(scroll ? { scroll } : {}) } as ReadingPosition };
+  const wordOffset = valid && Number.isSafeInteger(saved.wordOffset) && saved.wordOffset! >= 0 ? saved.wordOffset : undefined;
+  return { index, position: { pageNumber, ...(wordOffset !== undefined ? { wordOffset } : {}), ...(scroll ? { scroll } : {}) } as ReadingPosition };
 }
 
 export interface ScrollRow { pageNumber: number; y: number; height: number }

@@ -56,3 +56,13 @@ test('invalid playback rates cannot create zero-delay or unbounded timers', () =
   for (const bad of [undefined, null, NaN, Infinity, '300']) assert.equal(lineSpeed(bad), 240);
   assert.equal(lineSpeed(239.7), 240);
 });
+
+test('Line restores an ordinal within its source passage and clamps it before the next passage', () => {
+  const chapter = createLineChapter([page(1, 'earlier words'), page(2, 'one two', 'three four five'), page(3, 'later words')]);
+  assert.equal(firstLineWord(chapter, 2, 3), 5);
+  assert.equal(chapter.words[firstLineWord(chapter, 2, 3)].text, 'four');
+  assert.equal(firstLineWord(chapter, 2, 999), 6);
+  assert.equal(linePassage(chapter, firstLineWord(chapter, 2, 999)).pageNumber, 2);
+  for (const offset of [-1, NaN, Infinity, '3']) assert.equal(firstLineWord(chapter, 2, offset), 2);
+  assert.equal(firstLineWord(chapter, 88, 3), 0);
+});

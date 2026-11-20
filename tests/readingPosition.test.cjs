@@ -98,3 +98,13 @@ test('a cloud failure neither reports device loss nor blocks local saves or a di
   assert.equal(await write([book()], book()), true); await flush();
   assert.equal(errors, 0); assert.equal(uploaded.length, 3); assert.ok(uploaded.includes('other'));
 });
+
+test('device word ordinals survive save/reload while malformed or mismatched ordinals fall back safely', () => {
+  const position = { pageNumber: 2, wordOffset: 49 };
+  const updated = applyReadingPosition(book(), page(2), 3, position, 'now');
+  assert.deepEqual(savedReadingPosition(JSON.parse(JSON.stringify(updated)), pages).position, position);
+  for (const wordOffset of [-1, NaN, Infinity, '49', 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.deepEqual(savedReadingPosition(book({ readingPosition: { pageNumber: 2, wordOffset } }), pages).position, { pageNumber: 2 });
+  }
+  assert.deepEqual(savedReadingPosition(book({ readingPosition: { pageNumber: 3, wordOffset: 49 } }), pages).position, { pageNumber: 2 });
+});

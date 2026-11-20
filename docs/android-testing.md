@@ -592,3 +592,40 @@ Automated regressions cover layout-only opening events, same-passage offsets,
 closing before debounce, momentum, long/late-measured cells, background flushing,
 old-list callbacks, explicit backward navigation, stale Notebook jumps, layout
 fallback, cloud/device precedence and storage acknowledgement/failure ordering.
+
+## Pages and Line resume (step 16)
+
+Read the [word-position behavior and limits](word-resume.md). Install over Folio
+Dev without clearing data; no new SQL is needed. Precise anchors begin after
+navigating in this APK, since earlier versions saved only a passage.
+
+1. In Pages, reach the second or third display page of a long passage. Note its
+   first sentence. Return to Library and reopen, then repeat using the Reading
+   tab. The measured page should contain the saved sentence instead of resetting
+   to the passage's beginning. Repeat after normal app restart and in airplane mode.
+2. Change text size, spacing, margins, orientation and system font scale. Pages
+   should find the page containing the same saved word after reflow. Page numbers
+   and the top sentence may change as text wraps differently. Check actual text
+   fitting at large font sizes; pagination still estimates the available space.
+3. In Line, play or seek to a distinctive word partway through a passage. Leave
+   Reading immediately and reopen. It should show that word, paused. Repeat with
+   another passage and after a normal restart. Verify Replay still restarts the
+   chapter intentionally and backgrounding never resumes playback automatically.
+4. Run Line continuously for several seconds, then return to Library. Progress
+   should be cached periodically while playback continues and flushed on leaving.
+   Repeat with a long Scroll drag: the step 15 offset should still survive close/
+   reopen. Do not force-kill during a write to infer a durability guarantee.
+5. From Line, return to Pages: the page should contain the active word. Search for
+   a word in a later part of a long passage in both Pages and Line. Reopening must
+   retain that word destination, including after the search keyboard reflows Pages.
+   Notebook/bookmark jumps should intentionally go to the passage's beginning.
+6. Navigate backward using page turns, chapters, seeking and the scrubber, then
+   reopen. The intentionally earlier position must remain. Alternate between two
+   books and verify neither inherits the other's word position.
+7. Keep the Scroll close/reopen tests from step 15. Its exact pixel offset applies
+   only to matching layout; switching from/to word modes falls back to the source
+   passage. Check TalkBack, large text, Charcoal and landscape on the device.
+
+Automated tests use event/storage adapters. Actual phone layout, process death,
+TalkBack speech/focus, live Supabase and cross-device precise restoration remain
+outside that evidence.

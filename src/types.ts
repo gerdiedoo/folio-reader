@@ -30,6 +30,8 @@ export interface ReadingSettings {
 /** Device-local resume information, anchored to imported source text. */
 export interface ReadingPosition {
   pageNumber: number;
+  /** Zero-based word ordinal within this source passage, independent of display pages. */
+  wordOffset?: number;
   scroll?: { offset: number; layout: string };
 }
 

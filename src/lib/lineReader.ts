@@ -21,8 +21,11 @@ export function createLineChapter(pages: BookContentPage[]): LineChapter {
   return chapter;
 }
 
-export function firstLineWord(chapter: LineChapter, pageNumber: number): number {
-  return chapter.segments.find(segment => segment.page.pageNumber === pageNumber)?.startWord ?? 0;
+export function firstLineWord(chapter: LineChapter, pageNumber: number, wordOffset = 0): number {
+  const segments = chapter.segments.filter(segment => segment.page.pageNumber === pageNumber);
+  if (!segments.length) return 0;
+  const offset = Number.isSafeInteger(wordOffset) && wordOffset >= 0 ? wordOffset : 0;
+  return Math.min(segments[segments.length - 1].endWord - 1, segments[0].startWord + offset);
 }
 
 export function linePassage(chapter: LineChapter, index: number): BookContentPage | undefined {

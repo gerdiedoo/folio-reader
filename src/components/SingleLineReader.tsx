@@ -12,7 +12,8 @@ interface SingleLineReaderProps {
   chapterTitle: string;
   chapterPages: BookContentPage[];
   initialPageNumber: number;
-  onPassageChange: (page: BookContentPage) => void;
+  initialWordOffset?: number;
+  onPositionChange: (page: BookContentPage, wordOffset: number) => void;
   playbackBlocked?: boolean;
   settings: ReadingSettings;
   onExit: () => void;
@@ -28,7 +29,8 @@ export const SingleLineReader: React.FC<SingleLineReaderProps> = ({
   chapterTitle,
   chapterPages,
   initialPageNumber,
-  onPassageChange,
+  initialWordOffset = 0,
+  onPositionChange,
   playbackBlocked = false,
   settings,
   onExit,
@@ -42,7 +44,7 @@ export const SingleLineReader: React.FC<SingleLineReaderProps> = ({
 
   // 'rsvp' = one focus word on a guideline; 'ribbon' = a continuous tape of words
   const [lineStyle, setLineStyle] = useState<'rsvp' | 'ribbon'>('rsvp');
-  const [currentIndex, setCurrentIndex] = useState(() => firstLineWord(chapter, initialPageNumber));
+  const [currentIndex, setCurrentIndex] = useState(() => firstLineWord(chapter, initialPageNumber, initialWordOffset));
   const [isPlaying, setIsPlaying] = useState(false);
   const [wpm, setWpm] = useState(() => lineSpeed(settings.wpm));
   const [fontSizeOffset, setFontSizeOffset] = useState<-1 | 0 | 1 | 2>(0);
@@ -87,11 +89,11 @@ export const SingleLineReader: React.FC<SingleLineReaderProps> = ({
   }, [isPlaying, intervalMs, words.length, currentIndex, playbackBlocked]);
 
   const sourcePage = linePassage(chapter, currentIndex);
-  const onPassageChangeRef = useRef(onPassageChange);
-  onPassageChangeRef.current = onPassageChange;
+  const onPositionChangeRef = useRef(onPositionChange);
+  onPositionChangeRef.current = onPositionChange;
   useEffect(() => {
-    if (sourcePage) onPassageChangeRef.current(sourcePage);
-  }, [sourcePage]);
+    if (sourcePage) onPositionChangeRef.current(sourcePage, currentIndex - firstLineWord(chapter, sourcePage.pageNumber));
+  }, [chapter, currentIndex, sourcePage]);
 
   const currentWord = words[currentIndex] || '';
   const prevWords = words.slice(Math.max(0, currentIndex - 4), currentIndex).join(' ');

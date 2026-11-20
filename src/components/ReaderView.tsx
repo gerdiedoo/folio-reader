@@ -14,13 +14,13 @@ import {
   LayoutChangeEvent,
   FlatListProps,
 } from 'react-native';
+import { paginateContent, displayPageForPosition } from '../lib/readerPagination';
 import { savedReadingPosition, scrollPositionAtOffset } from '../lib/readingPosition';
 import { readerTextMetrics, type ReaderSettingsChange } from '../lib/readerPreferences';
 import { HIGHLIGHT_COLORS, highlightTextStyle } from '../lib/highlights';
 import { findBookmarkPage } from '../lib/bookmarks';
 import { BookmarkSheet } from './BookmarkSheet';
 import { BookSearchSheet } from './BookSearchSheet';
-import { searchDisplayPage, type BookSearchMatch } from '../lib/bookSearch';
 import { useAppTheme } from '../AppTheme';
 import { BOOK_PAGES } from '../data/initialData';
 import { colors, F, readerFontFamily, readerPaper, type } from '../theme';
@@ -93,92 +93,6 @@ interface Seg {
 }
 
 
-interface PaginatedPage {
-  sourceIndex: number;
-  page: BookContentPage;
-  showChapterHeader: boolean;
-}
-
-function wrapText(text: string, charsPerLine: number): string[] {
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  const lines: string[] = [];
-  let line = '';
-
-  words.forEach((word) => {
-    if (line && line.length + word.length + 1 > charsPerLine) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = line ? `${line} ${word}` : word;
-    }
-  });
-  if (line) lines.push(line);
-  return lines;
-}
-
-function paginateContent(
-  pages: BookContentPage[],
-  maxLines: number,
-  charsPerLine: number
-): PaginatedPage[] {
-  const result: PaginatedPage[] = [];
-
-  pages.forEach((source, sourceIndex) => {
-    const firstParagraph = wrapText(source.dropCap + source.paragraph1, charsPerLine);
-    const secondParagraph = wrapText(
-      source.paragraph2Lead + source.highlightedText + source.paragraph2Rest,
-      charsPerLine
-    );
-    if (firstParagraph.length === 0 && secondParagraph.length === 0) {
-      result.push({ sourceIndex, page: source, showChapterHeader: true });
-      return;
-    }
-    let firstOffset = 0;
-    let secondOffset = 0;
-    let firstSegment = true;
-
-    while (firstOffset < firstParagraph.length || secondOffset < secondParagraph.length) {
-      const chapterHeaderLines = firstSegment ? 3 : 0;
-      let remainingLines = Math.max(1, maxLines - chapterHeaderLines);
-      const firstStart = firstOffset;
-      const firstCount = Math.min(remainingLines, firstParagraph.length - firstOffset);
-      firstOffset += firstCount;
-      remainingLines -= firstCount;
-
-      const secondStart = secondOffset;
-      if (firstOffset === firstParagraph.length && secondOffset < secondParagraph.length) {
-        const paragraphGap = firstCount > 0 ? 1 : 0;
-        if (remainingLines > paragraphGap) remainingLines -= paragraphGap;
-        const secondCount = Math.min(remainingLines, secondParagraph.length - secondOffset);
-        secondOffset += secondCount;
-      }
-
-      const firstText = firstParagraph.slice(firstStart, firstOffset).join(' ');
-      const isInitialText = firstStart === 0;
-      const firstCharacter = isInitialText ? source.dropCap : '';
-      const paragraph1 = isInitialText ? firstText.slice(firstCharacter.length) : firstText;
-      const secondText = secondParagraph.slice(secondStart, secondOffset).join(' ');
-
-      result.push({
-        sourceIndex,
-        showChapterHeader: firstSegment,
-        page: {
-          ...source,
-          dropCap: firstCharacter,
-          paragraph1,
-          paragraph2Lead: '',
-          highlightedText: secondText,
-          paragraph2Rest: '',
-        },
-      });
-      firstSegment = false;
-
-      if (firstCount === 0 && secondOffset === secondStart) break;
-    }
-  });
-
-  return result;
-}
 
 function buildSegments(full: string, hls: HighlightEntry[]): Seg[] {
   const ranges: Seg[] = [];
@@ -406,7 +320,6 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const [chaptersOpen, setChaptersOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
-  const searchAnchor = useRef<{ match: BookSearchMatch; pages: BookContentPage[] } | null>(null);
   // Scroll mode renders a window of pages that starts at `listBase`. A jump just moves the
   // window (and remounts the list), so the destination shows instantly instead of the list
   // scrolling through pages whose heights it has not measured. Earlier passages
@@ -456,10 +369,13 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const onUpdatePositionRef = useRef(onUpdateReadingPosition);
   onUpdatePositionRef.current = onUpdateReadingPosition;
   const positionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const positionMaxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingPosition = useRef<{ bookId: string; page: BookContentPage; total: number; position: ReadingPosition } | null>(null);
   const flushPosition = useCallback(() => {
     if (positionTimer.current) clearTimeout(positionTimer.current);
     positionTimer.current = null;
+    if (positionMaxTimer.current) clearTimeout(positionMaxTimer.current);
+    positionMaxTimer.current = null;
     const pending = pendingPosition.current;
     pendingPosition.current = null;
     if (pending) onUpdatePositionRef.current(pending.bookId, pending.page, pending.total, pending.position);
@@ -483,6 +399,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         pendingPosition.current = { bookId, page: nextPage, total: pages.length, position: nextPosition };
         if (positionTimer.current) clearTimeout(positionTimer.current);
         positionTimer.current = setTimeout(flushPosition, 400);
+        if (!positionMaxTimer.current) positionMaxTimer.current = setTimeout(flushPosition, 2000);
       }
     },
     [bookId, flushPosition, pages]
@@ -622,32 +539,32 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         sourceIndex,
         page: source,
         showChapterHeader: true,
+        startWord: 0,
+        endWord: (source.dropCap + source.paragraph1 + ' ' + source.paragraph2Lead + source.highlightedText + source.paragraph2Rest).trim().split(/\s+/).filter(Boolean).length,
       }));
     }
     const availableWidth = Math.max(80, pageArea.width - hPad * 2);
-    const charsPerLine = Math.max(12, Math.floor(availableWidth / (baseSize * 0.58)));
-    const maxLines = Math.max(4, Math.floor((pageArea.height - 112) / lineHeight));
+    const scale = Number.isFinite(fontScale) && fontScale > 0 ? fontScale : 1;
+    const charsPerLine = Math.max(12, Math.floor(availableWidth / (baseSize * scale * 0.58)));
+    const maxLines = Math.max(4, Math.floor((pageArea.height - 112) / (lineHeight * scale)));
     return paginateContent(pages, maxLines, charsPerLine);
-  }, [baseSize, hPad, lineHeight, pageArea.height, pageArea.width, pages]);
+  }, [baseSize, fontScale, hPad, lineHeight, pageArea.height, pageArea.width, pages]);
   const turnPaginatedPage = useCallback(
     (index: number) => {
-      searchAnchor.current = null;
       const nextIndex = Math.max(0, Math.min(paginatedPages.length - 1, index));
       const nextPage = paginatedPages[nextIndex];
       if (!nextPage) return;
       setPaginatedIndex(nextIndex);
-      updatePageIndex(nextPage.sourceIndex);
+      updatePageIndex(nextPage.sourceIndex, { pageNumber: nextPage.page.pageNumber, wordOffset: nextPage.startWord });
     },
     [paginatedPages, updatePageIndex]
   );
   turnPageRef.current = turnPaginatedPage;
 
-  // Keep the chosen word visible if dismissing the search keyboard reflows Pages.
-  // Ordinary page/chapter navigation releases this temporary search anchor.
+  // Preserve the source word through measured layout, orientation and text reflow.
   useEffect(() => {
-    const anchor = searchAnchor.current;
-    if (flowMode !== 'paginated' || anchor?.pages !== pages) { searchAnchor.current = null; return; }
-    const target = searchDisplayPage(paginatedPages, anchor.match);
+    if (flowMode !== 'paginated') return;
+    const target = displayPageForPosition(paginatedPages, resumePosition.current);
     if (target >= 0) setPaginatedIndex(target);
   }, [flowMode, pages, paginatedPages]);
 
@@ -669,12 +586,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   /** Jump to a source page in whichever reading mode is active. */
   const goToSource = useCallback(
-    (target: number) => {
-      searchAnchor.current = null;
+    (target: number, wordOffset = 0) => {
       const idx = Math.max(0, Math.min(pages.length - 1, target));
-      updatePageIndex(idx);
+      const position = { pageNumber: pages[idx].pageNumber, ...(flowMode !== 'continuous' ? { wordOffset } : {}) };
+      updatePageIndex(idx, position);
       if (flowMode === 'paginated') {
-        const seg = paginatedPages.findIndex((item) => item.sourceIndex === idx);
+        const seg = displayPageForPosition(paginatedPages, position);
         setPaginatedIndex(Math.max(0, seg));
       } else if (flowMode === 'continuous') {
         jumpList(idx);
@@ -745,7 +662,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     const savedIndex = saved.index;
     resumePosition.current = saved.position;
     setPageIndex(savedIndex);
-    const savedSegmentIndex = paginatedPages.findIndex((item) => item.sourceIndex === savedIndex);
+    const savedSegmentIndex = displayPageForPosition(paginatedPages, saved.position);
     setPaginatedIndex(Math.max(0, savedSegmentIndex));
     if (flowMode === 'continuous') jumpList(savedIndex);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -757,24 +674,11 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flowMode, scrollLayout]);
 
-  useEffect(() => {
-    if (flowMode !== 'paginated') return;
-    const savedSegmentIndex = paginatedPages.findIndex((item) => item.sourceIndex === pageIndex);
-    setPaginatedIndex(Math.max(0, savedSegmentIndex));
-  }, [flowMode]);
-
   // ---- jump from Notebook / Search ----
   useEffect(() => {
     if (!jumpTarget || jumpTarget.bookId !== bookId || pages.length === 0) return;
-    searchAnchor.current = null;
     const idx = Math.max(0, pages.findIndex((p) => p.pageNumber === jumpTarget.page));
-    updatePageIndex(idx);
-    if (flowMode === 'paginated') {
-      const segmentIndex = paginatedPages.findIndex((item) => item.sourceIndex === idx);
-      setPaginatedIndex(Math.max(0, segmentIndex));
-    }
-    if (flowMode === 'continuous') jumpList(idx);
-    if (flowMode === 'single-line') setLineSeekVersion(version => version + 1);
+    goToSource(idx);
     onJumpHandled?.(jumpTarget.nonce);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jumpTarget?.nonce, bookId, pages]);
@@ -1163,9 +1067,10 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             chapterTitle={page.chapterTitle}
             chapterPages={chapterPages}
             initialPageNumber={page.pageNumber}
-            onPassageChange={source => {
+            initialWordOffset={resumePosition.current.pageNumber === page.pageNumber ? resumePosition.current.wordOffset : 0}
+            onPositionChange={(source, wordOffset) => {
               const index = pages.indexOf(source);
-              if (index >= 0 && index !== pageIndex) updatePageIndex(index);
+              if (index >= 0) updatePageIndex(index, { pageNumber: source.pageNumber, wordOffset });
             }}
             playbackBlocked={playbackBlocked || chaptersOpen || bookmarksOpen || findOpen || Boolean(sheet) || typesetOpen || menuOpen}
             settings={settings}
@@ -1367,15 +1272,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               return;
             }
             setFindOpen(false);
-            if (flowMode === 'paginated') {
-              const target = searchDisplayPage(paginatedPages, match);
-              if (target >= 0) {
-                turnPaginatedPage(target);
-                searchAnchor.current = { match, pages };
-                return;
-              }
-            }
-            goToSource(match.sourceIndex);
+            goToSource(match.sourceIndex, match.wordIndex);
           }}
         />
       )}

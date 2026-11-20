@@ -820,7 +820,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
 
         {activeTab === 'reading' && (
           <ReaderView
-            key={currentBook?.id ?? 'empty'}
+            key={`${currentBook?.id ?? 'empty'}:${currentBook ? customPagesMap[currentBook.id]?.length ?? 0 : 0}`}
             currentBook={currentBook}
             customPages={currentBook ? customPagesMap[currentBook.id] : undefined}
             onUpdateReadingPosition={handleUpdateReadingPosition}
