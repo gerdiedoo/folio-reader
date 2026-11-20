@@ -261,5 +261,20 @@ offers Retry in Notebook instead of being replaced with an empty collection.
 
 The earlier per-account array is retained as the migration source. No new SQL is
 required, but export before upgrading/downgrading and keep app data installed.
-Cloud retry/conflict resolution and vocabulary persistence remain separate work.
+Cloud retry/conflict resolution remains separate work. Vocabulary is covered by
+the following update.
 Read the [rollout, merge rules and limits](docs/highlight-storage.md) before testing.
+
+## Vocabulary and mastery storage
+
+Dictionary cards and mastery ratings now use a separate versioned archive in the
+current account/backend's local space. Save/rating controls wait for storage
+confirmation, block duplicate taps, and keep the definition or card open with an
+inline error on failure. Startup preserves device cards/mastery while importing
+valid cloud-only cards. Unreadable saved data offers Retry in Notebook and blocks
+vocabulary changes and incomplete combined export/upload.
+
+The earlier per-account vocabulary array is preserved as the migration source.
+No new SQL migration is required. Export before upgrading/downgrading and keep
+Folio Dev installed. See the [vocabulary rollout and limits](docs/vocabulary-storage.md)
+and [phone checks](docs/android-testing.md#vocabulary-and-mastery-storage-step-13).

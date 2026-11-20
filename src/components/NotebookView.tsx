@@ -20,6 +20,10 @@ interface NotebookViewProps {
   highlightNotice: string | null;
   highlightBusy: boolean;
   onRetryHighlights: () => void;
+  vocabularyStatus: 'loading' | 'ready' | 'error';
+  vocabularyNotice: string | null;
+  vocabularyBusy: boolean;
+  onRetryVocabulary: () => void;
   books: Book[];
   highlights: HighlightEntry[];
   lexicon: LexiconEntry[];
@@ -40,6 +44,10 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   highlightNotice,
   highlightBusy,
   onRetryHighlights,
+  vocabularyStatus,
+  vocabularyNotice,
+  vocabularyBusy,
+  onRetryVocabulary,
   books,
   highlights,
   lexicon,
@@ -71,6 +79,8 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
     finally { pendingHighlight.current = false; setSavingHighlight(false); }
   };
   const notesUnavailable = highlightStatus !== 'ready' || highlightBusy || savingHighlight;
+  const vocabularyUnavailable = vocabularyStatus !== 'ready' || vocabularyBusy;
+  const archivesUnavailable = notesUnavailable || vocabularyUnavailable;
 
   const [isNewHighlightOpen, setIsNewHighlightOpen] = useState(false);
   const [newQuoteText, setNewQuoteText] = useState('');
@@ -106,7 +116,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   });
 
   const handleExportAll = async () => {
-    if (notesUnavailable) { showToast('Wait for saved highlights to load before exporting.'); return; }
+    if (archivesUnavailable) { showToast('Wait for saved notes and vocabulary to load before exporting.'); return; }
     let md = `# Folio Marginalia Archive: ${selectedBook ? selectedBook.title : 'All Books'}\n\n`;
     md += `*Exported on ${new Date().toLocaleDateString()} via Folio Reader*\n\n---\n\n`;
 
@@ -151,7 +161,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   };
 
   const handleSyncCloud = async () => {
-    if (notesUnavailable || isSyncing) return;
+    if (archivesUnavailable || isSyncing) return;
     setIsSyncing(true);
     const conn = await testSupabaseConnection();
     setDbStatus(conn.message);
@@ -237,6 +247,13 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
       {highlightNotice ? <View style={styles.hub}>
         <Text accessibilityLiveRegion="polite" style={styles.hubBody}>{highlightNotice}</Text>
         <Pressable onPress={onRetryHighlights} disabled={highlightBusy || highlightStatus === 'loading'} accessibilityRole="button" accessibilityLabel="Retry loading saved highlights" accessibilityState={{ disabled: highlightBusy || highlightStatus === 'loading', busy: highlightStatus === 'loading' }} style={{ minHeight: 48, justifyContent: 'center' }}>
+          <Text style={styles.configText}>Try again</Text>
+        </Pressable>
+      </View> : null}
+      {vocabularyStatus === 'loading' ? <Text accessibilityLiveRegion="polite" style={styles.hubBody}>Loading saved vocabulary…</Text> : null}
+      {vocabularyNotice ? <View style={styles.hub}>
+        <Text accessibilityLiveRegion="polite" style={styles.hubBody}>{vocabularyNotice}</Text>
+        <Pressable onPress={onRetryVocabulary} disabled={vocabularyBusy || vocabularyStatus === 'loading'} accessibilityRole="button" accessibilityLabel="Retry loading saved vocabulary" accessibilityState={{ disabled: vocabularyBusy || vocabularyStatus === 'loading', busy: vocabularyStatus === 'loading' }} style={{ minHeight: 48, justifyContent: 'center' }}>
           <Text style={styles.configText}>Try again</Text>
         </Pressable>
       </View> : null}
@@ -454,7 +471,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
               Mastery Level: {lex.masteryLevel} / 5
               {lex.masteryLevel < 3 ? <Text style={{ color: colors.primary }}>  (Review soon)</Text> : null}
             </Text>
-            <Pressable onPress={() => onOpenFlashcard(lex)} style={styles.flashBtn}>
+            <Pressable onPress={() => onOpenFlashcard(lex)} disabled={vocabularyUnavailable} accessibilityRole="button" accessibilityLabel={`Review vocabulary card for ${lex.word}`} accessibilityState={{ disabled: vocabularyUnavailable }} style={styles.flashBtn}>
               <Icon name="style" size={15} color={colors.primary} />
               <Text style={styles.flashText}>Flashcard</Text>
             </Pressable>
@@ -473,23 +490,23 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
         <Text style={styles.hubBody}>
           Export clean markdown files with bibliographic footnotes, or push your highlights and vocabulary
           directly to your Supabase cloud database. Last upload: {lastSyncTime}.
-          {'\n'}This device keeps its saved notes when loading cloud records. Review changes made on other devices before uploading.
+          {'\n'}This device keeps its saved notes and vocabulary when loading cloud records. Review changes made on other devices before uploading.
         </Text>
         <Pressable onPress={() => setIsSchemaOpen(true)} style={styles.configBtn}>
           <Text style={styles.configText}>Supabase Config</Text>
         </Pressable>
 
         <View style={{ flexDirection: 'row', gap: 10 }}>
-          <Pressable onPress={handleExportAll} accessibilityRole="button" accessibilityLabel="Export notes" disabled={notesUnavailable} accessibilityState={{ disabled: notesUnavailable }} style={[styles.hubBtn, { backgroundColor: colors.primaryContainer }]}>
+          <Pressable onPress={handleExportAll} accessibilityRole="button" accessibilityLabel="Export notes" disabled={archivesUnavailable} accessibilityState={{ disabled: archivesUnavailable }} style={[styles.hubBtn, { backgroundColor: colors.primaryContainer }]}>
             <Icon name="output" size={18} color="#fff" />
             <Text style={[styles.hubBtnText, { color: '#fff' }]}>Export All ({bookHighlights.length})</Text>
           </Pressable>
           <Pressable
             onPress={handleSyncCloud}
-            disabled={isSyncing || notesUnavailable}
+            disabled={isSyncing || archivesUnavailable}
             accessibilityRole="button"
             accessibilityLabel="Upload current records"
-            accessibilityState={{ disabled: isSyncing || notesUnavailable, busy: isSyncing }}
+            accessibilityState={{ disabled: isSyncing || archivesUnavailable, busy: isSyncing }}
             style={[styles.hubBtn, { backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border }]}
           >
             <Icon name="sync" size={18} color={colors.primary} spin={isSyncing} />

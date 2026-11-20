@@ -819,7 +819,7 @@ test('dictionary Save disables immediately for new input and saves a matching wo
   const { h, jobs } = dictionaryHarness();
   const { DictionaryModal } = h.load('../src/components/DictionaryModal.tsx');
   const saved = [];
-  const props = { initialWord: 'first', contextPassage: 'Exact text from my book.', bookId: 'book-A', onSaveToLexicon: entry => saved.push(entry), onClose() {}, showToast() {} };
+  const props = { initialWord: 'first', contextPassage: 'Exact text from my book.', bookId: 'book-A', onSaveToLexicon: async entry => { saved.push(entry); return true; }, onClose() {}, showToast() {} };
   let root = h.render(DictionaryModal, props); h.tick();
   jobs[0].resolve(definition('first')); await Promise.resolve();
   root = h.render(DictionaryModal, props);
@@ -827,7 +827,7 @@ test('dictionary Save disables immediately for new input and saves a matching wo
   labelled(root, 'English dictionary word').onChangeText('second');
   root = h.render(DictionaryModal, props);
   assert.equal(labelled(root, 'Save definition to Lexicon Cards').disabled, true);
-  labelled(root, 'Save definition to Lexicon Cards').onPress();
+  await labelled(root, 'Save definition to Lexicon Cards').onPress();
   assert.equal(saved.length, 0);
   assert.ok(!elements(root).some(n => n.props?.children === 'Definition for first'));
   h.tick(); jobs[1].resolve(definition('second')); await Promise.resolve();
@@ -835,7 +835,7 @@ test('dictionary Save disables immediately for new input and saves a matching wo
   const labels = elements(root).map(n => n.props?.children);
   assert.ok(labels.includes('DICTIONARY EXAMPLE'));
   assert.ok(labels.includes('SELECTED BOOK PASSAGE'));
-  labelled(root, 'Save definition to Lexicon Cards').onPress();
+  await labelled(root, 'Save definition to Lexicon Cards').onPress();
   assert.equal(saved[0].word, 'Second');
   assert.equal(saved[0].definition, 'Definition for second');
   assert.equal(saved[0].contextPassage, 'Exact text from my book.');
@@ -846,7 +846,7 @@ test('dictionary Save disables immediately for new input and saves a matching wo
 test('pronunciation confirms native start/errors and stops on background or dictionary close', async () => {
   const { h, voices, toasts, stops } = dictionaryHarness();
   const { DictionaryModal } = h.load('../src/components/DictionaryModal.tsx');
-  const props = { initialWord: 'quietude', bookId: 'book', onSaveToLexicon() {}, onClose() {}, showToast: text => toasts.push(text) };
+  const props = { initialWord: 'quietude', bookId: 'book', onSaveToLexicon: async () => true, onClose() {}, showToast: text => toasts.push(text) };
   let root = h.render(DictionaryModal, props);
   root = h.render(DictionaryModal, props);
   await labelled(root, 'Pronounce English word').onPress();
@@ -1005,6 +1005,7 @@ function notebookHarness(overrides = {}) {
   const props = {
     cloud: {}, books: [{ id: 'book', title: 'A book', currentPage: 1, currentChapter: 'Arrival', currentLoc: 100 }],
     highlights: [], lexicon: [], highlightStatus: 'ready', highlightNotice: null, highlightBusy: false,
+    vocabularyStatus: 'ready', vocabularyNotice: null, vocabularyBusy: false, onRetryVocabulary() {},
     onRetryHighlights() {}, onJumpToReader() {}, onOpenFlashcard() {}, bottomInset: 0,
     onAddHighlight: async () => true, onAddReflectionNote: async () => true, onDeleteHighlight: async () => true,
     showToast: message => messages.push(message), ...overrides,
@@ -1105,4 +1106,185 @@ test('passage reflection saves block duplicates and retain the selected text and
   assert.equal(labelled(root, 'Reflection note').value, 'Retain this draft');
   assert.equal(labelled(root, 'Reflection note').editable, true);
   h.unmount();
+});
+
+let vocabularyScope = 0;
+const vocabularyCard = (id, extra = {}) => ({ id, bookId: 'book', word: 'Quietude', phonetic: '/word/', partOfSpeech: 'noun', definition: 'Calmness.', contextPassage: 'The quietude of the garden.', chapter: 'Arrival', masteryLevel: 1, ...extra });
+function vocabularyHook() {
+  const data = new Map(), uploaded = [], reports = [];
+  const scope = `vocabulary-hook-${++vocabularyScope}.`;
+  let fail = false, gate, remote = async () => null;
+  const storage = {
+    storageKey: key => scope + key,
+    async loadJSONEntryStrict(key) {
+      const raw = data.get(scope + key);
+      return raw === undefined ? { present: false, value: null } : { present: true, value: JSON.parse(raw) };
+    },
+    async saveJSONStrict(key, value) {
+      if (gate) await gate;
+      if (fail) { fail = false; throw new Error('Storage full'); }
+      data.set(scope + key, JSON.stringify(value));
+    },
+  };
+  const cloud = {
+    fetchLexiconFromSupabase: () => remote(),
+    async upsertLexiconToSupabase(entry) { uploaded.push(entry); return false; },
+  };
+  const h = harness({ runEffects: true });
+  const { useLexiconArchive } = h.load('../src/lib/useLexiconArchive.ts');
+  return { h, hook: () => useLexiconArchive(storage, cloud, message => reports.push(message)), data, storage, uploaded, reports,
+    legacy: cards => data.set(scope + 'lexicon', JSON.stringify(cards)),
+    failWrite: () => { fail = true; },
+    remote: fn => { remote = fn; },
+    blockWrite: () => { let release; gate = new Promise(ok => { release = ok; }); return release; },
+  };
+}
+
+test('vocabulary hook confirms local storage before showing a card or uploading it', async () => {
+  const f = vocabularyHook(); f.legacy([vocabularyCard('old')]);
+  f.h.render(f.hook); await flushJobs();
+  let result = f.h.render(f.hook);
+  const release = f.blockWrite();
+  const pending = result.add(vocabularyCard('new'));
+  await flushJobs(); result = f.h.render(f.hook);
+  assert.equal(result.busy, true);
+  assert.deepEqual(result.items.map(item => item.id), ['old']);
+  assert.equal(f.uploaded.length, 0);
+  release(); assert.equal(await pending, true);
+  result = f.h.render(f.hook);
+  assert.deepEqual(result.items.map(item => item.id), ['new', 'old']);
+  assert.equal(result.busy, false);
+  assert.equal(f.uploaded[0].id, 'new');
+  f.h.unmount();
+});
+
+test('failed mastery storage preserves the saved level and retry succeeds without a false cloud success', async () => {
+  const f = vocabularyHook(); f.legacy([vocabularyCard('old')]);
+  f.h.render(f.hook); await flushJobs(); let result = f.h.render(f.hook);
+  f.failWrite(); assert.equal(await result.mastery('old', 5), false);
+  result = f.h.render(f.hook);
+  assert.equal(result.items[0].masteryLevel, 1);
+  assert.equal(f.uploaded.length, 0);
+  assert.equal(f.reports.length, 1);
+  assert.match(result.notice, /could not be saved/);
+  assert.equal(await result.mastery('old', 5), true);
+  result = f.h.render(f.hook);
+  assert.equal(result.items[0].masteryLevel, 5);
+  assert.equal(result.notice, null);
+  f.h.unmount();
+});
+
+test('unreadable vocabulary blocks cloud merge and mutation until retry reads valid data', async () => {
+  const f = vocabularyHook(); f.data.set(f.storage.storageKey('lexicon'), 'null');
+  let reads = 0;
+  f.remote(async () => { reads++; return [vocabularyCard('cloud')]; });
+  f.h.render(f.hook); await flushJobs(); let result = f.h.render(f.hook);
+  assert.equal(result.status, 'error');
+  assert.equal(reads, 0);
+  assert.equal(await result.add(vocabularyCard('new')), false);
+  assert.equal(f.data.get(f.storage.storageKey('lexicon')), 'null');
+  assert.equal(f.data.has(f.storage.storageKey('lexiconArchive')), false);
+  f.legacy([vocabularyCard('local')]); result.retry(); f.h.render(f.hook); await flushJobs();
+  result = f.h.render(f.hook);
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(result.items.map(item => item.id), ['local', 'cloud']);
+  f.h.unmount();
+});
+
+test('late cloud vocabulary cannot replace mastery changed or cards added while loading', async () => {
+  const f = vocabularyHook(); f.legacy([vocabularyCard('same')]);
+  let resolve;
+  f.remote(() => new Promise(ok => { resolve = ok; }));
+  f.h.render(f.hook); await flushJobs(); let result = f.h.render(f.hook);
+  assert.equal(await result.mastery('same', 5), true);
+  assert.equal(await result.add(vocabularyCard('offline')), true);
+  resolve([vocabularyCard('same', { masteryLevel: 1 }), vocabularyCard('remote')]); await flushJobs();
+  result = f.h.render(f.hook);
+  assert.equal(result.items.find(item => item.id === 'same').masteryLevel, 5);
+  assert.equal(result.items.length, 3);
+  f.h.unmount();
+});
+
+test('an unmounted vocabulary loader ignores delayed cloud results without writing data or UI state', async () => {
+  const f = vocabularyHook(); f.legacy([vocabularyCard('local')]);
+  let resolve;
+  f.remote(() => new Promise(ok => { resolve = ok; }));
+  f.h.render(f.hook); await flushJobs();
+  const writes = f.h.stateWrites(); f.h.unmount(); resolve([vocabularyCard('remote')]); await flushJobs();
+  assert.equal(f.h.stateWrites(), writes);
+  assert.equal(f.data.has(f.storage.storageKey('lexiconArchive')), false);
+});
+
+test('dictionary card Save waits for acknowledgement, prevents duplicates and retains a failed definition for retry', async () => {
+  const { h, toasts } = dictionaryHarness();
+  const { DictionaryModal } = h.load('../src/components/DictionaryModal.tsx');
+  let resolve, calls = 0, closed = 0;
+  const props = { initialWord: 'quietude', bookId: 'book', onClose: () => { closed++; }, showToast: text => toasts.push(text),
+    onSaveToLexicon: () => { calls++; return new Promise(ok => { resolve = ok; }); } };
+  let root = h.render(DictionaryModal, props); root = h.render(DictionaryModal, props);
+  const saving = labelled(root, 'Save definition to Lexicon Cards').onPress();
+  labelled(root, 'Save definition to Lexicon Cards').onPress(); root = h.render(DictionaryModal, props);
+  assert.equal(calls, 1);
+  assert.equal(closed, 0);
+  assert.deepEqual(toasts, []);
+  assert.equal(labelled(root, 'English dictionary word').editable, false);
+  assert.equal(labelled(root, 'Save definition to Lexicon Cards').disabled, true);
+  resolve(false); await saving; root = h.render(DictionaryModal, props);
+  assert.equal(closed, 0);
+  assert.equal(labelled(root, 'English dictionary word').value, 'quietude');
+  assert.ok(elements(root).some(node => typeof node.props?.children === 'string' && node.props.children.includes('Couldn’t save this card')));
+  const retry = labelled(root, 'Save definition to Lexicon Cards').onPress(); resolve(true); await retry;
+  assert.equal(closed, 1);
+  assert.deepEqual(toasts, ['Saved "quietude" on this device']);
+  h.unmount();
+});
+
+test('mastery ratings stay pending until confirmed and a failed save keeps the revealed card open', async () => {
+  const h = harness({ runEffects: true });
+  const { FlashcardModal } = h.load('../src/components/FlashcardModal.tsx');
+  let resolve, calls = 0, closed = 0;
+  const toasts = [];
+  const props = { lexiconItem: vocabularyCard('word'), onClose: () => { closed++; }, showToast: text => toasts.push(text),
+    onUpdateMastery: (id, level) => { assert.equal(id, 'word'); calls++; return new Promise(ok => { resolve = ok; }); } };
+  let root = h.render(FlashcardModal, props);
+  labelled(root, 'Reveal definition for Quietude').onPress(); root = h.render(FlashcardModal, props);
+  const saving = labelled(root, 'Mastered: mastery 5 of 5').onPress();
+  labelled(root, 'Good: mastery 3 of 5').onPress(); root = h.render(FlashcardModal, props);
+  assert.equal(calls, 1);
+  assert.equal(labelled(root, 'Mastered: mastery 5 of 5').disabled, true);
+  assert.equal(closed, 0); assert.deepEqual(toasts, []);
+  resolve(false); await saving; root = h.render(FlashcardModal, props);
+  assert.equal(closed, 0);
+  assert.ok(elements(root).some(node => node.props?.children === 'Calmness.'));
+  assert.ok(elements(root).some(node => typeof node.props?.children === 'string' && node.props.children.includes('Couldn’t save mastery')));
+  const retry = labelled(root, 'Good: mastery 3 of 5').onPress(); resolve(true); await retry;
+  assert.equal(closed, 1);
+  assert.deepEqual(toasts, ['Mastery level 3/5 saved on this device']);
+  h.unmount();
+});
+
+test('unreadable vocabulary disables export/upload and offers Retry without blocking note creation', () => {
+  let retried = false;
+  const f = notebookHarness({ vocabularyStatus: 'error', vocabularyNotice: 'Saved vocabulary could not be loaded.', onRetryVocabulary: () => { retried = true; } });
+  const root = f.h.render(f.NotebookView, f.props);
+  assert.equal(labelled(root, 'New quote').disabled, false);
+  for (const label of ['Export notes', 'Upload current records']) assert.equal(labelled(root, label).disabled, true);
+  labelled(root, 'Retry loading saved vocabulary').onPress(); assert.equal(retried, true);
+  f.h.unmount();
+});
+
+test('dictionary and mastery controls cannot commit while saved vocabulary is unavailable', async () => {
+  for (const saveStatus of ['loading', 'error']) {
+    const { h } = dictionaryHarness();
+    const { DictionaryModal } = h.load('../src/components/DictionaryModal.tsx');
+    const props = { initialWord: 'quietude', bookId: 'book', saveStatus, onClose() {}, showToast() {}, onSaveToLexicon: async () => assert.fail('Unexpected Save') };
+    h.render(DictionaryModal, props); const root = h.render(DictionaryModal, props);
+    assert.equal(labelled(root, 'Save definition to Lexicon Cards').disabled, true);
+    await labelled(root, 'Save definition to Lexicon Cards').onPress(); h.unmount();
+    const other = harness({ runEffects: true });
+    const { FlashcardModal } = other.load('../src/components/FlashcardModal.tsx');
+    const card = other.render(FlashcardModal, { lexiconItem: vocabularyCard('word'), saveStatus, onClose() {}, showToast() {}, onUpdateMastery: async () => assert.fail('Unexpected rating') });
+    assert.equal(labelled(card, 'Mastered: mastery 5 of 5').disabled, true);
+    await labelled(card, 'Mastered: mastery 5 of 5').onPress(); other.unmount();
+  }
 });

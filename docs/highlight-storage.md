@@ -1,7 +1,8 @@
 # Highlights and reflection notes: local storage protection
 
-Step 12 protects highlights and their reflection notes. It does not replace the
-vocabulary, settings, book metadata or cloud conflict/retry systems.
+Step 12 protects highlights and their reflection notes. Step 13 separately adds
+[vocabulary storage protection](vocabulary-storage.md). Settings, book metadata
+and cloud conflict/retry systems need separate work.
 
 ## Upgrade
 
@@ -67,7 +68,8 @@ server delete may leave a row visible on another device. A remote edit to an ID
 already present locally does not replace this device's copy. Notebook labels its
 manual operation **Upload to Supabase** and warns to review other-device changes:
 it pushes current records and does not reconcile remote deletions/conflicts.
-Vocabulary and the older book/settings merge policies are unchanged. Profile's
+Vocabulary has its own [archive and merge rules](vocabulary-storage.md); book/settings
+still use their older merge policies. Profile's
 library metadata backup does not include this archive or original EPUB files.
 
 ## Evidence

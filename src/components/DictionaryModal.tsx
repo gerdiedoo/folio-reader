@@ -14,7 +14,9 @@ interface DictionaryModalProps {
   /** Book the lookup originated from, so saved cards are filed under it. */
   bookId: string;
   onClose: () => void;
-  onSaveToLexicon: (entry: Omit<LexiconEntry, 'id'>) => void;
+  onSaveToLexicon: (entry: Omit<LexiconEntry, 'id'>) => Promise<boolean>;
+  saveStatus?: 'loading' | 'ready' | 'error';
+  saveBusy?: boolean;
   showToast: (msg: string) => void;
 }
 
@@ -24,6 +26,8 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
   bookId,
   onClose,
   onSaveToLexicon,
+  saveStatus = 'ready',
+  saveBusy = false,
   showToast,
 }) => {
   const colors = useAppTheme();
@@ -31,6 +35,10 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
   const [searchTerm, setSearchTerm] = useState(initialWord);
   const { lookup, retry } = useDictionaryLookup(searchTerm);
   const key = lookup.key;
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const pendingSave = useRef(false);
+  const changeTerm = (value: string) => { if (!pendingSave.current) { setSaveError(null); setSearchTerm(value); } };
   const speechRequest = useRef(0);
   useEffect(() => {
     const stop = () => { speechRequest.current++; void Speech.stop().catch(() => {}); };
@@ -56,20 +64,26 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
     } catch { if (current()) showToast('Pronunciation is unavailable on this device.'); }
   };
 
-  const handleSave = () => {
-    if (!entry) return;
-    onSaveToLexicon({
-      bookId,
-      word: key.replace(/^./u, letter => letter.toUpperCase()),
-      phonetic: entry.phonetic,
-      partOfSpeech: entry.partOfSpeech,
-      definition: entry.definition,
-      contextPassage: contextPassage || entry.example,
-      chapter: 'Reader Lexicon',
-      masteryLevel: 1,
-    });
-    showToast(`Saved "${key}" to Lexicon Cards`);
-    onClose();
+  const handleSave = async () => {
+    if (!entry || pendingSave.current || saveStatus !== 'ready' || saveBusy) return;
+    pendingSave.current = true; setSaving(true); setSaveError(null);
+    try {
+      const saved = await onSaveToLexicon({
+        bookId,
+        word: key.replace(/^./u, letter => letter.toUpperCase()),
+        phonetic: entry.phonetic,
+        partOfSpeech: entry.partOfSpeech,
+        definition: entry.definition,
+        contextPassage: contextPassage || entry.example,
+        chapter: 'Reader Lexicon',
+        masteryLevel: 1,
+      });
+      if (saved) { showToast(`Saved "${key}" on this device`); onClose(); }
+      else setSaveError('Couldn’t save this card on this device. Your definition is still open; try again.');
+    } catch {
+      setSaveError('Couldn’t save this card on this device. Try again.');
+      showToast('Couldn’t save this card on this device. Try again.');
+    } finally { pendingSave.current = false; setSaving(false); }
   };
 
   return (
@@ -90,7 +104,8 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
           <TextInput
             autoFocus={!initialWord}
             value={searchTerm}
-            onChangeText={setSearchTerm}
+            editable={!saving}
+            onChangeText={changeTerm}
             accessibilityLabel="English dictionary word"
             placeholder="Look up an English word..."
             maxLength={80}
@@ -100,7 +115,7 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
             returnKeyType="search"
             style={styles.searchInput}
           />
-          {searchTerm ? <Pressable onPress={() => setSearchTerm('')} accessibilityRole="button" accessibilityLabel="Clear dictionary word" style={styles.closeBtn}>
+          {searchTerm ? <Pressable onPress={() => changeTerm('')} disabled={saving} accessibilityRole="button" accessibilityLabel="Clear dictionary word" style={styles.closeBtn}>
             <Icon name="close" size={20} color={colors.muted} />
           </Pressable> : null}
         </View>
@@ -155,7 +170,7 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
                 <Text style={[styles.section, { marginBottom: 6 }]}>SYNONYMS</Text>
                 <View style={styles.synRow}>
                   {entry.synonyms.map((s) => (
-                    <Pressable key={s} onPress={() => setSearchTerm(s)} accessibilityRole="button" accessibilityLabel={`Look up ${s}`} style={styles.synChip}>
+                    <Pressable key={s} onPress={() => changeTerm(s)} disabled={saving} accessibilityRole="button" accessibilityLabel={`Look up ${s}`} style={styles.synChip}>
                       <Text style={styles.synText}>{s}</Text>
                     </Pressable>
                   ))}
@@ -169,21 +184,26 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
           <Text style={styles.example}>“{contextPassage}”</Text>
         </View> : null}
       </ScrollView>
+      {saveError ? <Text style={[styles.note, { paddingHorizontal: 16, paddingBottom: 8 }]}>{saveError}</Text> : null}
+
+      {saveStatus !== 'ready' ? <Text accessibilityLiveRegion="polite" style={[styles.note, { paddingHorizontal: 16, paddingBottom: 8 }]}>
+        {saveStatus === 'loading' ? 'Loading saved vocabulary…' : 'Saved vocabulary could not be read. Use Try again in Notebook before saving.'}
+      </Text> : null}
 
       <View style={styles.footer}>
-        <Pressable onPress={onClose} accessibilityRole="button" style={styles.retryBtn}>
+        <Pressable onPress={onClose} disabled={saving} accessibilityRole="button" style={styles.retryBtn}>
           <Text style={styles.dismiss}>Dismiss</Text>
         </Pressable>
         <Pressable
           onPress={handleSave}
           accessibilityRole="button"
           accessibilityLabel="Save definition to Lexicon Cards"
-          accessibilityState={{ disabled: !entry }}
-          disabled={!entry}
-          style={[styles.saveBtn, !entry && { opacity: 0.45 }]}
+          accessibilityState={{ disabled: !entry || saving || saveBusy || saveStatus !== 'ready', busy: saving }}
+          disabled={!entry || saving || saveBusy || saveStatus !== 'ready'}
+          style={[styles.saveBtn, (!entry || saving || saveBusy || saveStatus !== 'ready') && { opacity: 0.45 }]}
         >
           <Icon name="bookmark_add" size={16} color="#fff" />
-          <Text style={styles.saveText}>Save to Lexicon Cards</Text>
+          <Text style={styles.saveText}>{saving ? 'Saving…' : 'Save to Lexicon Cards'}</Text>
         </Pressable>
       </View>
     </ModalShell>

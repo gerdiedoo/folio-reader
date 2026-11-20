@@ -84,8 +84,9 @@ policy behavior, idempotency, and legacy row preservation. CI runs both suites.
 
 These tests do not apply SQL to Supabase, exercise its gateway/JWT validation,
 complete Google OAuth, inspect native screens, or certify offline token refresh.
-This step is not a full sync engine: vocabulary/book/settings merge rules and
-reliable offline upload retries still need separate work. Step 12 adds separate
-[local highlight protection and merge rules](highlight-storage.md). On-device data is
+This step is not a full sync engine: book/settings merge rules and reliable offline
+upload retries still need separate work. Steps 12/13 add separate
+[highlight](highlight-storage.md) and [vocabulary](vocabulary-storage.md) archive/merge
+protections. On-device data is
 namespaced inside the app sandbox, not separately encrypted per account; this does
 not protect against a rooted device or direct access to the app's private files.

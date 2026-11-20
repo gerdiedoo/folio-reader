@@ -196,8 +196,8 @@ Failures while writing the original EPUB, reading pages, or library entry are
 handled separately from optional covers and cloud sync. Cleanup is attempted only
 for the new import's app-owned files; incomplete cleanup is reported. Abrupt
 process termination during import, native disk behavior and the older cloud merge
-strategy still require separate validation. Settings/vocabulary saves continue
-to use best-effort persistence. Step 12 separately protects highlights/reflections.
+strategy still require separate validation. Settings saves continue to use
+best-effort persistence. Steps 12/13 protect highlights/reflections and vocabulary.
 
 If the saved library index cannot be read or parsed at startup, automatic library
 saves and new imports are blocked rather than replacing it with an empty index.
@@ -384,7 +384,8 @@ not exercise native keyboard layout, TalkBack focus or actual phone performance.
 ## Dictionary lookup and pronunciation (step 11)
 
 This step adds no SQL migration. It fixes lookup/result pairing and service
-recovery; Lexicon storage and cloud sync still use their existing paths.
+recovery; step 13 separately covers protected vocabulary storage. Cloud retry and
+conflict handling remain separate work.
 When upgrading from before step 6, follow the [account-isolation rollout](account-isolation.md)
 and export precautions first.
 
@@ -459,11 +460,56 @@ the existing step 6 migration is still required for signed-in cloud access.
    covered by tests. Repeated failure may require recovery, not a reset.
 6. Verify the renamed **Upload to Supabase** action and device-first note merge
    explanation. Review edits on other devices before uploading; this step is not
-   a full sync/conflict engine. Vocabulary/settings/book metadata keep their
-   previous persistence behavior. Test TalkBack pending/disabled controls, large
+   a full sync/conflict engine. Vocabulary protection is covered by step 13;
+   settings/book metadata need separate work. Test TalkBack pending/disabled controls, large
    text, keyboard layout and modal dismissal on the phone.
 
 Automated tests cover queued storage acknowledgements, failures, corrupt/null
 data, retry, concurrent instances, startup merges, deletion suppression, account
 scope and draft retention. Native storage semantics, process termination during
 a save, live Supabase transitions and actual device layouts remain unverified.
+
+## Vocabulary and mastery storage (step 13)
+
+Read the [vocabulary rollout and limits](vocabulary-storage.md). Export important
+notes/cards first, then install over Folio Dev without uninstalling or clearing
+data. The local archive is created automatically; no new SQL is required. Older
+APKs cannot see new archive changes, so export before any downgrade.
+
+1. Look up a bundled word such as **quietude**, or an online definition when
+   connected. Save it to Lexicon Cards. The button should show a pending state,
+   reject duplicate taps and close only after confirmation. If saving fails
+   naturally, the definition/context should stay open with an inline error and
+   allow retry. Automated fault injection covers this without deliberately
+   filling or corrupting the phone's storage.
+2. In Notebook → Lexicon Cards, open the card, reveal its definition, then rate it.
+   While saving, all rating controls should be disabled. Success should say
+   **on this device**. Failure should retain the revealed card with an inline
+   error and leave its previously saved mastery unchanged. Retry the rating.
+3. Restart the app and verify the saved word, definition, context and mastery.
+   Repeat in airplane mode with a bundled word or an already saved card. Return
+   online and restart: local-only cards and device mastery should remain when
+   cloud records load. A valid cloud-only card should be added.
+4. Switch between two disposable signed-in accounts and Guest. Each should have
+   its own cards/mastery. Repeat returning quickly to an account after a save;
+   its latest confirmed state should remain. Supabase access still needs the
+   existing step 6 test-project migration and real sign-in configuration.
+5. If saved vocabulary cannot load, Notebook should offer **Try again** and block
+   combined export/upload. Dictionary lookup and note creation should still
+   work, but dictionary Save and mastery ratings must be disabled with an
+   explanation. Do not edit/corrupt native app storage to force this condition.
+6. Remove a disposable book with cards, restart and reconnect while old cloud
+   rows still exist. Its vocabulary must not return to this device. Other books'
+   cards and unassigned cards must remain. This does not prove server cleanup or
+   deletion on another device. Book removal spans separate writes and can
+   partially complete; read any reported failure before retrying.
+7. Check TalkBack names/disabled/selected/pending states, keyboard layout in the
+   dictionary, and long definitions/context in the scrollable flashcard. Repeat
+   at a large system text size, in landscape and with Charcoal. Speech, focus and
+   native layout still require device validation.
+
+Automated tests cover queued acknowledgements, invalid/null data, failed writes
+and retries, concurrent stores, stale cloud merges, mastery validation, account/
+backend/Guest separation, book-removal suppression and retained failure UI. They
+do not exercise actual Android storage faults, process death during a write, or
+live multi-device synchronization.
