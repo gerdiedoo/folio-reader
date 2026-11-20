@@ -13,6 +13,7 @@ import {
   TOPICS,
 } from '../lib/catalog';
 import { ImportStorageError } from '../lib/bookImport';
+import type { LocalStore } from '../lib/localStore';
 import { parseEpubFile } from '../lib/epubParser';
 import { F, type } from '../theme';
 import { Book, BookContentPage } from '../types';
@@ -22,6 +23,7 @@ import { Icon } from './ui/Icon';
 import { ProgressBar } from './ui/ProgressBar';
 
 interface Props {
+  storage: LocalStore;
   books: Book[];
   viewMode: BrowseViewMode;
   onViewModeChange: (mode: BrowseViewMode) => void;
@@ -132,6 +134,7 @@ const BookRow = React.memo<RowProps>(({ item, status, disabled, progressPercent,
 // Screen
 // ---------------------------------------------------------------------------
 export const BrowseBooksScreen: React.FC<Props> = ({
+  storage,
   books,
   viewMode,
   onViewModeChange,
@@ -226,7 +229,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   }, [queryInput]);
 
   useEffect(() => {
-    loadAdded().then(setAdded);
+    loadAdded(storage).then(setAdded);
   }, []);
 
   // ---- infinite scroll ----
@@ -273,13 +276,13 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       setActive({ id: item.id, phase: 'preparing', progressPercent: 100 });
       // let "Preparing…" paint before unzipping a big book occupies the JS thread
       await new Promise((r) => setTimeout(r, 60));
-      const { book, pages } = await parseEpubFile(uri, `${item.title}.epub`);
+      const { book, pages } = await parseEpubFile(uri, `${item.title}.epub`, storage);
       if (!book.coverUrl && item.coverUrl) {
         book.coverUrl = item.coverUrl;
         book.coverStyle = 'image';
       }
       await onAddEpubBook(book, pages);
-      setAdded(await rememberAdded(added, item.id, book.id));
+      setAdded(await rememberAdded(added, item.id, book.id, storage));
     } catch (err: unknown) {
       console.warn('Catalog download failed:', err);
       const msg = err instanceof Error ? err.message : '';

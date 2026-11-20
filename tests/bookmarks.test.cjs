@@ -73,7 +73,6 @@ test('concurrent operations serialize without losing bookmarks', async () => {
   const a = bookmark(), b = bookmark('book-b');
   await Promise.all([store.toggle(a), store.toggle(b)]);
   assert.deepEqual(await createBookmarkStore(storage).load(), [a, b]);
-  assert.equal(storage.reads, 2); // one for each store instance
 });
 
 test('two concurrent toggles of one passage do not create duplicates', async () => {
@@ -141,4 +140,34 @@ test('font and display pagination changes do not change a saved source passage',
   assert.equal(findBookmarkPage(saved, pages.map(p => ({ ...p, displayFontSize: 32 }))), 1);
   assert.equal(findBookmarkPage(saved, [page(1)]), -1);
   assert.equal(findBookmarkPage(saved, [{ ...page(4), locNumber: 999 }]), -1);
+});
+
+test('bookmark stores in two accounts and Guest cannot see or remove one another', async () => {
+  const values = new Map();
+  const storage = { async getItem(key) { return values.get(key) ?? null; }, async setItem(key, value) { values.set(key, value); } };
+  const a = createBookmarkStore(storage, 'scope-A.bookmarks');
+  const b = createBookmarkStore(storage, 'scope-B.bookmarks');
+  const guest = createBookmarkStore(storage, 'scope-guest.bookmarks');
+  const saved = bookmark();
+  await a.toggle(saved); assert.deepEqual(await b.load(), []); assert.deepEqual(await guest.load(), []);
+  await b.toggle(saved); await b.remove(saved.id);
+  assert.deepEqual(await createBookmarkStore(storage, 'scope-A.bookmarks').load(), [saved]);
+});
+
+test('a remounted account waits for earlier bookmark saves and keeps both new and old locations', async () => {
+  const values = new Map();
+  let release;
+  const paused = new Promise(resolve => { release = resolve; });
+  const storage = { async getItem(key) { return values.get(key) ?? null; }, async setItem(key, value) { await paused; values.set(key, value); } };
+  const oldA = createBookmarkStore(storage, 'A');
+  const first = bookmark(), second = bookmark('book-a', 2);
+  const saving = oldA.toggle(first);
+  const newA = createBookmarkStore(storage, 'A');
+  let loaded = false;
+  const reading = newA.load().then(items => { loaded = true; return items; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(loaded, false);
+  release(); await saving;
+  assert.deepEqual(await reading, [first]);
+  assert.deepEqual(await newA.toggle(second), [first, second]);
 });

@@ -14,8 +14,8 @@ import {
 } from '@expo-google-fonts/manrope';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, BackHandler, StyleSheet, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, AppState, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomNav } from './src/components/BottomNav';
 import { DictionaryModal } from './src/components/DictionaryModal';
@@ -37,44 +37,25 @@ import {
 } from './src/data/initialData';
 import { normalizeReaderSettings } from './src/lib/readerPreferences';
 import { createBookmark, createBookmarkStore } from './src/lib/bookmarks';
-import { loadJSON, loadJSONStrict, loadPages, removeBookFiles, saveJSON, saveJSONStrict, savePages } from './src/lib/localStore';
+import { watchAccountSession } from './src/lib/accountSession';
+import { createLocalStore } from './src/lib/localStore';
 import { createImportCommitter, ImportStorageError } from './src/lib/bookImport';
-import { parseEpubFile } from './src/lib/epubParser';
+import { parseEpubFile as parseEpubForStore } from './src/lib/epubParser';
 import {
   CatalogBook,
   deleteDownloaded,
   downloadEpub,
   findCatalogBook,
   getCatalogBook,
-  loadAdded,
+  loadAdded as loadAddedForStore,
   LibraryRestoreFailure,
   LibraryRestoreProgress,
   LibraryRestoreResult,
   LibraryRecoveryBook,
-  rememberAdded,
+  rememberAdded as rememberAddedForStore,
   LibraryBackupEntry,
 } from './src/lib/catalog';
-import {
-  deleteBookFromSupabase,
-  deleteHighlightFromSupabase,
-  fetchBooksFromSupabase,
-  fetchHighlightsFromSupabase,
-  fetchLexiconFromSupabase,
-  fetchReadingGoalFromSupabase,
-  fetchReadingSettingsFromSupabase,
-  fetchLibraryBackup,
-  getCurrentSupabaseUser,
-  saveLibraryBackup,
-  signInWithGoogle,
-  signOutSupabase,
-  supabase,
-  toUserProfile,
-  upsertBookToSupabase,
-  upsertHighlightToSupabase,
-  upsertLexiconToSupabase,
-  upsertReadingGoalToSupabase,
-  upsertReadingSettingsToSupabase,
-} from './src/lib/supabase';
+import { createAccountRepository, signInWithGoogle, signOutSupabase, supabase, toUserProfile, SUPABASE_URL } from './src/lib/supabase';
 import { colors, NAV_SPACE } from './src/theme';
 import { AppThemeProvider, createPalette } from './src/AppTheme';
 import {
@@ -119,15 +100,23 @@ function applySavedReadingProgress(book: Book, entry: LibraryBackupEntry): Book 
   };
 }
 
-const bookmarkStore = createBookmarkStore(AsyncStorage);
-
-function FolioApp() {
+function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; scope: string; hasLegacyData: boolean }) {
+  const storage = useMemo(() => createLocalStore(scope), [scope]);
+  const { loadJSON, loadJSONStrict, loadPages, removeBookFiles, saveJSON, saveJSONStrict, savePages } = storage;
+  const cloud = useMemo(() => createAccountRepository(supabase, user?.id ?? null), [user?.id]);
+  const { deleteBookFromSupabase, deleteHighlightFromSupabase, fetchBooksFromSupabase, fetchHighlightsFromSupabase, fetchLexiconFromSupabase, fetchReadingGoalFromSupabase, fetchReadingSettingsFromSupabase, fetchLibraryBackup, saveLibraryBackup, upsertBookToSupabase, upsertHighlightToSupabase, upsertLexiconToSupabase, upsertReadingGoalToSupabase, upsertReadingSettingsToSupabase } = cloud;
+  const bookmarkStore = useMemo(() => createBookmarkStore(AsyncStorage, storage.storageKey('bookmarks')), [storage]);
+  const parseEpubFile = (uri: string, name: string) => parseEpubForStore(uri, name, storage);
+  const loadAdded = () => loadAddedForStore(storage);
+  const rememberAdded = (current: Record<string, string>, id: string, bookId: string) => rememberAddedForStore(current, id, bookId, storage);
   const insets = useSafeAreaInsets();
 
   const [activeTab, setActiveTab] = useState<TabType>('library');
   const [books, setBooks] = useState<Book[]>(INITIAL_BOOKS);
   const booksRef = useRef(books);
   booksRef.current = books;
+  const spaceActive = useRef(true);
+  useEffect(() => { spaceActive.current = true; return () => { spaceActive.current = false; }; }, []);
   const libraryLoadState = useRef<'loading' | 'ready' | 'error'>('loading');
   const importCommitterRef = useRef<ReturnType<typeof createImportCommitter> | null>(null);
   if (!importCommitterRef.current) {
@@ -135,6 +124,7 @@ function FolioApp() {
       savePages,
       removeFiles: removeBookFiles,
       saveLibraryEntry: async (book) => {
+        if (!spaceActive.current) throw new ImportStorageError('Import stopped after the reading space changed. Retry in the original space.');
         if (libraryLoadState.current !== 'ready') {
           throw new ImportStorageError(libraryLoadState.current === 'loading'
             ? 'Your library is still loading. Try importing again in a moment.'
@@ -155,7 +145,6 @@ function FolioApp() {
   const [readingGoal, setReadingGoal] = useState<ReadingGoal>(INITIAL_GOAL);
   const [highlights, setHighlights] = useState<HighlightEntry[]>(INITIAL_HIGHLIGHTS);
   const [lexicon, setLexicon] = useState<LexiconEntry[]>(INITIAL_LEXICON);
-  const [user, setUser] = useState<UserProfile | null>(null);
   const [recoveryBooks, setRecoveryBooks] = useState<LibraryRecoveryBook[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [jumpTarget, setJumpTarget] = useState<JumpTarget | null>(null);
@@ -192,7 +181,7 @@ function FolioApp() {
     } catch {
       setBookmarkStatus('error');
     }
-  }, []);
+  }, [bookmarkStore]);
   useEffect(() => { void loadBookmarks(); }, [loadBookmarks]);
   const [isSettingsSheetOpen, setIsSettingsSheetOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -324,26 +313,8 @@ function FolioApp() {
       }
     })();
 
-    getCurrentSupabaseUser().then((u) => {
-      if (u && !cancelled) setUser(u);
-    });
+    return () => { cancelled = true; };
 
-    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-      if (session?.user) {
-        const profile = toUserProfile(session.user);
-        setUser(profile);
-        if (event === 'SIGNED_IN') {
-          showToast(`Signed in as ${profile?.email ?? profile?.fullName ?? 'your account'}`);
-        }
-      } else {
-        setUser(null);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-      authListener?.subscription?.unsubscribe();
-    };
   }, [showToast]);
 
   // ---- Persist local copies (only after hydration so we never clobber saved data) ----
@@ -455,7 +426,6 @@ function FolioApp() {
   };
   const handleSignOut = async () => {
     await signOutSupabase();
-    setUser(null);
   };
 
   const handleBackupLibrary = async (): Promise<number> => {
@@ -526,6 +496,7 @@ function FolioApp() {
     const failures: LibraryRestoreFailure[] = [];
 
     for (const [index, entry] of backup.entries()) {
+      if (!spaceActive.current) throw new Error('Restore stopped after the reading space changed.');
       const titleKey = normalizeBookMetadata(entry.title);
       const basePercent = (index / backup.length) * 100;
       const bookPercent = 100 / backup.length;
@@ -716,7 +687,7 @@ function FolioApp() {
   };
 
   const writeBookmarks = async (operation: () => Promise<Bookmark[]>, message: (items: Bookmark[]) => string) => {
-    if (bookmarkStatus !== 'ready' || bookmarkWritePending.current) return;
+    if (!spaceActive.current || bookmarkStatus !== 'ready' || bookmarkWritePending.current) return;
     bookmarkWritePending.current = true;
     setBookmarkSaving(true);
     try {
@@ -818,7 +789,7 @@ function FolioApp() {
     if (currentBookId === bookId) setCurrentBookId(remainingBooks[0]?.id ?? '');
     const removedLocalFiles = removeBookFiles(bookId, book.coverUrl);
 
-    const removedFromCloud = await deleteBookFromSupabase(bookId);
+    const removedFromCloud = user ? await deleteBookFromSupabase(bookId) : true;
     showToast(
       !removedLocalFiles
         ? `"${book.title}" removed from Library; some local files could not be deleted`
@@ -868,6 +839,8 @@ function FolioApp() {
       <View style={[styles.main, { paddingTop: topPad, paddingBottom: reading ? 0 : 0 }]}>
         {activeTab === 'library' && (
           <LibraryView
+            storage={storage}
+            hasLegacyData={hasLegacyData}
             books={books}
             recoveryBooks={recoveryBooks}
             selectedBookId={bookDetailsId}
@@ -916,6 +889,7 @@ function FolioApp() {
 
         {activeTab === 'notebook' && (
           <NotebookView
+            cloud={cloud}
             books={books}
             highlights={highlights}
             lexicon={lexicon}
@@ -1005,6 +979,38 @@ function FolioApp() {
   );
 }
 
+// The key unmounts old screens/state; each asynchronous operation retains its old
+// storage and cloud repository rather than acquiring the next account's scope.
+function AccountBoundary() {
+  const [identity, setIdentity] = useState<{ user: UserProfile | null } | null>(null);
+  const [error, setError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const [hasLegacyData, setHasLegacyData] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void Promise.all(['books', 'highlights', 'lexicon', 'bookmarks'].map(key => AsyncStorage.getItem(`folio.v1.${key}`)))
+      .then(values => { if (active) setHasLegacyData(values.some(value => value !== null)); })
+      .catch(() => { if (active) setHasLegacyData(true); });
+    return () => { active = false; };
+  }, []);
+  useEffect(() => watchAccountSession(supabase.auth, session => {
+    setIdentity({ user: session?.user ? toUserProfile(session.user) : null });
+    setError(false);
+  }, () => setError(true)), [attempt]);
+  if (!identity) return (
+    <View style={[styles.app, styles.center]}>
+      {error ? <>
+        <Text>Could not open your account safely.</Text>
+        <Pressable accessibilityRole="button" onPress={() => { setError(false); setAttempt(value => value + 1); }} style={{ padding: 24 }}>
+          <Text>Try again</Text>
+        </Pressable>
+      </> : <ActivityIndicator accessibilityLabel="Opening your reading space" />}
+    </View>
+  );
+  const scope = `${new URL(SUPABASE_URL || 'https://unconfigured.invalid').hostname}:${identity.user?.id ?? 'guest'}`;
+  return <FolioApp key={scope} scope={scope} user={identity.user} hasLegacyData={hasLegacyData} />;
+}
+
 export default function App() {
   const [fontsLoaded] = useFonts({
     EBGaramond_400Regular,
@@ -1029,7 +1035,7 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <FolioApp />
+      <AccountBoundary />
     </SafeAreaProvider>
   );
 }

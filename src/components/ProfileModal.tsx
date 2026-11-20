@@ -154,7 +154,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
             <View style={styles.authRow}>
               <View style={styles.authBadge}>
                 <View style={styles.authDot} />
-                <Text style={styles.authBadgeText}>Authenticated via Google</Text>
+                <Text style={styles.authBadgeText}>Signed in</Text>
               </View>
               <Pressable onPress={handleSignOut} hitSlop={8} disabled={!!libraryAction}>
                 <Text style={styles.signOut}>Sign Out</Text>
@@ -168,6 +168,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                   {isSigningIn ? 'Connecting to Google...' : 'Sign in with Google / Gmail'}
                 </Text>
               </Pressable>
+              <Text style={{ ...type.bodySm, color: colors.muted }}>
+                Signing in opens a separate reading space. Guest books and notes stay in Guest on this device.
+              </Text>
               <Pressable onPress={() => setShowSetupGuide(!showSetupGuide)} style={styles.helpRow}>
                 <Icon name="help" size={14} color={colors.primary} />
                 <Text style={styles.helpText}>

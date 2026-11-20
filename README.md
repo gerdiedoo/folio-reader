@@ -16,12 +16,13 @@ works in Expo Go; no custom native code.
 
 ## Supabase setup
 
-1. Run [`supabase/schema.sql`](./supabase/schema.sql) in the Supabase SQL editor, or copy the
-   same SQL from **Notebook → Supabase Config → Copy SQL** in the app.
-   This creates the private, RLS-protected `library_backups` table used by the profile's
-   **Back up** and **Restore** actions. If upgrading an existing project, rerun the script to
-   add this table and its account-only policies. It also adds the previously missing
-   `books.cover_style` and `reading_settings.default_cover_style` columns.
+1. For existing installations, read [account migration](docs/account-isolation.md)
+   before updating. Run the complete [account-isolation migration](supabase/migrations/202611200001_account_isolation.sql)
+   in the **Folio Dev test project first**. Fresh projects can use
+   [`supabase/schema.sql`](./supabase/schema.sql), which contains the same canonical
+   SQL. The migration creates private `folio_*` tables, enforces owner RLS, and
+   quarantines the old shared tables without deleting or claiming their rows.
+
 2. For EAS preview builds, add `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_KEY` to the
    EAS **preview** environment. These `EXPO_PUBLIC_` values are bundled into the app; use the
    project URL and publishable/anon key, never a `service_role` key. Then rebuild the APK.
@@ -68,7 +69,7 @@ works in Expo Go; no custom native code.
 - Imported book text is displayed without mock/suggested highlights; only highlights you save are marked in the reader.
 - Signed-out profile and account surfaces show a Guest identity until the user signs in.
 - The selected reading theme (Parchment, White, Sepia, or Charcoal) is applied across app screens, navigation, and dialogs.
-- All tables use a shared `default_user` row / no RLS, so every install of the same Supabase project sees the same data. Add a `user_id` column and Row Level Security before shipping.
+- Signed-in cloud records use account-owned `folio_*` tables with RLS and composite `(user_id, id)` keys. Guest is local only. Accounts and Guest have separate metadata, files and bookmarks; legacy shared data is preserved without automatic adoption. See the migration guide before installing this update.
 - `assets/folio-logo.svg` is the source logo; Expo uses its 1024×1024 PNG export as the app icon.
 
 ## Development checks
@@ -157,3 +158,13 @@ cloud backup. Optional cover extraction may fall back to a typographic cover.
 The tests inject file-copy, page-write, metadata-write and deletion failures using
 mocked storage adapters. This is not a filesystem-level atomic transaction or a
 claim of recovery from power loss/process termination during a write.
+
+## Account-isolation checks
+
+`npm test` exercises the account-bound client, session races, namespaced caches,
+and file-path restrictions with mocked adapters. `npm run test:account-db` starts
+a disposable PostgreSQL 17 Docker container with no published port, tests real
+RLS using two authenticated identities plus anon, then removes the container.
+It needs a running Docker daemon and the official `postgres:17-alpine` image.
+These checks also run in the Folio Dev build workflow. They do not contact the
+live Supabase project or validate Google sign-in on a phone.

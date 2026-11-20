@@ -42,29 +42,26 @@ function readBookmarks(raw: string | null): Bookmark[] {
   return records as Bookmark[];
 }
 
-export function createBookmarkStore(storage: BookmarkStorage) {
-  let cache: Bookmark[] | undefined;
-  let reading: Promise<Bookmark[]> | undefined;
-  let pending = Promise.resolve();
+const storageQueues = new WeakMap<BookmarkStorage, Map<string, Promise<void>>>();
+
+export function createBookmarkStore(storage: BookmarkStorage, storageKey = STORAGE_KEY) {
+  let queues = storageQueues.get(storage);
+  if (!queues) { queues = new Map(); storageQueues.set(storage, queues); }
+  const queue = queues;
   const load = async (): Promise<Bookmark[]> => {
-    if (cache) return cache;
-    if (!reading) {
-      reading = storage.getItem(STORAGE_KEY).then(raw => {
-        cache = readBookmarks(raw);
-        return cache;
-      }).finally(() => { reading = undefined; });
-    }
-    return reading;
+    await queue.get(storageKey);
+    return readBookmarks(await storage.getItem(storageKey));
   };
   const update = (change: (current: Bookmark[]) => Bookmark[]) => {
-    const operation = pending.then(async () => {
-      const next = change(await load());
-      // Commit the in-memory snapshot only after durable storage succeeds.
-      await storage.setItem(STORAGE_KEY, JSON.stringify(next));
-      cache = next;
+    const operation = (queue.get(storageKey) ?? Promise.resolve()).then(async () => {
+      // Read durable state inside the queue; an older mounted instance may have saved.
+      const next = change(readBookmarks(await storage.getItem(storageKey)));
+      await storage.setItem(storageKey, JSON.stringify(next));
       return next;
     });
-    pending = operation.then(() => undefined, () => undefined);
+    const settled = operation.then(() => undefined, () => undefined);
+    queue.set(storageKey, settled);
+    void settled.then(() => { if (queue.get(storageKey) === settled) queue.delete(storageKey); });
     return operation;
   };
   return {

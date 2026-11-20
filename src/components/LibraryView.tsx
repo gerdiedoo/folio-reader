@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';
 import { parseEpubFile } from '../lib/epubParser';
-import { persistCoverImage } from '../lib/localStore';
+import type { LocalStore } from '../lib/localStore';
 import { colors, F, NAV_SPACE, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
 import { Book, BookContentPage, ReadingGoal } from '../types';
@@ -25,6 +25,8 @@ import { ModalShell } from './ui/ModalShell';
 import { ProgressBar } from './ui/ProgressBar';
 
 interface LibraryViewProps {
+  storage: LocalStore;
+  hasLegacyData: boolean;
   books: Book[];
   recoveryBooks: LibraryRecoveryBook[];
   selectedBookId: string | null;
@@ -76,6 +78,8 @@ function formatLastRead(value: string): string {
 }
 
 export const LibraryView: React.FC<LibraryViewProps> = ({
+  storage,
+  hasLegacyData,
   books,
   recoveryBooks,
   selectedBookId,
@@ -164,7 +168,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         return;
       }
       setImporting(true);
-      const { book, pages } = await parseEpubFile(asset.uri, asset.name);
+      const { book, pages } = await parseEpubFile(asset.uri, asset.name, storage);
       const bookWithProgress = await onRestoreImportedProgress(book);
       await onAddEpubBook(bookWithProgress, pages);
     } catch (err: unknown) {
@@ -190,7 +194,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         return;
       }
       setReimportingId(recovery.id);
-      const { book, pages } = await parseEpubFile(asset.uri, asset.name);
+      const { book, pages } = await parseEpubFile(asset.uri, asset.name, storage);
       await onReimportRecoveryBook(recovery, book, pages);
     } catch (err: unknown) {
       console.warn(`EPUB re-import failed for "${recovery.title}":`, err);
@@ -357,6 +361,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       keyboardShouldPersistTaps="handled"
     >
       {/* Today's reading time */}
+      {hasLegacyData && (
+        <View style={{ padding: 16, gap: 8, borderRadius: 12, backgroundColor: colors.surfaceContainer }}>
+          <Text style={{ ...type.bodyMd, color: colors.onSurface }}>Your older library is preserved on this device.</Text>
+          <Text style={{ ...type.bodySm, color: colors.muted }}>It hasn't been assigned to this reading space. Accounts and Guest now keep separate books and notes. Keep Folio Dev installed while you review the migration guide.</Text>
+        </View>
+      )}
+
       <View style={styles.goalCard}>
         <View style={styles.readingTimeIcon}>
           <Icon name="schedule" size={25} color={colors.primary} />
@@ -583,6 +594,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
       {browseOpen && (
         <BrowseBooksScreen
+          storage={storage}
           books={books}
           viewMode={browseViewMode}
           onViewModeChange={setBrowseViewMode}
@@ -595,6 +607,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
       {editing && (
         <CoverEditor
+          storage={storage}
           book={editing}
           globalStyle={globalCoverStyle}
           onClose={() => setEditing(null)}
@@ -618,12 +631,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 // Cover editor
 // ---------------------------------------------------------------------------
 const CoverEditor: React.FC<{
+  storage: LocalStore;
   book: Book;
   globalStyle: 'image' | 'typographic';
   onClose: () => void;
   onSave: (style: 'image' | 'typographic', url?: string) => void;
   onRemove: () => void;
-}> = ({ book, globalStyle, onClose, onSave, onRemove }) => {
+}> = ({ storage, book, globalStyle, onClose, onSave, onRemove }) => {
   const colors = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [style, setStyle] = useState<'image' | 'typographic'>(book.coverStyle || globalStyle);
@@ -632,7 +646,8 @@ const CoverEditor: React.FC<{
   const [tint, setTint] = useState<ClothTint>('parchment');
   const [confirmingRemove, setConfirmingRemove] = useState(false);
 
-  const previewUri = pickedUri ?? (url.trim() || book.coverUrl);
+  const remoteUrl = /^https?:\/\//i.test(url.trim()) ? url.trim() : '';
+  const previewUri = pickedUri ?? (remoteUrl || book.coverUrl);
 
   const choosePhoto = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -644,7 +659,7 @@ const CoverEditor: React.FC<{
       quality: 0.8,
     });
     if (res.canceled || !res.assets?.[0]) return;
-    setPickedUri(persistCoverImage(res.assets[0].uri, book.id));
+    setPickedUri(storage.persistCoverImage(res.assets[0].uri, book.id));
     setStyle('image');
   };
 

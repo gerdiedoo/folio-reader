@@ -11,6 +11,7 @@ on:
       - App.tsx
       - index.ts
       - src/**
+      - supabase/**
       - assets/**
       - package.json
       - package-lock.json
@@ -43,6 +44,8 @@ jobs:
         run: npm ci
       - name: Run regression tests
         run: npm test
+      - name: Test PostgreSQL account isolation
+        run: npm run test:account-db
       - name: Check TypeScript
         run: npm run typecheck
       - name: Check Expo token is configured

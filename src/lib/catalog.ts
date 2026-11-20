@@ -1,5 +1,6 @@
 import { File, Paths } from 'expo-file-system';
 import { loadJSON, saveJSON } from './localStore';
+import type { LocalStore } from './localStore';
 
 /**
  * Free book catalog: Project Gutenberg (public-domain books) through the open Gutendex API.
@@ -288,16 +289,17 @@ export function deleteDownloaded(uri: string): void {
 const ADDED_KEY = 'catalog.added';
 
 /** catalog id → library book id, persisted so the Browse screen can show "Read" instead of "Get". */
-export async function loadAdded(): Promise<Record<string, string>> {
-  return (await loadJSON<Record<string, string>>(ADDED_KEY)) ?? {};
+export async function loadAdded(storage: Pick<LocalStore, 'loadJSON' | 'saveJSON'> = { loadJSON, saveJSON }): Promise<Record<string, string>> {
+  return (await storage.loadJSON<Record<string, string>>(ADDED_KEY)) ?? {};
 }
 
 export async function rememberAdded(
   current: Record<string, string>,
   catalogId: string,
-  bookId: string
+  bookId: string,
+  storage: Pick<LocalStore, 'loadJSON' | 'saveJSON'> = { loadJSON, saveJSON }
 ): Promise<Record<string, string>> {
   const next = { ...current, [catalogId]: bookId };
-  await saveJSON(ADDED_KEY, next);
+  await storage.saveJSON(ADDED_KEY, next);
   return next;
 }

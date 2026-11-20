@@ -10,9 +10,10 @@ Folio Dev deletes its local data; you do not need to uninstall the main app.
 
 1. Open the new **Folio Dev** Supabase project. In SQL Editor, run
    [`supabase/schema.sql`](../supabase/schema.sql). Confirm you selected the test
-   project before executing SQL. This is the schema for the current application;
-   the main tables still share test data across clients. Use synthetic test data
-   until per-account isolation is implemented. The backup table has account RLS.
+   project before executing SQL. If upgrading an older Folio Dev install, read
+   [account isolation](account-isolation.md) first and export important notes before
+   updating. The complete SQL creates private account tables and quarantines old
+   shared tables; it does not assign old rows or device caches to an account.
 2. Get the test project's URL and publishable key (or legacy anon key). Never use
    a service-role key, `sb_secret_` key, or database password in the app.
 3. The `dev-preview` profile in `eas.json` contains this test project's URL and
@@ -85,8 +86,8 @@ not in source files or this chat.
 - Enable airplane mode and reopen an imported book.
 - Try large system text and TalkBack, then report unreadable or unreachable controls.
 - If testing sync, verify records appear only in the test project. Main Folio's
-  library should not change. Avoid interpreting this as proof of account isolation
-  within the test project; that is a separate pending improvement.
+  library should not change. Use the two-account checklist in the migration guide
+  to verify isolation in the actual Supabase project and on your phone.
 
 Preparing configuration does not create an APK or apply SQL. Verify the EAS build,
 installation, schema, connectivity, and device behavior as separate steps.
@@ -202,3 +203,11 @@ If the saved library index cannot be read or parsed at startup, automatic librar
 saves and new imports are blocked rather than replacing it with an empty index.
 Restart after resolving the storage problem. Persistent corruption may require
 recovery work; the app does not delete or reset the index automatically.
+
+## Account isolation update
+
+Read [the migration and two-account checklist](account-isolation.md) **before
+installing this APK**. Older device data is retained but will not appear in the
+new account/Guest spaces automatically. Apply the entire SQL migration only to
+Folio Dev's test project; do not change the main Folio production project in this
+step. Guest works offline without the migration; signed-in sync needs it.

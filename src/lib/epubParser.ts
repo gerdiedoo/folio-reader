@@ -4,7 +4,8 @@ import JSZip from 'jszip';
 import { HTMLElement as HtmlNode, Node as HtmlTreeNode, NodeType, parse as parseHtml } from 'node-html-parser';
 import { Book, BookContentPage } from '../types';
 import { ImportStorageError } from './bookImport';
-import { coversDir, persistBookFile, removeBookFiles } from './localStore';
+import { coversDir as defaultCoversDir, persistBookFile as defaultPersistBookFile, removeBookFiles as defaultRemoveBookFiles } from './localStore';
+import type { LocalStore } from './localStore';
 
 export interface ParsedEpub {
   book: Book;
@@ -97,7 +98,8 @@ function extractReadingBlocks(root: HtmlNode): string[] {
   return blocks;
 }
 
-export async function parseEpubFile(fileUri: string, fileName: string): Promise<ParsedEpub> {
+export async function parseEpubFile(fileUri: string, fileName: string, storage?: Pick<LocalStore, 'coversDir' | 'persistBookFile' | 'removeBookFiles'>): Promise<ParsedEpub> {
+  const { coversDir, persistBookFile, removeBookFiles } = storage ?? { coversDir: defaultCoversDir, persistBookFile: defaultPersistBookFile, removeBookFiles: defaultRemoveBookFiles };
   const bytes = await new File(fileUri).bytes();
   const zip = await JSZip.loadAsync(bytes);
 

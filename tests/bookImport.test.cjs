@@ -200,3 +200,65 @@ test('strict library reads distinguish missing storage from unreadable or corrup
   d.asyncStorage.getItem = async () => { throw Error('Read unavailable'); };
   await assert.rejects(d.store.loadJSONStrict('books'), /Read unavailable/);
 });
+
+test('account A, B and Guest caches and reading files stay separate across switches', async () => {
+  const d = device();
+  const a = d.store.createLocalStore('project:A'), b = d.store.createLocalStore('project:B'), guest = d.store.createLocalStore('project:guest');
+  const list = [{ id: 'same', title: 'A private book' }];
+  await a.saveJSONStrict('books', list); a.savePages('same', [{ paragraph1: 'A private passage' }]);
+  assert.equal(await b.loadJSON('books'), null); assert.equal(await guest.loadJSON('books'), null);
+  assert.equal(await b.loadPages('same'), null); assert.equal(await guest.loadPages('same'), null);
+  await b.saveJSONStrict('books', [{ id: 'same', title: 'B book' }]); b.savePages('same', [{ paragraph1: 'B passage' }]);
+  assert.equal((await a.loadPages('same'))[0].paragraph1, 'A private passage');
+  assert.equal((await b.loadPages('same'))[0].paragraph1, 'B passage');
+  b.removeBookFiles('same');
+  assert.equal((await a.loadPages('same'))[0].paragraph1, 'A private passage');
+  const reopenedA = d.store.createLocalStore('project:A');
+  assert.deepEqual(JSON.parse(JSON.stringify(await reopenedA.loadJSON('books'))), list);
+});
+
+test('late work on A retains A storage even after B is opened', async () => {
+  const d = device(), a = d.store.createLocalStore('project:A');
+  const pending = a.saveJSONStrict('highlights', [{ text: 'A only' }]);
+  const b = d.store.createLocalStore('project:B');
+  await pending;
+  assert.equal(await b.loadJSON('highlights'), null);
+  assert.equal((await a.loadJSON('highlights'))[0].text, 'A only');
+});
+
+test('unattributed legacy caches and files are preserved without being adopted by accounts or Guest', async () => {
+  const d = device();
+  d.storage.set('folio.v1.books', JSON.stringify([{ id: 'old', title: 'Unattributed' }]));
+  d.files.set('file:///docs/folio/pages/old.json', JSON.stringify([{ paragraph1: 'Unattributed text' }]));
+  for (const scope of ['project:A', 'project:B', 'project:guest']) {
+    const store = d.store.createLocalStore(scope);
+    assert.equal(await store.loadJSON('books'), null); assert.equal(await store.loadPages('old'), null);
+    store.removeBookFiles('old');
+  }
+  assert.equal((await d.store.loadJSON('books'))[0].title, 'Unattributed');
+  assert.ok(d.files.has('file:///docs/folio/pages/old.json'));
+});
+
+test('untrusted book IDs cannot traverse out of an account file namespace', async () => {
+  const d = device(), b = d.store.createLocalStore('project:B');
+  for (const id of ['../A/private', '/absolute', 'same/../../private', 'same%2Fprivate', '..', '']) {
+    assert.equal(await b.loadPages(id), null);
+    assert.throws(() => b.savePages(id, pages));
+    assert.equal(b.removeBookFiles(id), false);
+  }
+  assert.equal(d.deleted.length, 0);
+});
+
+test('returning to A waits for its previous pending metadata write; B does not wait for A', async () => {
+  const d = device(), paused = gate();
+  const a = d.store.createLocalStore('project:A');
+  const originalSet = d.asyncStorage.setItem;
+  d.asyncStorage.setItem = async (key, value) => { if (key === a.storageKey('books')) await paused.promise; return originalSet(key, value); };
+  const saving = a.saveJSONStrict('books', [{ id: 'same', title: 'Newest A' }]);
+  let returned = false;
+  const reading = d.store.createLocalStore('project:A').loadJSONStrict('books').then(value => { returned = true; return value; });
+  assert.equal(await d.store.createLocalStore('project:B').loadJSONStrict('books'), null);
+  assert.equal(returned, false);
+  paused.resolve(); await saving;
+  assert.equal((await reading)[0].title, 'Newest A');
+});

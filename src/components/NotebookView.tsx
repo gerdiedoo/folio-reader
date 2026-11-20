@@ -4,13 +4,8 @@ import * as Sharing from 'expo-sharing';
 import * as Speech from 'expo-speech';
 import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import {
-  SUPABASE_SQL_SCHEMA,
-  testSupabaseConnection,
-  upsertBookToSupabase,
-  upsertHighlightToSupabase,
-  upsertLexiconToSupabase,
-} from '../lib/supabase';
+import { SUPABASE_SQL_SCHEMA } from '../lib/supabase';
+import type { createAccountRepository } from '../lib/cloudAccount';
 import { colors, F, NAV_SPACE, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
 import { Book, HighlightEntry, LexiconEntry } from '../types';
@@ -20,6 +15,7 @@ import { Icon } from './ui/Icon';
 import { ModalShell } from './ui/ModalShell';
 
 interface NotebookViewProps {
+  cloud: ReturnType<typeof createAccountRepository>;
   books: Book[];
   highlights: HighlightEntry[];
   lexicon: LexiconEntry[];
@@ -35,6 +31,7 @@ interface NotebookViewProps {
 type NotebookFilter = 'all' | 'highlights' | 'notes' | 'lexicon';
 
 export const NotebookView: React.FC<NotebookViewProps> = ({
+  cloud,
   books,
   highlights,
   lexicon,
@@ -47,6 +44,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   bottomInset,
 }) => {
   const colors = useAppTheme();
+  const { testSupabaseConnection, upsertBookToSupabase, upsertHighlightToSupabase, upsertLexiconToSupabase } = cloud;
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [selectedBookId, setSelectedBookId] = useState<string>('all');
   const [isBookPickerOpen, setIsBookPickerOpen] = useState(false);
@@ -109,7 +107,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
     }
 
     try {
-      const file = new File(Paths.cache, `Folio_Marginalia_${selectedBook?.id ?? 'all'}.md`);
+      const file = new File(Paths.cache, `Folio_Marginalia_${Date.now()}_${Math.random().toString(36).slice(2)}.md`);
       if (!file.exists) file.create();
       file.write(md);
 
@@ -138,6 +136,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
     setIsSyncing(true);
     const conn = await testSupabaseConnection();
     setDbStatus(conn.message);
+    if (!conn.connected) { setIsSyncing(false); showToast(conn.message); return; }
     // Push everything local → Supabase (the web version only tested the connection)
     const results = await Promise.all([
       ...books.map(upsertBookToSupabase),
