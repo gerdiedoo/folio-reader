@@ -1,6 +1,6 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BackHandler,
   Pressable,
@@ -11,6 +11,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import type { BookRemovalResult } from '../lib/bookRemoval';
 import { parseEpubFile } from '../lib/epubParser';
 import type { LocalStore } from '../lib/localStore';
 import { colors, F, NAV_SPACE, type } from '../theme';
@@ -42,7 +43,7 @@ interface LibraryViewProps {
     pages: BookContentPage[]
   ) => Promise<void>;
   onUpdateBookCover: (bookId: string, style: 'image' | 'typographic', url?: string) => void;
-  onRemoveBook: (bookId: string) => void;
+  onRemoveBook: (bookId: string) => Promise<BookRemovalResult>;
   showToast: (msg: string) => void;
   bottomInset: number;
 }
@@ -616,10 +617,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             showToast('Book thumbnail updated');
             setEditing(null);
           }}
-          onRemove={() => {
-            onRemoveBook(editing.id);
-            setEditing(null);
-          }}
+          onRemove={() => onRemoveBook(editing.id)}
         />
       )}
 
@@ -630,13 +628,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 // ---------------------------------------------------------------------------
 // Cover editor
 // ---------------------------------------------------------------------------
-const CoverEditor: React.FC<{
+export const CoverEditor: React.FC<{
   storage: LocalStore;
   book: Book;
   globalStyle: 'image' | 'typographic';
   onClose: () => void;
   onSave: (style: 'image' | 'typographic', url?: string) => void;
-  onRemove: () => void;
+  onRemove: () => Promise<BookRemovalResult>;
 }> = ({ storage, book, globalStyle, onClose, onSave, onRemove }) => {
   const colors = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -645,6 +643,23 @@ const CoverEditor: React.FC<{
   const [pickedUri, setPickedUri] = useState<string | undefined>(undefined);
   const [tint, setTint] = useState<ClothTint>('parchment');
   const [confirmingRemove, setConfirmingRemove] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [removalError, setRemovalError] = useState<string | null>(null);
+  const removalPending = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const close = () => { if (!removalPending.current) onClose(); };
+  const remove = async () => {
+    if (!mounted.current || removalPending.current) return;
+    removalPending.current = true; setRemoving(true); setRemovalError(null);
+    try {
+      const result = await onRemove();
+      if (!mounted.current) return;
+      if (result.removed) onClose();
+      else setRemovalError(result.message);
+    } catch { if (mounted.current) setRemovalError('Removal could not be confirmed. Check this book in Library before trying again.'); }
+    finally { removalPending.current = false; if (mounted.current) setRemoving(false); }
+  };
 
   const remoteUrl = /^https?:\/\//i.test(url.trim()) ? url.trim() : '';
   const previewUri = pickedUri ?? (remoteUrl || book.coverUrl);
@@ -664,30 +679,34 @@ const CoverEditor: React.FC<{
   };
 
   return (
-    <ModalShell onClose={onClose} maxWidth={400}>
+    <ModalShell onClose={close} maxWidth={400} cardStyle={{ maxHeight: '88%' }}>
       <View style={styles.editHead}>
-        <Text style={styles.editTitle}>{confirmingRemove ? 'Remove book?' : 'Customize Thumbnail'}</Text>
-        <Pressable onPress={onClose} hitSlop={8}>
+        <Text accessibilityRole="header" style={styles.editTitle}>{confirmingRemove ? 'Remove book?' : 'Customize Thumbnail'}</Text>
+        <Pressable onPress={close} disabled={removing} accessibilityRole="button" accessibilityLabel="Close book editor" accessibilityState={{ disabled: removing }} style={{ minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' }}>
           <Icon name="close" size={20} color={colors.muted} />
         </Pressable>
       </View>
 
       {confirmingRemove ? (
-        <View style={styles.removeConfirm}>
+        <ScrollView contentContainerStyle={styles.removeConfirm}>
           <Icon name="delete_outline" size={32} color={colors.danger} />
           <Text style={styles.removeConfirmText}>
-            “{book.title}” and its saved pages, highlights, and vocabulary cards will be removed from this app
-            and the connected Supabase database.
+            Remove “{book.title}” and its saved files, bookmarks, highlights, notes and vocabulary from this Library.
+          </Text>
+          <Text style={styles.removeConfirmText}>
+            Export any notes or cards you want to keep first. If signed in, Folio also attempts cloud cleanup;
+            an unremoved cloud copy may return after reloading.
           </Text>
           <View style={styles.removeConfirmActions}>
-            <Pressable onPress={() => setConfirmingRemove(false)} style={styles.cancelRemoveBtn}>
+            <Pressable onPress={() => { if (!removalPending.current) { setConfirmingRemove(false); setRemovalError(null); } }} disabled={removing} accessibilityRole="button" accessibilityLabel="Keep this book" accessibilityState={{ disabled: removing }} style={[styles.cancelRemoveBtn, removing && { opacity: 0.5 }]}>
               <Text style={styles.cancelRemoveText}>Cancel</Text>
             </Pressable>
-            <Pressable onPress={onRemove} style={styles.confirmRemoveBtn}>
-              <Text style={styles.confirmRemoveText}>Remove</Text>
+            <Pressable onPress={remove} disabled={removing} accessibilityRole="button" accessibilityLabel={`Remove ${book.title} from Library`} accessibilityState={{ disabled: removing, busy: removing }} style={styles.confirmRemoveBtn}>
+              <Text style={styles.confirmRemoveText}>{removing ? 'Removing…' : 'Remove'}</Text>
             </Pressable>
           </View>
-        </View>
+          {removalError && <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={styles.removeConfirmText}>{removalError}</Text>}
+        </ScrollView>
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16, gap: 14 }} keyboardShouldPersistTaps="handled">
           <View style={{ alignItems: 'center' }}>
@@ -754,7 +773,7 @@ const CoverEditor: React.FC<{
           <Pressable onPress={() => onSave(style, style === 'image' ? previewUri : undefined)} style={styles.saveBtn}>
             <Text style={styles.saveText}>Apply</Text>
           </Pressable>
-          <Pressable onPress={() => setConfirmingRemove(true)} style={styles.removeBtn}>
+          <Pressable onPress={() => { setRemovalError(null); setConfirmingRemove(true); }} accessibilityRole="button" accessibilityLabel="Remove book" style={styles.removeBtn}>
             <Icon name="delete_outline" size={18} color={colors.danger} />
             <Text style={styles.removeText}>Remove Book</Text>
           </Pressable>
@@ -1001,7 +1020,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.borderMid,
   },
-  editTitle: { ...type.headlineSm, fontSize: 19, color: colors.onSurface },
+  editTitle: { ...type.headlineSm, fontSize: 19, color: colors.onSurface, flex: 1, flexShrink: 1 },
   urlInput: {
     backgroundColor: colors.white,
     borderRadius: 10,
@@ -1028,6 +1047,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   saveBtn: { backgroundColor: colors.primaryContainer, paddingVertical: 12, borderRadius: 12, alignItems: 'center' },
   saveText: { ...type.labelLg, color: '#fff' },
   removeBtn: {
+    minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1042,6 +1062,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   removeConfirmActions: { flexDirection: 'row', alignSelf: 'stretch', gap: 10, marginTop: 4 },
   cancelRemoveBtn: {
     flex: 1,
+    minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 12,
@@ -1051,6 +1072,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   cancelRemoveText: { ...type.labelLg, color: colors.onSurface },
   confirmRemoveBtn: {
     flex: 1,
+    minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 12,

@@ -29,6 +29,7 @@ import { SearchModal } from './src/components/SearchModal';
 import { SettingsSheet } from './src/components/SettingsSheet';
 import { Toast } from './src/components/ui/Toast';
 import { INITIAL_BOOKS, INITIAL_GOAL } from './src/data/initialData';
+import { removeBookLocally, type BookRemovalResult } from './src/lib/bookRemoval';
 import { applyReadingPosition, createReadingProgressWriter, mergeCloudBookForDevice } from './src/lib/readingPosition';
 import { useReaderSettings } from './src/lib/useReaderSettings';
 import { createBookmark, createBookmarkStore } from './src/lib/bookmarks';
@@ -152,6 +153,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   }
   const [currentBookId, setCurrentBookId] = useState<string>('');
   const [bookDetailsId, setBookDetailsId] = useState<string | null>(null);
+  const removingBook = useRef(false);
   const [customPagesMap, setCustomPagesMap] = useState<Record<string, BookContentPage[]>>({});
   const [readingGoal, setReadingGoal] = useState<ReadingGoal>(INITIAL_GOAL);
   const [recoveryBooks, setRecoveryBooks] = useState<LibraryRecoveryBook[]>([]);
@@ -716,48 +718,53 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
     upsertBookToSupabase(updated);
   };
 
-  const handleRemoveBook = async (bookId: string) => {
-    const book = books.find((item) => item.id === bookId);
-    if (!book) return;
-
+  const handleRemoveBook = async (bookId: string): Promise<BookRemovalResult> => {
+    const book = booksRef.current.find(item => item.id === bookId);
+    if (!spaceActive.current || !book) return { removed: false, message: 'This book is no longer available in this Library.' };
+    if (removingBook.current) return { removed: false, message: 'Another book removal is still in progress. Try again shortly.' };
+    if (libraryLoadState.current !== 'ready') {
+      return { removed: false, message: libraryLoadState.current === 'error'
+        ? 'The saved library could not be loaded. Restart Folio before removing books.'
+        : 'The library is still loading. Try again shortly.' };
+    }
+    if (bookmarkStatus !== 'ready' || bookmarkWritePending.current || bookmarkSaving) {
+      return { removed: false, message: bookmarkStatus === 'error'
+        ? 'Saved bookmarks could not be loaded. Use Try again in this book’s bookmark list before removing it.'
+        : 'Bookmarks are still loading or saving. Try again shortly.' };
+    }
     if (highlightArchive.status !== 'ready' || highlightArchive.busy || lexiconArchive.status !== 'ready' || lexiconArchive.busy) {
-      showToast('Wait for saved notes and vocabulary to load before removing a book. Retry in Notebook if needed.');
-      return;
+      return { removed: false, message: 'Wait for saved notes and vocabulary to finish loading or saving. Use Try again in Notebook if needed.' };
     }
+    removingBook.current = true;
     try {
-      setBookmarks(await bookmarkStore.removeBook(bookId));
-    } catch {
-      showToast("Couldn't remove this book's bookmarks. Try again.");
-      return;
-    }
-
-    if (!await highlightArchive.removeBook(bookId)) {
-      showToast('Book kept because its notes could not be removed. Its bookmarks were already removed; try again.');
-      return;
-    }
-    if (!await lexiconArchive.removeBook(bookId)) {
-      showToast('Book kept because its vocabulary could not be removed. Its bookmarks and notes were already removed; try again.');
-      return;
-    }
-    const remainingBooks = booksRef.current.filter((item) => item.id !== bookId);
-    booksRef.current = remainingBooks;
-    setBooks(current => current.filter(item => item.id !== bookId));
-    setCustomPagesMap((prev) => {
-      const remainingPages = { ...prev };
-      delete remainingPages[bookId];
-      return remainingPages;
-    });
-    if (currentBookId === bookId) setCurrentBookId(remainingBooks[0]?.id ?? '');
-    const removedLocalFiles = removeBookFiles(bookId, book.coverUrl);
-
-    const removedFromCloud = user ? await deleteBookFromSupabase(bookId) : true;
-    showToast(
-      !removedLocalFiles
-        ? `"${book.title}" removed from Library; some local files could not be deleted`
-        : removedFromCloud
-        ? `"${book.title}" and its notes were removed`
-        : `"${book.title}" removed locally; cloud cleanup failed`
-    );
+      const result = await removeBookLocally(book.title, {
+        bookmarks: async () => { setBookmarks(await bookmarkStore.removeBook(bookId)); },
+        highlights: () => highlightArchive.removeBook(bookId),
+        vocabulary: () => lexiconArchive.removeBook(bookId),
+        saveLibrary: async () => {
+          if (!spaceActive.current) throw new Error('Reading space changed');
+          await saveJSONStrict('books', booksRef.current.filter(item => item.id !== bookId));
+        },
+        publishRemoval: () => {
+          // Keep imports/other book edits completed while annotation cleanup was pending.
+          booksRef.current = booksRef.current.filter(item => item.id !== bookId);
+          setBooks(current => current.filter(item => item.id !== bookId));
+          setCustomPagesMap(previous => {
+            const remaining = { ...previous }; delete remaining[bookId]; return remaining;
+          });
+          setCurrentBookId(current => current === bookId ? booksRef.current[0]?.id ?? '' : current);
+        },
+        removeFiles: () => removeBookFiles(bookId, book.coverUrl),
+        removeCloud: () => user ? deleteBookFromSupabase(bookId) : Promise.resolve(true),
+        reportCloudFailure: filesRemoved => {
+          if (spaceActive.current) showToast(filesRemoved
+            ? `“${book.title}” was removed on this device, but cloud cleanup could not be confirmed. Its cloud copy may return after reloading.`
+            : `“${book.title}” left Library, but some local files remain and cloud cleanup could not be confirmed.`);
+        },
+      });
+      if (result.removed && spaceActive.current) showToast(result.message);
+      return result;
+    } finally { removingBook.current = false; }
   };
 
   const saveSettingsFromSheet = async (partial: Partial<ReadingSettings>) => {

@@ -1697,3 +1697,59 @@ test('Pages and Line hand off the same source word while Scroll retains its pass
   f.change({ settings: { ...f.props().settings, readingFlowMode: 'continuous' } });
   assert.equal(f.list().data[0].pageNumber, 8); f.h.unmount();
 });
+
+function removalEditor(onRemove, onClose = () => {}) {
+  const h = harness({ runEffects: true, moduleMocks: {
+    'expo-document-picker': {}, 'expo-image-picker': {},
+    '../lib/epubParser': {}, './BrowseBooksScreen': { BrowseBooksScreen: 'BrowseBooksScreen' },
+    './BookCover': { BookCover: 'BookCover', CLOTH: { parchment: { bg: '#fff' } } },
+    './ui/Chip': { Chip: 'Chip' }, './ui/ProgressBar': { ProgressBar: 'ProgressBar' },
+  } });
+  const { CoverEditor } = h.load('../src/components/LibraryView.tsx');
+  const props = { storage: {}, book: { id: 'book', title: 'A book', coverUrl: '' }, globalStyle: 'image', onSave() {}, onRemove, onClose };
+  const render = () => h.render(CoverEditor, props);
+  const root = render(); labelled(root, 'Remove book').onPress();
+  return { h, render, root: render() };
+}
+
+test('book removal waits for confirmation, blocks duplicate/cancel/dismiss actions and keeps failed confirmation open for retry', async () => {
+  let resolve, calls = 0, closed = 0;
+  const f = removalEditor(() => { calls++; return new Promise(done => { resolve = done; }); }, () => { closed++; });
+  const label = 'Remove A book from Library';
+  const pending = labelled(f.root, label).onPress();
+  labelled(f.root, label).onPress();
+  let root = f.render();
+  assert.equal(calls, 1); assert.equal(closed, 0);
+  assert.deepEqual(labelled(root, label).accessibilityState, { disabled: true, busy: true });
+  assert.equal(labelled(root, 'Keep this book').disabled, true);
+  labelled(root, 'Keep this book').onPress(); labelled(root, 'Close book editor').onPress(); root.props.onClose();
+  assert.equal(closed, 0);
+  resolve({ removed: false, message: 'Book kept because the library could not be saved. Notes were already removed.' });
+  await pending; root = f.render();
+  assert.equal(closed, 0); assert.equal(labelled(root, label).disabled, false);
+  const error = elements(root).find(node => node.props?.accessibilityRole === 'alert');
+  assert.match(error.props.children, /Book kept.*Notes were already removed/);
+  const retry = labelled(root, label).onPress(); resolve({ removed: true, message: 'Removed on this device' }); await retry;
+  assert.equal(closed, 1); assert.equal(calls, 2); f.h.unmount();
+});
+
+test('a rejected book-removal callback retains the dialog without claiming that data was kept', async () => {
+  let closed = false;
+  const f = removalEditor(async () => { throw new Error('Unknown failure'); }, () => { closed = true; });
+  await labelled(f.root, 'Remove A book from Library').onPress();
+  const root = f.render();
+  assert.equal(closed, false);
+  assert.match(elements(root).find(node => node.props?.accessibilityRole === 'alert').props.children, /could not be confirmed.*Check this book/);
+  f.h.unmount();
+});
+
+test('cancel before removal returns to editing and late completion cannot close a different screen', async () => {
+  const cancel = removalEditor(async () => assert.fail('Unexpected remove'));
+  labelled(cancel.root, 'Keep this book').onPress();
+  assert.ok(labelled(cancel.render(), 'Remove book')); cancel.h.unmount();
+  let resolve, closed = false;
+  const f = removalEditor(() => new Promise(done => { resolve = done; }), () => { closed = true; });
+  const pending = labelled(f.root, 'Remove A book from Library').onPress();
+  f.h.unmount(); const writes = f.h.stateWrites(); resolve({ removed: true, message: 'Removed' }); await pending;
+  assert.equal(closed, false); assert.equal(f.h.stateWrites(), writes);
+});

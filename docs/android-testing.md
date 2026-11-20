@@ -645,3 +645,35 @@ synthetic text and can be removed after testing.
 Automated tests use event/storage adapters. Actual phone layout, process death,
 TalkBack speech/focus, live Supabase and cross-device precise restoration remain
 outside that evidence.
+
+## Book removal confirmation (step 17)
+
+Read the [removal behavior and limits](book-removal.md). Export important notes/
+cards before testing; use a disposable EPUB, such as the numbered resume fixture.
+No new SQL or reinstall is required; install over the existing Folio Dev APK.
+
+1. Add a bookmark, note and vocabulary card to a disposable book. Open its book
+   editor in Library and choose **Remove Book**. Confirm the dialog names that book
+   and explains local data removal plus best-effort cloud cleanup. Cancel should
+   return to editing without starting removal.
+2. Confirm Remove. While it is pending, the button should read **Removing…**;
+   repeated taps, Cancel, close, backdrop taps and Android back must not trigger
+   another operation or close the pending dialog. Local completion should close
+   the dialog and remove the Library entry. It should not wait for a server when
+   the phone is offline. Repeat in Guest and a disposable signed-in test account.
+3. Restart offline and verify the book stays removed from the device's saved
+   library. Other books and their files/notes must remain. If cloud cleanup could
+   not be confirmed, an old cloud row may return after reconnecting/reloading;
+   permanent cross-device deletion is not promised by this step.
+4. If a local stage fails naturally, the dialog must stay open and explain whether
+   earlier bookmarks/notes/cards were already removed. A library-index save failure
+   must leave the book files intact. Retry should be allowed. Do not fill storage
+   or corrupt data to force this; adapter tests inject these failures safely.
+5. If file deletion is incomplete after the library save, removal is acknowledged
+   with a warning that files remain. If cloud cleanup also fails, the later warning
+   should retain that information. These partial outcomes are not a rollback or a
+   durable cleanup queue. Cancel after a partial failure cannot restore notes/cards.
+6. Check TalkBack names, pending/disabled states and error announcements. At large
+   system text size, in landscape and with Charcoal, the full confirmation/error
+   and actions should remain reachable by scrolling. Native focus and modal/back
+   behavior still require phone validation.
