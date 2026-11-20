@@ -28,6 +28,9 @@ export const Chip: React.FC<ChipProps> = ({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: active }}
       style={[styles.chip, { backgroundColor: active ? activeBg ?? palette.primaryContainer : palette.surfaceContainer }, style]}
     >
       {dotColor ? <View style={[styles.dot, { backgroundColor: dotColor }]} /> : null}
@@ -39,6 +42,8 @@ export const Chip: React.FC<ChipProps> = ({
 
 const styles = StyleSheet.create({
   chip: {
+    minHeight: 48,
+    justifyContent: 'center',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,

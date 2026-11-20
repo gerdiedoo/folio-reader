@@ -13,6 +13,7 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
   const effects = new Map();
   const timers = new Map();
   const listeners = new Set();
+  const backListeners = new Set();
   let nextTimer = 1;
   let pending = [];
   let cursor = 0;
@@ -93,6 +94,7 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
       announceForAccessibility: message => announcements.push({ message }),
       announceForAccessibilityWithOptions: (message, options) => announcements.push({ message, options }),
     },
+    BackHandler: { addEventListener(_event, callback) { backListeners.add(callback); return { remove: () => backListeners.delete(callback) }; } },
     AppState: { currentState: 'active', addEventListener(_event, callback) { listeners.add(callback); return { remove: () => listeners.delete(callback) }; } },
   };
   const dependencies = {
@@ -108,7 +110,7 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
     './ui/SeekBar': { SeekBar: 'SeekBar' },
     './Icon': { Icon: 'Icon' },
     '@expo/vector-icons': { MaterialCommunityIcons: 'MaterialCommunityIcons', MaterialIcons: 'MaterialIcons' },
-    __clock: { now: () => now },
+    __clock: class extends Date { constructor(...args) { if (args.length) super(...args); else super(now); } static now() { return now; } },
     __timers: {
       setTimeout(fn, ms) { const id = nextTimer++; timers.set(id, { fn, ms }); return id; },
       clearTimeout(id) { timers.delete(id); },
@@ -151,6 +153,7 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
       now += timer.ms;
       timer.fn();
     },
+    hardwareBack() { for (const handler of backListeners) if (handler()) return true; return false; },
     appState(state) {
       native.AppState.currentState = state;
       for (const listener of listeners) listener(state);
@@ -1875,4 +1878,106 @@ test('an unexpected cover callback error keeps the draft open without claiming a
   assert.equal(closed, false); assert.equal(labelled(root, 'Apply book cover').disabled, false);
   assert.match(elements(root).find(node => node.props?.accessibilityRole === 'alert').props.children, /could not be confirmed.*draft is still here/);
   f.h.unmount();
+});
+
+function libraryHarness(overrides = {}) {
+  const selected = [], opened = [];
+  let pickerCalls = 0;
+  const h = harness({ runEffects: true, moduleMocks: {
+    'expo-document-picker': { getDocumentAsync: async () => { pickerCalls++; return { canceled: true }; } },
+    'expo-image-picker': {}, '../lib/epubParser': {},
+    './BrowseBooksScreen': { BrowseBooksScreen: 'BrowseBooksScreen' },
+    './BookCover': { BookCover: 'BookCover', CLOTH: {} },
+    './ui/Chip': { Chip: 'Chip' }, './ui/ProgressBar': { ProgressBar: 'ProgressBar' },
+  } });
+  const { LibraryView, CoverEditor } = h.load('../src/components/LibraryView.tsx');
+  const book = (id, patch = {}) => ({ id, title: id, author: 'An Author', currentPage: 1, totalPages: 10, progressPercent: 0, lastOpened: 'Not yet read', coverUrl: '', minutesLeft: 20, ...patch });
+  const props = { storage: {}, hasLegacyData: false,
+    books: [book('Amber', { author: 'Zoë', lastOpened: '2026-01-01', progressPercent: 20 }), book('Brook', { lastOpened: '2026-11-19', progressPercent: 40 }), book('Cloud', { isDownloaded: true, lastOpened: '2026-11-20' }), book('Unread', { progressPercent: 1 })],
+    availableBookIds: ['Amber', 'Brook', 'Unread'], libraryStatus: 'ready',
+    recoveryBooks: [{ id: 'missing', title: 'Café', author: 'Zoë' }], selectedBookId: null,
+    readingGoal: { minutesReadToday: 0 }, globalCoverStyle: 'image', bottomInset: 0,
+    onSelectBook: id => selected.push(id), onOpenBook: id => opened.push(id),
+    onAddEpubBook: async () => assert.fail('Unexpected import'), onRestoreImportedProgress: async book => book,
+    onReimportRecoveryBook: async () => assert.fail('Unexpected recovery'),
+    onUpdateBookCover: async () => ({ saved: true, message: 'Saved' }), onRemoveBook: async () => ({ removed: true, message: 'Removed' }), showToast() {}, ...overrides };
+  return { h, props, selected, opened, CoverEditor, pickerCalls: () => pickerCalls, render: () => h.render(LibraryView, props) };
+}
+const libraryRows = root => elements(root).filter(node => node.props?.accessibilityHint === 'Open book details');
+const pressLibraryFilter = (root, label) => elements(root).find(node => node.type === 'Chip' && node.props.label === label).props.onPress();
+
+test('Library search filters title/author and recovery rows; clearing results resets query and filter while keeping sort', () => {
+  const f = libraryHarness(); let root = f.render();
+  labelled(root, 'Search Library by title or author').onChangeText('zoe'); root = f.render();
+  assert.equal(libraryRows(root).length, 1); assert.match(libraryRows(root)[0].props.accessibilityLabel, /^Amber by Zoë/);
+  assert.ok(labelled(root, 'Re-import Café from a local EPUB'));
+  assert.equal(elements(root).some(node => node.props?.accessibilityLabel?.startsWith('Resume ')), false);
+  labelled(root, 'Sort Library by Title').onPress();
+  pressLibraryFilter(f.render(), 'Finished'); root = f.render();
+  assert.equal(libraryRows(root).length, 0);
+  labelled(root, 'Clear Library search and filters').onPress(); root = f.render();
+  assert.equal(labelled(root, 'Search Library by title or author').value, '');
+  assert.equal(labelled(root, 'Sort Library by Title').accessibilityState.selected, true);
+  assert.equal(elements(root).find(node => node.type === 'Chip' && node.props.label === 'All Books').props.active, true);
+  assert.deepEqual(libraryRows(root).map(node => node.props.accessibilityLabel.split(' by ')[0]), ['Amber', 'Brook', 'Cloud', 'Unread']);
+  labelled(root, 'Search Library by title or author').onChangeText('brook'); root = f.render();
+  labelled(root, 'Clear Library search').onPress(); root = f.render();
+  assert.equal(libraryRows(root).length, 4); f.h.unmount();
+});
+
+test('Library Recent and Continue Reading use reading date and device text; Downloaded rejects a cloud flag', () => {
+  const f = libraryHarness(); let root = f.render();
+  assert.deepEqual(libraryRows(root).map(node => node.props.accessibilityLabel.split(' by ')[0]), ['Cloud', 'Brook', 'Amber', 'Unread']);
+  labelled(root, 'Resume Brook by An Author').onPress(); assert.deepEqual(f.opened, ['Brook']);
+  pressLibraryFilter(root, 'Downloaded'); root = f.render();
+  assert.deepEqual(libraryRows(root).map(node => node.props.accessibilityLabel.split(' by ')[0]), ['Brook', 'Amber', 'Unread']);
+  assert.equal(elements(root).some(node => node.props?.accessibilityLabel?.startsWith('Resume ')), false);
+  labelled(root, 'List view').onPress(); root = f.render();
+  assert.deepEqual(labelled(root, 'List view').accessibilityState, { selected: true });
+  assert.deepEqual(labelled(root, 'Grid view').accessibilityState, { selected: false }); f.h.unmount();
+});
+
+test('book details and Android back retain Library search; cover edit is a separate named action', () => {
+  const f = libraryHarness(); let root = f.render();
+  labelled(root, 'Search Library by title or author').onChangeText('amber'); root = f.render();
+  const row = libraryRows(root)[0]; assert.equal(row.props.accessibilityRole, 'button');
+  assert.equal(elements(row).some(node => node.type === 'BookCover' && node.props.onEdit), false);
+  row.props.onPress(); assert.deepEqual(f.selected, ['Amber']);
+  f.props.selectedBookId = 'Amber'; root = f.render();
+  assert.ok(labelled(root, 'Read Amber')); assert.equal(f.h.hardwareBack(), true); assert.deepEqual(f.selected, ['Amber', null]);
+  f.props.selectedBookId = null; root = f.render();
+  assert.equal(labelled(root, 'Search Library by title or author').value, 'amber');
+  assert.equal(f.h.hardwareBack(), false);
+  labelled(root, 'Customize cover for Amber').onPress(); root = f.render();
+  assert.ok(elements(root).some(node => node.type === f.CoverEditor && node.props.book.id === 'Amber'));
+  assert.deepEqual(f.selected, ['Amber', null]); f.h.unmount();
+});
+
+test('details prevent opening a cloud-only book with missing device text', () => {
+  const f = libraryHarness({ selectedBookId: 'Cloud' }); const root = f.render();
+  const read = labelled(root, 'Reading text unavailable');
+  assert.equal(read.disabled, true); assert.deepEqual(read.accessibilityState, { disabled: true });
+  read.onPress(); assert.deepEqual(f.opened, []); assert.deepEqual(f.selected, []); f.h.unmount();
+});
+
+test('Library loading and read errors do not claim an empty library or permit import', async () => {
+  for (const libraryStatus of ['loading', 'error']) {
+    const f = libraryHarness({ books: [], recoveryBooks: [], libraryStatus }); const root = f.render();
+    const text = elements(root).flatMap(node => typeof node.props?.children === 'string' ? [node.props.children] : []).join(' ');
+    assert.doesNotMatch(text, /Your library is empty|No books to show yet/);
+    assert.match(text, libraryStatus === 'loading' ? /Loading your saved library/ : /Existing data has been kept/);
+    const action = labelled(root, 'Import EPUB'); assert.equal(action.disabled, true);
+    await action.onPress(); assert.equal(f.pickerCalls(), 0);
+    assert.equal(elements(root).some(node => node.props?.accessibilityLabel?.startsWith('Resume ')), false); f.h.unmount();
+  }
+});
+
+test('Library and Notebook filter chips expose a named button and its selected state', () => {
+  const h = harness(); const { Chip } = h.load('../src/components/ui/Chip.tsx'); let presses = 0;
+  for (const active of [false, true]) {
+    const root = h.render(Chip, { label: 'Reading', active, onPress: () => presses++ });
+    const control = labelled(root, 'Reading'); assert.equal(control.accessibilityRole, 'button');
+    assert.deepEqual(control.accessibilityState, { selected: active }); control.onPress();
+  }
+  assert.equal(presses, 2);
 });

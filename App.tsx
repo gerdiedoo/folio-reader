@@ -105,7 +105,7 @@ function applySavedReadingProgress(book: Book, entry: LibraryBackupEntry): Book 
 
 function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; scope: string; hasLegacyData: boolean }) {
   const storage = useMemo(() => createLocalStore(scope), [scope]);
-  const { loadJSON, loadJSONStrict, loadPages, removeBookFiles, saveJSON, saveJSONStrict, savePages } = storage;
+  const { loadJSON, loadJSONEntryStrict, loadPages, removeBookFiles, saveJSON, saveJSONStrict, savePages } = storage;
   const cloud = useMemo(() => createAccountRepository(supabase, user?.id ?? null), [user?.id]);
   const { deleteBookFromSupabase, fetchBooksFromSupabase, fetchReadingGoalFromSupabase, fetchLibraryBackup, saveLibraryBackup, upsertBookToSupabase, upsertReadingGoalToSupabase } = cloud;
   const { message: toastMessage, showMessage: showToast } = useFeedbackMessage();
@@ -132,6 +132,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
     () => { if (spaceActive.current) showToast('Couldn’t save your reading position on this device. Keep the book open and try again.'); },
   ), [saveJSONStrict, upsertBookToSupabase, showToast]);
   const libraryLoadState = useRef<'loading' | 'ready' | 'error'>('loading');
+  const [libraryStatus, setLibraryStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const importCommitterRef = useRef<ReturnType<typeof createImportCommitter> | null>(null);
   if (!importCommitterRef.current) {
     importCommitterRef.current = createImportCommitter({
@@ -230,11 +231,13 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
 
     (async () => {
       const [lBooks, lGoal, lReadingDay, lRecoveryBooks] = await Promise.all([
-        loadJSONStrict<Book[]>('books').then(saved => {
-          if (saved !== null && !Array.isArray(saved)) throw new Error('Invalid library index');
-          return saved;
+        loadJSONEntryStrict('books').then(entry => {
+          if (!entry.present) return null;
+          if (!Array.isArray(entry.value)) throw new Error('Invalid library index');
+          return entry.value as Book[];
         }).catch(error => {
           libraryLoadState.current = 'error';
+          if (!cancelled) setLibraryStatus('error');
           console.warn('Could not load the library index:', error);
           showToast("Couldn't load your saved library. Restart before importing more books.");
           return null;
@@ -259,7 +262,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
         if (pages) pagesMap[id] = pages;
       });
       setCustomPagesMap(pagesMap);
-      if (libraryLoadState.current !== 'error') libraryLoadState.current = 'ready';
+      if (libraryLoadState.current !== 'error') { libraryLoadState.current = 'ready'; setLibraryStatus('ready'); }
       if (lBooks?.length) setCurrentBookId(lBooks[0].id);
 
       // Remote data (cloud wins for items it has, local-only items are kept)
@@ -826,6 +829,8 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
             storage={storage}
             hasLegacyData={hasLegacyData}
             books={books}
+            availableBookIds={Object.keys(customPagesMap).filter(id => customPagesMap[id].length > 0)}
+            libraryStatus={libraryStatus}
             recoveryBooks={recoveryBooks}
             selectedBookId={bookDetailsId}
             onSelectBook={setBookDetailsId}

@@ -285,7 +285,7 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
     author,
     coverUrl,
     coverStyle: coverUrl ? 'image' : 'typographic',
-    progressPercent: 1,
+    progressPercent: 0,
     currentPage: 1,
     totalPages: pages.length,
     minutesLeft: Math.round(pages.length * 1.8),

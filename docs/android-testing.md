@@ -709,3 +709,34 @@ no uninstall, clearing data or new SQL is needed.
    Test TalkBack control names/selection/pending states, large text, landscape and
    photo-picker return on the phone. iOS permission/cropping behavior needs a
    separate iOS device check.
+
+## Library browsing (step 19)
+
+Read the [browsing behavior and limits](library-browsing.md). Install the new APK
+over Folio Dev without uninstalling or clearing data. No new SQL is required.
+
+1. Import a disposable EPUB. Before opening it, verify it shows as not started
+   and is absent from Reading/Continue Reading. Read two books in a different
+   order from import, then return to Library: Recent and Continue Reading should
+   reflect the last book read. Continue should resume its saved position.
+2. Search by a partial title, author, mixed case and an accented name without
+   accents. Multiple terms should all match across title/author. Try punctuation
+   literally. Combine search with Reading or Downloaded. A recovery entry should
+   match under All Books but not claim to be downloaded. Zero matches should
+   offer Clear search and filters; it should retain the chosen sort.
+3. Open a search result's details and return using Android back or the header
+   back button. The query/filter/sort/view should remain. Open its cover button
+   separately: it should edit that book without first opening details. Confirm
+   List/Grid and Title/Progress ordering, including books with similar names.
+4. Where an existing test account supplies metadata without local text, All Books
+   should explain that an EPUB is needed. Downloaded and Continue Reading must
+   exclude it, and details must not open an empty reader. Do not delete private
+   app files to manufacture this state. Loading should show a checking message;
+   a naturally occurring read failure should show a persistent error, not an
+   empty library. Adapter tests cover disabled imports without damaging storage.
+5. With TalkBack, check search/clear labels, filter/sort/view selection, result
+   announcements and separate book-details/cover actions. Check details/back
+   focus and keyboard dismissal on the phone. In Charcoal, landscape and large
+   system text, controls should stay readable and reachable; the grid should
+   use one column at larger text sizes. Query/view choices are not persisted
+   after leaving Library for another tab or restarting.

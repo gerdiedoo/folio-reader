@@ -71,6 +71,8 @@ test('retains short dialogue, closing lines, and an unpaired final paragraph', a
   const result = await input.parse();
   assert.deepEqual(paragraphs(result), ['Yes.', 'A longer sentence survives alongside the short dialogue.', 'THE END.']);
   assert.equal(result.book.totalPages, 2);
+  assert.equal(result.book.progressPercent, 0);
+  assert.equal(result.book.lastOpened, 'Not yet read');
   assert.deepEqual(input.writes, ['epub']);
 });
 

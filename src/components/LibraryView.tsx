@@ -12,6 +12,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { browseLibrary, continueReadingBook, hasReadingHistory, libraryBookStatus, displayedBookProgress, type LibraryFilter, type LibrarySort } from '../lib/libraryBrowser';
 import { coverImageUrl, normalizeCoverTint, type BookCoverDraft, type CoverSaveResult } from '../lib/bookCover';
 import type { BookRemovalResult } from '../lib/bookRemoval';
 import { parseEpubFile } from '../lib/epubParser';
@@ -31,6 +32,8 @@ interface LibraryViewProps {
   storage: LocalStore;
   hasLegacyData: boolean;
   books: Book[];
+  availableBookIds: readonly string[];
+  libraryStatus: 'loading' | 'ready' | 'error';
   recoveryBooks: LibraryRecoveryBook[];
   selectedBookId: string | null;
   readingGoal: ReadingGoal;
@@ -50,8 +53,8 @@ interface LibraryViewProps {
   bottomInset: number;
 }
 
-type Filter = 'all' | 'reading' | 'finished' | 'downloaded' | 'want';
-type Sort = 'recent' | 'title' | 'progress';
+type Filter = LibraryFilter;
+type Sort = LibrarySort;
 type LibraryViewMode = 'grid' | 'list';
 
 const FILTERS: { id: Filter; label: string }[] = [
@@ -84,6 +87,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   storage,
   hasLegacyData,
   books,
+  availableBookIds,
+  libraryStatus,
   recoveryBooks,
   selectedBookId,
   readingGoal,
@@ -98,9 +103,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   showToast,
   bottomInset,
 }) => {
-  const { width } = useWindowDimensions();
+  const { width, fontScale } = useWindowDimensions();
   const colors = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [sort, setSort] = useState<Sort>('recent');
   const [viewMode, setViewMode] = useState<LibraryViewMode>('grid');
@@ -120,36 +126,18 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     return () => subscription.remove();
   }, [selectedBook, onSelectBook]);
 
-  const contentWidth = Math.min(width, 768) - 40;
-  const cardWidth = Math.floor((contentWidth - 16) / 2);
-
-  const featured = books.find((b) => b.id === 'remains-of-the-day') || books[0];
-
-  const visible = useMemo(() => {
-    let list = books.filter((b) => {
-      switch (filter) {
-        case 'reading':
-          return b.progressPercent > 0 && !b.isFinished;
-        case 'finished':
-          return !!b.isFinished;
-        case 'downloaded':
-          return !!b.isDownloaded;
-        case 'want':
-          return !!b.isWantToRead;
-        default:
-          return true;
-      }
-    });
-    if (sort === 'title') list = [...list].sort((a, b) => a.title.localeCompare(b.title));
-    if (sort === 'progress') list = [...list].sort((a, b) => b.progressPercent - a.progressPercent);
-    return list;
-  }, [books, filter, sort]);
-
-  const visibleRecoveryBooks = useMemo(() => {
-    if (filter !== 'all') return [];
-    return recoveryBooks;
-  }, [recoveryBooks, filter]);
-
+  const contentWidth = Math.max(160, Math.min(width, 768) - 40);
+  const columns = fontScale > 1.3 || contentWidth < 300 ? 1 : 2;
+  const cardWidth = Math.floor((contentWidth - (columns - 1) * 16) / columns);
+  const available = useMemo(() => new Set(availableBookIds), [availableBookIds]);
+  const featured = libraryStatus === 'ready' ? continueReadingBook(books, available) : undefined;
+  const results = useMemo(() => browseLibrary(books, recoveryBooks, query, filter, sort, available), [books, recoveryBooks, query, filter, sort, available]);
+  const visible = results.books;
+  const visibleRecoveryBooks = results.recovery;
+  const filtered = Boolean(query.trim()) || filter !== 'all';
+  const resetFilters = () => { setQuery(''); setFilter('all'); };
+  const textStatus = (id: string) => libraryStatus === 'loading' ? 'Checking saved text.' : libraryStatus === 'error' ? 'Saved text could not be checked.' : available.has(id) ? 'Text saved on this device.' : 'EPUB needed on this device.';
+  const canImport = libraryStatus === 'ready' && !importing && !reimportingId;
   const readingTime = readingGoal.minutesReadToday;
   const readingTimeLabel =
     readingTime >= 60
@@ -157,7 +145,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       : `${readingTime} min`;
 
   const handleImport = async () => {
-    if (importing) return;
+    if (!canImport) return;
     try {
       const res = await DocumentPicker.getDocumentAsync({
         type: ['application/epub+zip', 'application/octet-stream', '*/*'],
@@ -183,7 +171,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   };
 
   const handleReimportRecovery = async (recovery: LibraryRecoveryBook) => {
-    if (importing || reimportingId) return;
+    if (!canImport) return;
     try {
       const res = await DocumentPicker.getDocumentAsync({
         type: ['application/epub+zip', 'application/octet-stream', '*/*'],
@@ -208,13 +196,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   };
 
   if (selectedBook) {
-    const status = selectedBook.isFinished
-      ? 'Finished'
-      : selectedBook.progressPercent > 0
-      ? 'Currently reading'
-      : selectedBook.isWantToRead
-      ? 'Want to read'
-      : 'Not started';
+    const status = libraryBookStatus(selectedBook);
+    const canRead = libraryStatus === 'ready' && available.has(selectedBook.id);
     const genres = selectedBook.genres?.filter(Boolean) ?? [];
 
     return (
@@ -231,12 +214,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             badge={
               selectedBook.isFinished
                 ? { kind: 'read' }
-                : selectedBook.progressPercent > 0
-                ? { kind: 'percent', value: selectedBook.progressPercent }
+                : hasReadingHistory(selectedBook)
+                ? { kind: 'percent', value: displayedBookProgress(selectedBook) }
                 : undefined
             }
           />
-          <Text style={styles.detailsTitle}>{selectedBook.title}</Text>
+          <Text accessibilityRole="header" style={styles.detailsTitle}>{selectedBook.title}</Text>
           <Text style={styles.detailsAuthor}>{selectedBook.author}</Text>
           <View style={styles.detailsStatus}>
             <View style={[styles.detailsStatusDot, { backgroundColor: selectedBook.isFinished ? colors.tertiary : colors.primary }]} />
@@ -246,30 +229,39 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
         <Pressable
           onPress={() => {
+            if (!canRead) return;
             const bookId = selectedBook.id;
             onSelectBook(null);
             onOpenBook(bookId);
           }}
-          style={styles.detailsReadButton}
+          disabled={!canRead}
+          accessibilityRole="button"
+          accessibilityLabel={canRead ? `Read ${selectedBook.title}` : 'Reading text unavailable'}
+          accessibilityState={{ disabled: !canRead }}
+          style={[styles.detailsReadButton, !canRead && { opacity: 0.55 }]}
         >
           <Icon name="menu_book" size={19} color={colors.white} />
           <Text style={styles.detailsReadButtonText}>
-            {selectedBook.isFinished
-              ? 'Open book'
-              : selectedBook.progressPercent > 0
+            {!canRead ? (libraryStatus === 'loading' ? 'Checking saved text…' : 'Text unavailable on this device')
+              : selectedBook.isFinished ? 'Open book'
+              : hasReadingHistory(selectedBook)
               ? 'Continue reading'
               : 'Start reading'}
           </Text>
         </Pressable>
 
+        {!canRead && <Text style={styles.emptyBody}>{libraryStatus === 'loading' ? 'Checking the saved reading files…'
+          : libraryStatus === 'error' ? 'Your saved library could not be loaded. Restart Folio before making changes.'
+          : 'The reading text is not saved on this device. Return to Library and import the EPUB to read it here.'}</Text>}
+
         <View style={styles.detailsPageSection}>
           <View style={styles.detailsSectionHeader}>
             <Text style={styles.detailsSectionTitle}>Reading progress</Text>
-            <Text style={styles.detailsProgressPercent}>{selectedBook.isFinished ? '100%' : `${selectedBook.progressPercent}%`}</Text>
+            <Text style={styles.detailsProgressPercent}>{`${displayedBookProgress(selectedBook)}%`}</Text>
           </View>
-          <ProgressBar percent={selectedBook.isFinished ? 100 : selectedBook.progressPercent} height={8} />
+          <ProgressBar percent={displayedBookProgress(selectedBook)} height={8} />
           <Text style={styles.detailsProgressCaption}>
-            Current bookmark: page {selectedBook.currentPage} of {selectedBook.totalPages}
+            Saved reading position: passage {selectedBook.currentPage} of {selectedBook.totalPages}
           </Text>
         </View>
 
@@ -289,7 +281,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               <Text style={styles.detailsValue} numberOfLines={2}>{selectedBook.currentChapter || 'Not started'}</Text>
             </View>
             <View style={styles.detailsInfoRow}>
-              <Text style={styles.detailsLabel}>Pages</Text>
+              <Text style={styles.detailsLabel}>Reading passages</Text>
               <Text style={styles.detailsValue}>{selectedBook.totalPages}</Text>
             </View>
             {selectedBook.totalLoc ? (
@@ -347,6 +339,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             setEditing(selectedBook);
             onSelectBook(null);
           }}
+          disabled={libraryStatus !== 'ready'}
+          accessibilityRole="button"
+          accessibilityLabel={`Customize cover for ${selectedBook.title}`}
+          accessibilityState={{ disabled: libraryStatus !== 'ready' }}
           style={styles.detailsCustomizeButton}
         >
           <Icon name="palette" size={18} color={colors.primary} />
@@ -363,6 +359,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
     >
+      {libraryStatus !== 'ready' && (
+        <View style={styles.statusCard}>
+          <Text accessibilityRole={libraryStatus === 'error' ? 'alert' : undefined} accessibilityLiveRegion="polite" style={styles.statusText}>
+            {libraryStatus === 'loading' ? 'Loading your saved library and reading files…' : 'Your saved library could not be loaded. Existing data has been kept. Restart Folio before importing or changing books.'}
+          </Text>
+        </View>
+      )}
       {/* Today's reading time */}
       {hasLegacyData && (
         <View style={{ padding: 16, gap: 8, borderRadius: 12, backgroundColor: colors.surfaceContainer }}>
@@ -382,10 +385,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       </View>
 
       {/* Continue reading */}
-      {featured ? (
+      {libraryStatus === 'ready' && !filtered && (featured ? (
         <View>
-          <Text style={styles.sectionLabel}>CONTINUE READING</Text>
-          <Pressable onPress={() => onOpenBook(featured.id)} style={styles.featured}>
+          <Text accessibilityRole="header" style={styles.sectionLabel}>CONTINUE READING</Text>
+          <Pressable onPress={() => onOpenBook(featured.id)} accessibilityRole="button" accessibilityLabel={`Resume ${featured.title} by ${featured.author}`} style={styles.featured}>
             <BookCover
               book={featured}
               style={featured.coverStyle || globalCoverStyle}
@@ -403,9 +406,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 </Text>
               </View>
               <View style={{ gap: 6 }}>
-                <ProgressBar percent={featured.progressPercent} height={5} />
+                <ProgressBar percent={displayedBookProgress(featured)} height={5} />
                 <View style={styles.featFoot}>
-                  <Text style={styles.featPct}>{featured.progressPercent}% complete</Text>
+                  <Text style={styles.featPct}>{displayedBookProgress(featured)}% complete</Text>
                   <View style={styles.continueBtn}>
                     <Text style={styles.continueText}>Continue</Text>
                     <Icon name="chevron_right" size={16} color="#fff" />
@@ -418,14 +421,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       ) : (
         <View style={styles.emptyCard}>
           <Icon name="local_library" size={36} color={colors.secondaryFixedDim} />
-          <Text style={styles.emptyTitle}>Your library is empty</Text>
-          <Text style={styles.emptyBody}>Browse free books or import an EPUB from your device to start reading.</Text>
+          <Text accessibilityRole="header" style={styles.emptyTitle}>{books.length || recoveryBooks.length ? 'Choose your next read' : 'Your library is empty'}</Text>
+          <Text style={styles.emptyBody}>{books.length || recoveryBooks.length ? 'Open a book below to start reading, or re-import an EPUB whose text is missing.' : 'Browse free books or import an EPUB from your device to start reading.'}</Text>
         </View>
-      )}
+      ))}
 
       {/* Get books: browse the free catalog, or import a file */}
       <View style={styles.bookSourceActions}>
-        <Pressable onPress={() => setBrowseOpen(true)} style={styles.browseBtn}>
+        <Pressable onPress={() => { if (libraryStatus === 'ready') setBrowseOpen(true); }} disabled={libraryStatus !== 'ready'} accessibilityRole="button" accessibilityLabel="Browse free books" accessibilityState={{ disabled: libraryStatus !== 'ready' }} style={styles.browseBtn}>
           <Icon name="explore" size={20} color="#fff" />
           <View style={{ flex: 1 }}>
             <Text style={styles.browseTitle}>Browse free books</Text>
@@ -433,10 +436,20 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </View>
           <Icon name="chevron_right" size={20} color="#fff" />
         </Pressable>
-        <Pressable onPress={handleImport} disabled={importing} style={[styles.importBtn, importing && { opacity: 0.7 }]}>
+        <Pressable onPress={handleImport} disabled={!canImport} accessibilityRole="button" accessibilityLabel="Import EPUB" accessibilityState={{ disabled: !canImport, busy: importing }} style={[styles.importBtn, !canImport && { opacity: 0.7 }]}>
           <Icon name={importing ? 'sync' : 'upload_file'} size={20} color={colors.primary} spin={importing} />
           <Text style={styles.importText}>{importing ? 'Reading…' : 'Import EPUB'}</Text>
         </Pressable>
+      </View>
+
+      <View style={styles.librarySearch}>
+        <Icon name="search" size={20} color={colors.muted} />
+        <TextInput value={query} onChangeText={value => setQuery(value.slice(0, 200))} maxLength={200}
+          accessibilityLabel="Search Library by title or author" placeholder="Search titles or authors" placeholderTextColor={colors.muted}
+          autoCapitalize="none" autoCorrect={false} returnKeyType="search" style={styles.librarySearchInput} />
+        {query.length > 0 && <Pressable onPress={() => setQuery('')} accessibilityRole="button" accessibilityLabel="Clear Library search" style={styles.smallAction}>
+          <Icon name="close" size={20} color={colors.muted} />
+        </Pressable>}
       </View>
 
       {/* Filters */}
@@ -451,7 +464,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         <View style={styles.sortGroup}>
           <Icon name="sort" size={16} color={colors.muted} />
           {SORTS.map((s) => (
-            <Pressable key={s.id} onPress={() => setSort(s.id)}>
+            <Pressable key={s.id} onPress={() => setSort(s.id)} accessibilityRole="button" accessibilityLabel={`Sort Library by ${s.label}`} accessibilityState={{ selected: sort === s.id }} style={styles.sortButton}>
               <Text style={[styles.sortText, sort === s.id && styles.sortActive]}>{s.label}</Text>
             </Pressable>
           ))}
@@ -462,6 +475,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               key={mode}
               onPress={() => setViewMode(mode)}
               style={[styles.viewToggleButton, viewMode === mode && { backgroundColor: colors.surface }]}
+              accessibilityRole="button"
               accessibilityLabel={`${mode === 'grid' ? 'Grid' : 'List'} view`}
               accessibilityState={{ selected: viewMode === mode }}
             >
@@ -475,56 +489,68 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         </View>
       </View>
 
+      <Text accessibilityLiveRegion="polite" style={styles.resultCount}>
+        {libraryStatus === 'loading' ? 'Checking saved books…' : libraryStatus === 'error' ? 'Saved library unavailable' : `${visible.length} ${visible.length === 1 ? 'book' : 'books'}${visibleRecoveryBooks.length ? ` · ${visibleRecoveryBooks.length} need an EPUB` : ''}`}
+      </Text>
+
       {/* Grid */}
       {visible.length === 0 && visibleRecoveryBooks.length === 0 ? (
         <View style={styles.noResults}>
-          <Text style={styles.emptyBody}>No books found matching criteria.</Text>
-          {filter !== 'all' && (
+          <Text style={styles.emptyBody}>{libraryStatus === 'loading' ? 'Checking saved books…' : libraryStatus === 'error' ? 'Library results are unavailable until loading succeeds.' : filtered ? 'No books match this search and filter. Try another title or author.' : 'No books to show yet.'}</Text>
+          {filtered && (
             <Pressable
-              onPress={() => setFilter('all')}
+              onPress={resetFilters} accessibilityRole="button" accessibilityLabel="Clear Library search and filters" style={styles.smallAction}
             >
-              <Text style={styles.reset}>Reset Filters</Text>
+              <Text style={styles.reset}>Clear search and filters</Text>
             </Pressable>
           )}
         </View>
       ) : (
         <View style={viewMode === 'grid' ? styles.grid : styles.list}>
           {visible.map((b) => (
-            <Pressable
-              key={b.id}
-              onPress={() => onSelectBook(b.id)}
-              onLongPress={() => setEditing(b)}
-              delayLongPress={400}
-              style={viewMode === 'grid' ? { width: cardWidth } : styles.libraryListCard}
-            >
-              <BookCover
-                book={b}
-                style={b.coverStyle || globalCoverStyle}
-                size={viewMode === 'list' ? 'compact' : 'regular'}
-                containerStyle={
-                  viewMode === 'grid'
-                    ? { width: '100%', aspectRatio: 2 / 3 }
-                    : styles.libraryListCover
-                }
-                badge={
-                  b.isFinished
-                    ? { kind: 'read' }
-                    : b.progressPercent > 0
-                    ? { kind: 'percent', value: b.progressPercent }
-                    : undefined
-                }
-                onEdit={() => setEditing(b)}
-              />
-              <View style={viewMode === 'list' ? styles.libraryListCopy : undefined}>
-                <Text style={styles.cardTitle} numberOfLines={2}>{b.title}</Text>
-                <Text style={styles.cardAuthor} numberOfLines={1}>{b.author}</Text>
-                {viewMode === 'list' ? (
-                  <Text style={styles.listBookProgress}>
-                    {b.isFinished ? 'Finished' : `${b.progressPercent}% read`} · Page {b.currentPage} of {b.totalPages}
-                  </Text>
-                ) : null}
-              </View>
-            </Pressable>
+            <View key={b.id} style={viewMode === 'grid' ? { width: cardWidth } : { width: '100%' }}>
+              <Pressable
+                onPress={() => onSelectBook(b.id)}
+                onLongPress={() => { if (libraryStatus === 'ready') setEditing(b); }}
+                delayLongPress={400}
+                accessibilityRole="button"
+                accessibilityLabel={`${b.title} by ${b.author}. ${libraryBookStatus(b)}. ${textStatus(b.id)}`}
+                accessibilityHint="Open book details"
+                style={viewMode === 'grid' ? undefined : [styles.libraryListCard, { paddingRight: 60 }]}
+              >
+                <BookCover
+                  book={b}
+                  style={b.coverStyle || globalCoverStyle}
+                  size={viewMode === 'list' ? 'compact' : 'regular'}
+                  containerStyle={
+                    viewMode === 'grid'
+                      ? { width: '100%', aspectRatio: 2 / 3 }
+                      : styles.libraryListCover
+                  }
+                  badge={
+                    b.isFinished
+                      ? { kind: 'read' }
+                      : hasReadingHistory(b)
+                      ? { kind: 'percent', value: displayedBookProgress(b) }
+                      : undefined
+                  }
+                />
+                <View style={viewMode === 'list' ? styles.libraryListCopy : undefined}>
+                  <Text style={styles.cardTitle} numberOfLines={2}>{b.title}</Text>
+                  <Text style={styles.cardAuthor} numberOfLines={1}>{b.author}</Text>
+                  {viewMode === 'list' ? (
+                    <Text style={styles.listBookProgress}>
+                      {libraryBookStatus(b)} · Position {b.currentPage} of {b.totalPages}
+                    </Text>
+                  ) : null}
+                  {libraryStatus === 'ready' && !available.has(b.id) && <Text style={styles.listBookProgress}>EPUB needed on this device</Text>}
+                </View>
+              </Pressable>
+              <Pressable onPress={() => { if (libraryStatus === 'ready') setEditing(b); }} disabled={libraryStatus !== 'ready'}
+                accessibilityRole="button" accessibilityLabel={`Customize cover for ${b.title}`} accessibilityState={{ disabled: libraryStatus !== 'ready' }} style={styles.editBookAction}>
+                <Icon name="palette" size={20} color={colors.primary} />
+              </Pressable>
+            </View>
           ))}
           {visibleRecoveryBooks.map((recovery) => {
             const isReimporting = reimportingId === recovery.id;
@@ -532,11 +558,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               <Pressable
                 key={`recovery-${recovery.id}`}
                 onPress={() => void handleReimportRecovery(recovery)}
-                disabled={!!reimportingId || importing}
+                disabled={!canImport}
                 style={[
                   viewMode === 'grid' ? { width: cardWidth } : styles.libraryListCard,
                   { opacity: reimportingId && !isReimporting ? 0.55 : 1 },
                 ]}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: !canImport, busy: isReimporting }}
                 accessibilityLabel={`Re-import ${recovery.title} from a local EPUB`}
               >
                 <View style={viewMode === 'list' ? styles.libraryListCover : undefined}>
@@ -826,6 +854,13 @@ export const CoverEditor: React.FC<{
 
 const createStyles = (colors: AppPalette) => StyleSheet.create({
   scroll: { paddingTop: 4, gap: 18 },
+  statusCard: { padding: 16, borderRadius: 12, backgroundColor: colors.surfaceContainer },
+  statusText: { ...type.bodyMd, color: colors.onSurface },
+  librarySearch: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceContainer, borderRadius: 12, paddingLeft: 12 },
+  librarySearchInput: { ...type.bodyMd, flex: 1, color: colors.onSurface, minHeight: 48, paddingVertical: 10 },
+  smallAction: { minWidth: 48, minHeight: 48, justifyContent: 'center', alignItems: 'center' },
+  resultCount: { ...type.bodySm, color: colors.muted },
+  editBookAction: { position: 'absolute', right: 6, top: 6, minWidth: 48, minHeight: 48, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.surface, borderRadius: 24, borderWidth: 1, borderColor: colors.border },
   goalCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -990,7 +1025,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   detailsReadButtonText: { ...type.labelLg, color: colors.white },
 
   chipRow: { gap: 8, paddingRight: 8 },
-  toolRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  toolRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   viewToggle: {
     flexDirection: 'row',
     backgroundColor: colors.surfaceContainer,
@@ -999,13 +1034,14 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     gap: 2,
   },
   viewToggleButton: {
-    width: 34,
-    height: 30,
+    width: 48,
+    height: 48,
     borderRadius: 7,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sortGroup: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  sortGroup: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4, flexShrink: 1 },
+  sortButton: { minWidth: 48, minHeight: 48, paddingHorizontal: 8, justifyContent: 'center' },
   sortText: { ...type.labelMd, color: colors.muted },
   sortActive: { color: colors.primary },
   coverToggle: { flexDirection: 'row', backgroundColor: colors.surfaceContainer, padding: 3, borderRadius: 10, gap: 2 },
