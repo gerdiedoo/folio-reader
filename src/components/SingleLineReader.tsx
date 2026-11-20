@@ -191,7 +191,7 @@ export const SingleLineReader: React.FC<SingleLineReaderProps> = ({
               </Pressable>
             ))}
           </View>
-          <Pressable onPress={onExit} accessibilityRole="button" accessibilityLabel="Return to pages" style={styles.exitBtn}>
+          <Pressable onPress={() => { pausePlayback(); onExit(); }} accessibilityRole="button" accessibilityLabel="Return to pages" style={styles.exitBtn}>
             <Icon name="auto_stories" size={16} color={colors.primary} />
             <Text style={styles.exitText}>Pages</Text>
           </Pressable>

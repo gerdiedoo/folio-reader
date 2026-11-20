@@ -246,7 +246,7 @@ test('text size is adjustable and applied to saved settings with bounded values'
     const { SettingsSheet } = h.load('../src/components/SettingsSheet.tsx');
     const { INITIAL_SETTINGS } = h.load('../src/data/initialData.ts');
     let saved;
-    const props = { settings: { ...INITIAL_SETTINGS, fontSizeStep: start }, onSave: s => { saved = s; }, onClose() {} };
+    const props = { settings: { ...INITIAL_SETTINGS, fontSizeStep: start }, onSave: async s => { saved = s; return true; }, onClose() {} };
     let root = h.render(SettingsSheet, props);
     for (const adjustment of adjustments) {
       const control = labelled(root, 'Text size');
@@ -1287,4 +1287,186 @@ test('dictionary and mastery controls cannot commit while saved vocabulary is un
     assert.equal(labelled(card, 'Mastered: mastery 5 of 5').disabled, true);
     await labelled(card, 'Mastered: mastery 5 of 5').onPress(); other.unmount();
   }
+});
+
+let preferencesScope = 0;
+function preferencesHook() {
+  const data = new Map(), uploaded = [], reports = [];
+  const scope = `preferences-hook-${++preferencesScope}.`;
+  let failRead = false, failWrite = false, gate, remote = async () => null, fetches = 0;
+  const storage = {
+    storageKey: key => scope + key,
+    async loadJSONEntryStrict(key) {
+      if (failRead) throw new Error('Read failure');
+      const raw = data.get(scope + key);
+      return raw === undefined ? { present: false, value: null } : { present: true, value: JSON.parse(raw) };
+    },
+    async saveJSONStrict(key, value) {
+      if (gate) await gate;
+      if (failWrite) { failWrite = false; throw new Error('Storage full'); }
+      data.set(scope + key, JSON.stringify(value));
+    },
+  };
+  const cloud = {
+    fetchReadingSettingsFromSupabase: () => { fetches++; return remote(); },
+    async upsertReadingSettingsToSupabase(settings) { uploaded.push(settings); return false; },
+  };
+  const h = harness({ runEffects: true });
+  const { useReaderSettings } = h.load('../src/lib/useReaderSettings.ts');
+  return { h, hook: () => useReaderSettings(storage, cloud, message => reports.push(message)), data, storage, uploaded, reports,
+    legacy: value => data.set(scope + 'settings', JSON.stringify(value)),
+    failRead: value => { failRead = value; }, failWrite: () => { failWrite = true; },
+    remote: fn => { remote = fn; }, fetches: () => fetches,
+    blockWrite: () => { let release; gate = new Promise(ok => { release = ok; }); return release; },
+  };
+}
+
+test('preference hook confirms storage before changing appearance or uploading and retains confirmed choices on failure', async () => {
+  const f = preferencesHook(); f.legacy({ theme: 'sepia' });
+  f.h.render(f.hook); await flushJobs(); let result = f.h.render(f.hook);
+  const release = f.blockWrite(); const saving = result.patch({ theme: 'charcoal' });
+  await flushJobs(); result = f.h.render(f.hook);
+  assert.equal(result.busy, true); assert.equal(result.settings.theme, 'sepia'); assert.equal(f.uploaded.length, 0);
+  release(); assert.equal(await saving, true); await flushJobs(); result = f.h.render(f.hook);
+  assert.equal(result.busy, false); assert.equal(result.settings.theme, 'charcoal'); assert.equal(f.uploaded.length, 1);
+  f.failWrite(); assert.equal(await result.patch({ theme: 'white' }), false);
+  result = f.h.render(f.hook);
+  assert.equal(result.settings.theme, 'charcoal'); assert.match(result.notice, /could not be saved/);
+  assert.equal(f.uploaded.length, 1); assert.equal(f.reports.length, 1);
+  assert.equal(await result.patch({ theme: 'white' }), true); result = f.h.render(f.hook);
+  assert.equal(result.settings.theme, 'white'); assert.equal(result.notice, null);
+  f.h.unmount();
+});
+
+test('unreadable preferences block changes and cloud import until an explicit retry succeeds', async () => {
+  const f = preferencesHook(); f.failRead(true);
+  let result = f.h.render(f.hook);
+  assert.equal(await result.patch({ theme: 'white' }), false);
+  await flushJobs(); result = f.h.render(f.hook);
+  assert.equal(result.status, 'error'); assert.equal(f.fetches(), 0);
+  assert.equal(await result.patch({ theme: 'white' }), false); assert.equal(f.data.size, 0);
+  f.failRead(false); f.legacy({ theme: 'sepia' }); result.retry();
+  f.h.render(f.hook); await flushJobs(); result = f.h.render(f.hook);
+  assert.equal(result.status, 'ready'); assert.equal(result.settings.theme, 'sepia'); assert.equal(f.fetches(), 0);
+  f.h.unmount();
+});
+
+test('late cloud preferences cannot replace choices already confirmed on the device', async () => {
+  const f = preferencesHook(); let resolve;
+  f.remote(() => new Promise(ok => { resolve = ok; }));
+  f.h.render(f.hook); await flushJobs(); let result = f.h.render(f.hook);
+  assert.equal(result.status, 'ready');
+  assert.equal(await result.patch({ theme: 'charcoal', readingFlowMode: 'paginated' }), true);
+  resolve({ theme: 'white', fontSizeStep: 8 }); await flushJobs(); result = f.h.render(f.hook);
+  assert.equal(result.settings.theme, 'charcoal'); assert.equal(result.settings.fontSizeStep, 4);
+  assert.equal(result.settings.readingFlowMode, 'paginated'); f.h.unmount();
+});
+
+test('cloud preference seed waits for local storage and ignores delayed results after unmount', async () => {
+  const f = preferencesHook(); f.remote(async () => ({ theme: 'charcoal' })); const release = f.blockWrite();
+  f.h.render(f.hook); await flushJobs(); let result = f.h.render(f.hook);
+  assert.equal(result.settings.theme, 'parchment'); assert.equal(f.data.size, 0);
+  release(); await flushJobs(); result = f.h.render(f.hook);
+  assert.equal(result.settings.theme, 'charcoal'); assert.equal(f.uploaded.length, 0); f.h.unmount();
+  const other = preferencesHook(); let resolve;
+  other.remote(() => new Promise(ok => { resolve = ok; }));
+  other.h.render(other.hook); await flushJobs();
+  const writes = other.h.stateWrites(); other.h.unmount(); resolve({ theme: 'white' }); await flushJobs();
+  assert.equal(other.h.stateWrites(), writes); assert.equal(other.data.size, 0);
+});
+
+test('settings Keep Changes waits, rejects duplicate taps and retains the draft after a failed save', async () => {
+  const h = harness({ runEffects: true });
+  const { SettingsSheet } = h.load('../src/components/SettingsSheet.tsx');
+  const { INITIAL_SETTINGS } = h.load('../src/data/initialData.ts');
+  let resolve, calls = 0, closed = 0, changes;
+  const props = { settings: INITIAL_SETTINGS, isSheetOnly: true, onClose: () => { closed++; },
+    onSave: partial => { changes = partial; calls++; return new Promise(ok => { resolve = ok; }); } };
+  let root = h.render(SettingsSheet, props);
+  labelled(root, 'wide margins').onPress(); root = h.render(SettingsSheet, props);
+  const saving = labelled(root, 'Keep Changes').onPress();
+  labelled(root, 'Keep Changes').onPress(); root = h.render(SettingsSheet, props);
+  assert.equal(calls, 1); assert.equal(closed, 0); assert.deepEqual(changes, { margins: 'wide' });
+  assert.equal(labelled(root, 'Keep Changes').accessibilityState.busy, true);
+  assert.equal(labelled(root, 'Close Settings').disabled, true);
+  labelled(root, 'Close Settings').onPress();
+  labelled(root, 'Increase text size').onPress(); root = h.render(SettingsSheet, props);
+  assert.equal(closed, 0); assert.equal(labelled(root, 'Text size').accessibilityValue.now, 4);
+  resolve(false); await saving; root = h.render(SettingsSheet, props);
+  assert.equal(closed, 0); assert.equal(labelled(root, 'wide margins').accessibilityState.selected, true);
+  assert.ok(elements(root).some(node => typeof node.props?.children === 'string' && node.props.children.includes('Your choices have been kept')));
+  const retry = labelled(root, 'Keep Changes').onPress(); resolve(true); await retry;
+  assert.equal(closed, 1); assert.equal(calls, 2); h.unmount();
+});
+
+test('settings draft follows newly loaded untouched fields and saves only fields the reader edited', async () => {
+  const h = harness({ runEffects: true });
+  const { SettingsSheet } = h.load('../src/components/SettingsSheet.tsx');
+  const { INITIAL_SETTINGS } = h.load('../src/data/initialData.ts');
+  let saved;
+  let props = { settings: INITIAL_SETTINGS, onSave: async partial => { saved = partial; return true; }, onClose() {} };
+  let root = h.render(SettingsSheet, props);
+  labelled(root, 'wide margins').onPress(); root = h.render(SettingsSheet, props);
+  props = { ...props, settings: { ...INITIAL_SETTINGS, font: 'Manrope', margins: 'narrow', fontSizeStep: 7 } };
+  h.render(SettingsSheet, props); root = h.render(SettingsSheet, props);
+  assert.equal(labelled(root, 'Manrope typeface').accessibilityState.selected, true);
+  assert.equal(labelled(root, 'wide margins').accessibilityState.selected, true);
+  assert.equal(labelled(root, 'Text size').accessibilityValue.now, 7);
+  await labelled(root, 'Keep Changes').onPress(); assert.deepEqual(saved, { margins: 'wide' }); h.unmount();
+});
+
+test('settings loading/error states prevent commits and expose a persistent retry action', async () => {
+  for (const saveStatus of ['loading', 'error']) {
+    const h = harness({ runEffects: true });
+    const { SettingsSheet } = h.load('../src/components/SettingsSheet.tsx');
+    const { INITIAL_SETTINGS } = h.load('../src/data/initialData.ts');
+    let retried = false;
+    const props = { settings: INITIAL_SETTINGS, saveStatus, saveNotice: 'Saved preferences could not be loaded.',
+      onSave: async () => assert.fail('Unexpected save'), onClose() {}, onRetry: () => { retried = true; } };
+    const root = h.render(SettingsSheet, props);
+    assert.equal(labelled(root, 'Keep Changes').disabled, true);
+    await labelled(root, 'Keep Changes').onPress();
+    if (saveStatus === 'error') { labelled(root, 'Try loading reading preferences again').onPress(); assert.equal(retried, true); }
+    h.unmount();
+  }
+});
+
+test('Reset Defaults remains a draft until Keep Changes and an exception keeps it available for retry', async () => {
+  const h = harness({ runEffects: true });
+  const { SettingsSheet } = h.load('../src/components/SettingsSheet.tsx');
+  const { INITIAL_SETTINGS } = h.load('../src/data/initialData.ts');
+  let calls = 0, closed = false;
+  const props = { settings: { ...INITIAL_SETTINGS, fontSizeStep: 8 }, onSave: async changes => { calls++; assert.deepEqual(changes, INITIAL_SETTINGS); throw new Error('Storage'); }, onClose: () => { closed = true; } };
+  let root = h.render(SettingsSheet, props);
+  labelled(root, 'Reset Defaults').onPress(); root = h.render(SettingsSheet, props);
+  assert.equal(calls, 0); assert.equal(labelled(root, 'Text size').accessibilityValue.now, 4);
+  await labelled(root, 'Keep Changes').onPress(); root = h.render(SettingsSheet, props);
+  assert.equal(calls, 1); assert.equal(closed, false); assert.equal(labelled(root, 'Keep Changes').disabled, false); h.unmount();
+});
+
+test('leaving Settings while a save is pending does not reopen it or update the unmounted sheet', async () => {
+  const h = harness({ runEffects: true });
+  const { SettingsSheet } = h.load('../src/components/SettingsSheet.tsx');
+  const { INITIAL_SETTINGS } = h.load('../src/data/initialData.ts');
+  let resolve, closed = false;
+  const props = { settings: INITIAL_SETTINGS, onSave: () => new Promise(ok => { resolve = ok; }), onClose: () => { closed = true; } };
+  const root = h.render(SettingsSheet, props);
+  const pending = labelled(root, 'Keep Changes').onPress();
+  h.unmount(); const writes = h.stateWrites(); resolve(true); await pending;
+  assert.equal(closed, false); assert.equal(h.stateWrites(), writes);
+});
+
+test('Return to pages immediately pauses Line while the reading-mode save is pending or fails', () => {
+  const h = harness({ runEffects: true });
+  const { SingleLineReader } = h.load('../src/components/SingleLineReader.tsx');
+  let requested = false;
+  const props = lineReaderProps({ onExit: () => { requested = true; return Promise.resolve(false); } });
+  let root = h.render(SingleLineReader, props);
+  labelled(root, 'Play chapter').onPress(); root = h.render(SingleLineReader, props);
+  assert.equal(h.timers.size, 1);
+  labelled(root, 'Return to pages').onPress();
+  assert.equal(requested, true); assert.equal(h.timers.size, 0);
+  root = h.render(SingleLineReader, props);
+  assert.equal(labelled(root, 'Play chapter').disabled, false); assert.equal(h.timers.size, 0);
+  h.unmount();
 });

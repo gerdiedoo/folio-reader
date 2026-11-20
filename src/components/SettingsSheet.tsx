@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { READER_FONTS, normalizeReaderSettings, readerTextMetrics } from '../lib/readerPreferences';
 import { INITIAL_SETTINGS } from '../data/initialData';
@@ -10,7 +10,11 @@ import { ModalShell } from './ui/ModalShell';
 
 interface SettingsSheetProps {
   settings: ReadingSettings;
-  onSave: (settings: ReadingSettings) => void;
+  onSave: (changes: Partial<ReadingSettings>) => Promise<boolean>;
+  saveStatus?: 'loading' | 'ready' | 'error';
+  saveNotice?: string | null;
+  saveBusy?: boolean;
+  onRetry?: () => void;
   onClose: () => void;
   /** True when shown as a modal bottom sheet over the reader; false for the Settings tab. */
   isSheetOnly?: boolean;
@@ -46,12 +50,31 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
   settings,
   onSave,
   onClose,
+  saveStatus = 'ready',
+  saveNotice = null,
+  saveBusy = false,
+  onRetry,
   isSheetOnly = false,
   bottomSpace = 24,
 }) => {
   const colors = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [local, setLocal] = useState<ReadingSettings>(() => normalizeReaderSettings(settings));
+  const dirty = useRef(new Set<keyof ReadingSettings>());
+  const pending = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const locked = saving || saveBusy;
+  useEffect(() => {
+    setLocal(previous => {
+      const next = normalizeReaderSettings(settings);
+      for (const key of dirty.current) Object.assign(next, { [key]: previous[key] });
+      return next;
+    });
+  }, [settings]);
+  const close = () => { if (!pending.current && !saveBusy) onClose(); };
   const [activeTab, setActiveTab] = useState<SheetTab>('font');
 
   const step = local.fontSizeStep;
@@ -60,14 +83,28 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
   const coverStyle = local.defaultCoverStyle || 'image';
   const paper = previewPaper[local.theme];
 
-  const update = (partial: Partial<ReadingSettings>) => setLocal((prev) => normalizeReaderSettings({ ...prev, ...partial }));
-
-  const apply = () => {
-    onSave(local);
-    onClose();
+  const update = (partial: Partial<ReadingSettings>) => {
+    if (pending.current || saveBusy) return;
+    for (const key of Object.keys(partial) as (keyof ReadingSettings)[]) dirty.current.add(key);
+    setLocal(previous => normalizeReaderSettings({ ...previous, ...partial }));
+    setError(null);
   };
 
-  const reset = () => setLocal({ ...INITIAL_SETTINGS });
+  const apply = async () => {
+    if (!mounted.current || pending.current || saveBusy || saveStatus !== 'ready') return;
+    const changes: Partial<ReadingSettings> = {};
+    for (const key of dirty.current) Object.assign(changes, { [key]: local[key] });
+    pending.current = true; setSaving(true); setError(null);
+    try {
+      const saved = await onSave(changes);
+      if (!mounted.current) return;
+      if (saved) { dirty.current.clear(); onClose(); }
+      else setError('Your choices have been kept here. Try saving again.');
+    } catch { if (mounted.current) setError('Your choices have been kept here. Try saving again.'); }
+    finally { pending.current = false; if (mounted.current) setSaving(false); }
+  };
+
+  const reset = () => update({ ...INITIAL_SETTINGS });
 
   const tabs: { id: SheetTab; label: string; icon: IconName }[] = [
     { id: 'font', label: 'Font & Layout', icon: 'menu_book' },
@@ -85,7 +122,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
             <Text style={styles.headerTitle}>Typography &amp; Layout</Text>
           </View>
           {isSheetOnly && (
-            <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close Settings" style={styles.closeBtn}>
+            <Pressable disabled={locked} onPress={close} accessibilityRole="button" accessibilityLabel="Close Settings" style={styles.closeBtn}>
               <Icon name="close" size={20} color={colors.muted} />
             </Pressable>
           )}
@@ -159,7 +196,8 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                       onPress={() => update({ font: f })}
                       accessibilityRole="button"
                       accessibilityLabel={`${f} typeface`}
-                      accessibilityState={{ selected }}
+                      disabled={locked}
+                      accessibilityState={{ selected, ...(locked ? { disabled: true } : {}) }}
                       style={[styles.fontPill, { backgroundColor: selected ? colors.primaryContainer : colors.surface }]}
                     >
                       {selected && <Icon name="check_small" size={16} color="#fff" />}
@@ -190,8 +228,8 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                   style={[styles.stepBtn, step <= 1 && { opacity: 0.35 }]}
                   accessibilityLabel="Decrease text size"
                   accessibilityRole="button"
-                  disabled={step <= 1}
-                  accessibilityState={{ disabled: step <= 1 }}
+                  disabled={locked || step <= 1}
+                  accessibilityState={{ disabled: locked || step <= 1 }}
                 >
                   <Text style={{ fontFamily: F.serifSemi, fontSize: 15, color: colors.onSurface }}>Aa-</Text>
                 </Pressable>
@@ -202,6 +240,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                   accessibilityRole="adjustable"
                   accessibilityLabel="Text size"
                   accessibilityValue={{ min: 1, max: TOTAL_STEPS, now: step, text: `${metrics.fontSize} points, size ${step} of ${TOTAL_STEPS}` }}
+                  accessibilityState={{ disabled: locked }}
                   accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
                   onAccessibilityAction={({ nativeEvent }) => {
                     const delta = nativeEvent.actionName === 'increment' ? 1 : nativeEvent.actionName === 'decrement' ? -1 : 0;
@@ -241,8 +280,8 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                   style={[styles.stepBtn, step >= TOTAL_STEPS && { opacity: 0.35 }]}
                   accessibilityLabel="Increase text size"
                   accessibilityRole="button"
-                  disabled={step >= TOTAL_STEPS}
-                  accessibilityState={{ disabled: step >= TOTAL_STEPS }}
+                  disabled={locked || step >= TOTAL_STEPS}
+                  accessibilityState={{ disabled: locked || step >= TOTAL_STEPS }}
                 >
                   <Text style={{ fontFamily: F.serifSemi, fontSize: 20, color: colors.onSurface }}>Aa+</Text>
                 </Pressable>
@@ -262,7 +301,8 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                         onPress={() => update({ lineSpacing: o.id })}
                         accessibilityRole="button"
                         accessibilityLabel={`${o.id} line spacing`}
-                        accessibilityState={{ selected }}
+                        disabled={locked}
+                        accessibilityState={{ selected, ...(locked ? { disabled: true } : {}) }}
                         style={[styles.iconSegBtn, selected && { backgroundColor: colors.surfaceContainer }]}
                       >
                         <Icon name={o.icon} size={18} color={selected ? colors.primary : colors.muted} />
@@ -283,7 +323,8 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                         onPress={() => update({ margins: o.id })}
                         accessibilityRole="button"
                         accessibilityLabel={`${o.id} margins`}
-                        accessibilityState={{ selected }}
+                        disabled={locked}
+                        accessibilityState={{ selected, ...(locked ? { disabled: true } : {}) }}
                         style={[styles.iconSegBtn, selected && { backgroundColor: colors.surfaceContainer }]}
                       >
                         <Icon name={o.icon} size={18} color={selected ? colors.primary : colors.muted} />
@@ -308,7 +349,8 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                     onPress={() => update({ theme: t.id })}
                     accessibilityRole="button"
                     accessibilityLabel={`${t.label} page theme`}
-                    accessibilityState={{ selected }}
+                    disabled={locked}
+                    accessibilityState={{ selected, ...(locked ? { disabled: true } : {}) }}
                     style={[
                       styles.themeBtn,
                       selected
@@ -343,6 +385,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                 <Text style={styles.switchSub}>Show an approximate time based on passage length</Text>
               </View>
               <Switch
+                disabled={locked}
                 accessibilityLabel="Display estimated reading time"
                 value={local.displayReadingPace}
                 onValueChange={(v) => update({ displayReadingPace: v })}
@@ -369,12 +412,14 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
               </Text>
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 <ChoiceButton
+                  disabled={locked}
                   icon="unfold_more"
                   label="Non-Stop Scroll"
                   active={flowMode === 'continuous'}
                   onPress={() => update({ readingFlowMode: 'continuous' })}
                 />
                 <ChoiceButton
+                  disabled={locked}
                   icon="auto_stories"
                   label="Page by Page"
                   active={flowMode === 'paginated'}
@@ -397,12 +442,14 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
               </Text>
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 <ChoiceButton
+                  disabled={locked}
                   icon="image"
                   label="Illustrated"
                   active={coverStyle === 'image'}
                   onPress={() => update({ defaultCoverStyle: 'image' })}
                 />
                 <ChoiceButton
+                  disabled={locked}
                   icon="title"
                   label="Typographic"
                   active={coverStyle === 'typographic'}
@@ -413,12 +460,25 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
           </View>
         )}
 
+        {(saveStatus === 'loading' || saveNotice || error) && (
+          <View style={styles.card}>
+            <Text accessibilityLiveRegion="polite" style={[type.bodySm, { color: colors.onSurface }]}>
+              {saveStatus === 'loading' ? 'Loading saved reading preferences…' : error || saveNotice}
+            </Text>
+            {onRetry && saveStatus !== 'loading' && saveNotice && (
+              <Pressable onPress={onRetry} disabled={locked} accessibilityRole="button" accessibilityLabel="Try loading reading preferences again" accessibilityState={{ disabled: locked }} style={styles.actionBtn}>
+                <Text style={[styles.actionText, { color: colors.primary }]}>Try again</Text>
+              </Pressable>
+            )}
+          </View>
+        )}
+
         <View style={{ flexDirection: 'row', gap: 8, paddingTop: 4 }}>
-          <Pressable onPress={reset} accessibilityRole="button" style={[styles.actionBtn, { backgroundColor: colors.surfaceContainer }]}>
+          <Pressable disabled={locked} onPress={reset} accessibilityRole="button" accessibilityLabel="Reset Defaults" accessibilityState={{ disabled: locked }} style={[styles.actionBtn, { backgroundColor: colors.surfaceContainer }]}>
             <Text style={[styles.actionText, { color: colors.muted }]}>Reset Defaults</Text>
           </Pressable>
-          <Pressable onPress={apply} accessibilityRole="button" style={[styles.actionBtn, { backgroundColor: colors.primaryContainer }]}>
-            <Text style={[styles.actionText, { color: '#fff' }]}>Keep Changes</Text>
+          <Pressable disabled={locked || saveStatus !== 'ready'} onPress={apply} accessibilityRole="button" accessibilityLabel="Keep Changes" accessibilityState={{ disabled: locked || saveStatus !== 'ready', busy: saving }} style={[styles.actionBtn, { backgroundColor: colors.primaryContainer }]}>
+            <Text style={[styles.actionText, { color: '#fff' }]}>{saving ? 'Saving…' : 'Keep Changes'}</Text>
           </Pressable>
         </View>
       </ScrollView>
@@ -427,7 +487,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
 
   if (isSheetOnly) {
     return (
-      <ModalShell onClose={onClose} align="bottom" maxWidth={512} cardStyle={{ maxHeight: '88%' }}>
+      <ModalShell onClose={close} align="bottom" maxWidth={512} cardStyle={{ maxHeight: '88%' }}>
         {body}
       </ModalShell>
     );
@@ -441,7 +501,8 @@ const ChoiceButton: React.FC<{
   label: string;
   active: boolean;
   onPress: () => void;
-}> = ({ icon, label, active, onPress }) => {
+  disabled?: boolean;
+}> = ({ icon, label, active, onPress, disabled = false }) => {
   const colors = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   return (
@@ -449,7 +510,8 @@ const ChoiceButton: React.FC<{
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ selected: active }}
+      disabled={disabled}
+      accessibilityState={{ selected: active, ...(disabled ? { disabled: true } : {}) }}
       style={[
         styles.choice,
         active
@@ -613,6 +675,6 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     gap: 6,
   },
   choiceText: { fontFamily: F.sansSemi, fontSize: 12 },
-  actionBtn: { flex: 1, paddingVertical: 11, borderRadius: 12, alignItems: 'center' },
+  actionBtn: { flex: 1, minHeight: 48, paddingVertical: 11, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   actionText: { ...type.labelLg },
 });

@@ -28,12 +28,8 @@ import { JumpTarget, ReaderView } from './src/components/ReaderView';
 import { SearchModal } from './src/components/SearchModal';
 import { SettingsSheet } from './src/components/SettingsSheet';
 import { Toast } from './src/components/ui/Toast';
-import {
-  INITIAL_BOOKS,
-  INITIAL_GOAL,
-  INITIAL_SETTINGS,
-} from './src/data/initialData';
-import { normalizeReaderSettings } from './src/lib/readerPreferences';
+import { INITIAL_BOOKS, INITIAL_GOAL } from './src/data/initialData';
+import { useReaderSettings } from './src/lib/useReaderSettings';
 import { createBookmark, createBookmarkStore } from './src/lib/bookmarks';
 import { watchAccountSession } from './src/lib/accountSession';
 import { createLocalStore } from './src/lib/localStore';
@@ -106,12 +102,14 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   const storage = useMemo(() => createLocalStore(scope), [scope]);
   const { loadJSON, loadJSONStrict, loadPages, removeBookFiles, saveJSON, saveJSONStrict, savePages } = storage;
   const cloud = useMemo(() => createAccountRepository(supabase, user?.id ?? null), [user?.id]);
-  const { deleteBookFromSupabase, fetchBooksFromSupabase, fetchReadingGoalFromSupabase, fetchReadingSettingsFromSupabase, fetchLibraryBackup, saveLibraryBackup, upsertBookToSupabase, upsertReadingGoalToSupabase, upsertReadingSettingsToSupabase } = cloud;
+  const { deleteBookFromSupabase, fetchBooksFromSupabase, fetchReadingGoalFromSupabase, fetchLibraryBackup, saveLibraryBackup, upsertBookToSupabase, upsertReadingGoalToSupabase } = cloud;
   const { message: toastMessage, showMessage: showToast } = useFeedbackMessage();
   const highlightArchive = useHighlightArchive(storage, cloud, showToast);
   const highlights = highlightArchive.items;
   const lexiconArchive = useLexiconArchive(storage, cloud, showToast);
   const lexicon = lexiconArchive.items;
+  const readerSettings = useReaderSettings(storage, cloud, showToast);
+  const settings = readerSettings.settings;
   const bookmarkStore = useMemo(() => createBookmarkStore(AsyncStorage, storage.storageKey('bookmarks')), [storage]);
   const parseEpubFile = (uri: string, name: string) => parseEpubForStore(uri, name, storage);
   const loadAdded = () => loadAddedForStore(storage);
@@ -148,7 +146,6 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   const [currentBookId, setCurrentBookId] = useState<string>('');
   const [bookDetailsId, setBookDetailsId] = useState<string | null>(null);
   const [customPagesMap, setCustomPagesMap] = useState<Record<string, BookContentPage[]>>({});
-  const [settings, setSettings] = useState<ReadingSettings>(INITIAL_SETTINGS);
   const [readingGoal, setReadingGoal] = useState<ReadingGoal>(INITIAL_GOAL);
   const [recoveryBooks, setRecoveryBooks] = useState<LibraryRecoveryBook[]>([]);
   const [hydrated, setHydrated] = useState(false);
@@ -222,7 +219,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
     let cancelled = false;
 
     (async () => {
-      const [lBooks, lSettings, lGoal, lReadingDay, lRecoveryBooks] = await Promise.all([
+      const [lBooks, lGoal, lReadingDay, lRecoveryBooks] = await Promise.all([
         loadJSONStrict<Book[]>('books').then(saved => {
           if (saved !== null && !Array.isArray(saved)) throw new Error('Invalid library index');
           return saved;
@@ -232,18 +229,15 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
           showToast("Couldn't load your saved library. Restart before importing more books.");
           return null;
         }),
-        loadJSON<ReadingSettings>('settings'),
         loadJSON<ReadingGoal>('goal'),
         loadJSON<string>('readingDay'),
         loadJSON<LibraryRecoveryBook[]>('libraryRecoveryBooks'),
       ]);
       if (cancelled) return;
 
-      const mergedSettings = normalizeReaderSettings({ ...INITIAL_SETTINGS, ...(lSettings ?? {}) });
       if (lBooks?.length) { booksRef.current = lBooks; setBooks(lBooks); }
       if (lGoal) setReadingGoal(lGoal);
       if (lRecoveryBooks) setRecoveryBooks(lRecoveryBooks);
-      setSettings(mergedSettings);
 
       // Re-attach parsed EPUB pages that were saved to disk
       const pageEntries = await Promise.all(
@@ -261,10 +255,9 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
       // Remote data (cloud wins for items it has, local-only items are kept)
       let mergedGoal = lGoal ?? INITIAL_GOAL;
       try {
-        const [sbBooks, sbGoal, sbSettings] = await Promise.all([
+        const [sbBooks, sbGoal] = await Promise.all([
           fetchBooksFromSupabase(),
           fetchReadingGoalFromSupabase(),
-          fetchReadingSettingsFromSupabase(),
         ]);
         if (cancelled) return;
 
@@ -284,7 +277,6 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
           mergedGoal = sbGoal;
           setReadingGoal(sbGoal);
         }
-        if (sbSettings) setSettings((prev) => normalizeReaderSettings({ ...prev, ...sbSettings }));
       } catch (err) {
         console.warn('Initial Supabase fetch note:', err);
       }
@@ -311,9 +303,6 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   useEffect(() => {
     if (hydrated && libraryLoadState.current === 'ready') saveJSON('books', books);
   }, [books, hydrated]);
-  useEffect(() => {
-    if (hydrated) saveJSON('settings', settings);
-  }, [settings, hydrated]);
   useEffect(() => {
     if (hydrated) saveJSON('goal', readingGoal);
   }, [readingGoal, hydrated]);
@@ -664,12 +653,6 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
     showToast(`Jumped to Page ${pageNumber}`);
   };
 
-  const handleUpdateSettings = (partial: Partial<ReadingSettings>) => {
-    const updated = normalizeReaderSettings({ ...settings, ...partial });
-    setSettings(updated);
-    upsertReadingSettingsToSupabase(updated);
-  };
-
   const writeBookmarks = async (operation: () => Promise<Bookmark[]>, message: (items: Bookmark[]) => string) => {
     if (!spaceActive.current || bookmarkStatus !== 'ready' || bookmarkWritePending.current) return;
     bookmarkWritePending.current = true;
@@ -779,11 +762,10 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
     );
   };
 
-  const saveSettingsFromSheet = (newSettings: ReadingSettings, message: string) => {
-    const normalized = normalizeReaderSettings(newSettings);
-    setSettings(normalized);
-    upsertReadingSettingsToSupabase(normalized);
-    showToast(message);
+  const saveSettingsFromSheet = async (partial: Partial<ReadingSettings>) => {
+    const saved = await readerSettings.patch(partial);
+    if (saved) showToast('Reading preferences saved on this device');
+    return saved;
   };
 
   // ---- Layout ----
@@ -844,7 +826,9 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
             customPages={currentBook ? customPagesMap[currentBook.id] : undefined}
             onUpdateReadingPosition={handleUpdateReadingPosition}
             settings={settings}
-            onUpdateSettings={handleUpdateSettings}
+            onUpdateSettings={readerSettings.patch}
+            settingsStatus={readerSettings.status}
+            settingsNotice={readerSettings.notice}
             onOpenSettingsSheet={() => setIsSettingsSheetOpen(true)}
             onOpenDictionary={(word, context) => setDictionaryState({ isOpen: true, word, context })}
             highlights={highlights}
@@ -895,7 +879,11 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
         {activeTab === 'settings' && (
           <SettingsSheet
             settings={settings}
-            onSave={(s) => saveSettingsFromSheet(s, 'Typography preferences saved')}
+            onSave={saveSettingsFromSheet}
+            saveStatus={readerSettings.status}
+            saveNotice={readerSettings.notice}
+            saveBusy={readerSettings.busy}
+            onRetry={readerSettings.retry}
             onClose={() => setActiveTab('settings')}
             bottomSpace={bottomSpace}
           />
@@ -905,7 +893,11 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
       {isSettingsSheetOpen && (
         <SettingsSheet
           settings={settings}
-          onSave={(s) => saveSettingsFromSheet(s, 'Typography preferences applied')}
+          onSave={saveSettingsFromSheet}
+          saveStatus={readerSettings.status}
+          saveNotice={readerSettings.notice}
+          saveBusy={readerSettings.busy}
+          onRetry={readerSettings.retry}
           onClose={() => setIsSettingsSheetOpen(false)}
           isSheetOnly
         />

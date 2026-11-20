@@ -13,7 +13,7 @@ import {
   View,
   ViewToken,
 } from 'react-native';
-import { readerTextMetrics } from '../lib/readerPreferences';
+import { readerTextMetrics, type ReaderSettingsChange } from '../lib/readerPreferences';
 import { HIGHLIGHT_COLORS, highlightTextStyle } from '../lib/highlights';
 import { findBookmarkPage } from '../lib/bookmarks';
 import { BookmarkSheet } from './BookmarkSheet';
@@ -48,7 +48,9 @@ interface ReaderViewProps {
   customPages?: BookContentPage[];
   onUpdateReadingPosition: (bookId: string, page: BookContentPage, totalPages: number) => void;
   settings: ReadingSettings;
-  onUpdateSettings: (partial: Partial<ReadingSettings>) => void;
+  onUpdateSettings: (change: ReaderSettingsChange) => Promise<boolean>;
+  settingsStatus?: 'loading' | 'ready' | 'error';
+  settingsNotice?: string | null;
   onOpenSettingsSheet: () => void;
   onOpenDictionary: (word: string, context?: string) => void;
   highlights: HighlightEntry[];
@@ -343,6 +345,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   onUpdateReadingPosition,
   settings,
   onUpdateSettings,
+  settingsStatus = 'ready',
+  settingsNotice = null,
   onOpenSettingsSheet,
   onOpenDictionary,
   highlights,
@@ -948,6 +952,14 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             </View>
           </View>
 
+          {(settingsStatus !== 'ready' || settingsNotice) && (
+            <Pressable onPress={onOpenSettingsSheet} accessibilityRole="button" accessibilityLabel="Open reading preferences status" style={styles.drawer}>
+              <Text accessibilityLiveRegion="polite" style={{ color: colors.onSurface }}>
+                {settingsStatus === 'loading' ? 'Reading preferences are loading…' : settingsNotice || 'Open Settings to retry loading reading preferences.'}
+              </Text>
+              <Text style={{ color: colors.primary }}>Open Settings</Text>
+            </Pressable>
+          )}
           <View style={styles.flowRow}>
             {flowOptions.map((o) => {
               const active = flowMode === o.id;
@@ -957,7 +969,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                   onPress={() => onUpdateSettings({ readingFlowMode: o.id })}
                   accessibilityRole="button"
                   accessibilityLabel={`${o.label} reading mode`}
-                  accessibilityState={{ selected: active }}
+                  disabled={settingsStatus !== 'ready'}
+                  accessibilityState={{ selected: active, ...(settingsStatus !== 'ready' ? { disabled: true } : {}) }}
                   style={[styles.flowBtn, active && { backgroundColor: colors.primary }]}
                 >
                   <Icon name={o.icon} size={15} color={active ? '#fff' : colors.muted} />
@@ -971,12 +984,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             <View style={styles.drawer}>
               <View style={styles.drawerRow}>
                 <Pressable
-                  onPress={() => onUpdateSettings({ fontSizeStep: Math.max(1, settings.fontSizeStep - 1) })}
+                  onPress={() => onUpdateSettings(current => ({ fontSizeStep: Math.max(1, current.fontSizeStep - 1) }))}
                   accessibilityRole="button"
                   accessibilityLabel="Decrease text size"
                   accessibilityValue={{ min: 1, max: 8, now: settings.fontSizeStep }}
-                  disabled={settings.fontSizeStep <= 1}
-                  accessibilityState={{ disabled: settings.fontSizeStep <= 1 }}
+                  disabled={settingsStatus !== 'ready' || settings.fontSizeStep <= 1}
+                  accessibilityState={{ disabled: settingsStatus !== 'ready' || settings.fontSizeStep <= 1 }}
                   style={[styles.sizeBtn, settings.fontSizeStep <= 1 && { opacity: 0.35 }]}
                 >
                   <Text style={styles.sizeSmall}>A</Text>
@@ -985,12 +998,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                   <ProgressBar percent={(settings.fontSizeStep / 8) * 100} height={6} fill={colors.primary} />
                 </View>
                 <Pressable
-                  onPress={() => onUpdateSettings({ fontSizeStep: Math.min(8, settings.fontSizeStep + 1) })}
+                  onPress={() => onUpdateSettings(current => ({ fontSizeStep: Math.min(8, current.fontSizeStep + 1) }))}
                   accessibilityRole="button"
                   accessibilityLabel="Increase text size"
                   accessibilityValue={{ min: 1, max: 8, now: settings.fontSizeStep }}
-                  disabled={settings.fontSizeStep >= 8}
-                  accessibilityState={{ disabled: settings.fontSizeStep >= 8 }}
+                  disabled={settingsStatus !== 'ready' || settings.fontSizeStep >= 8}
+                  accessibilityState={{ disabled: settingsStatus !== 'ready' || settings.fontSizeStep >= 8 }}
                   style={[styles.sizeBtn, settings.fontSizeStep >= 8 && { opacity: 0.35 }]}
                 >
                   <Text style={styles.sizeLarge}>A</Text>
@@ -1003,7 +1016,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                     onPress={() => onUpdateSettings({ theme: t.id })}
                     accessibilityRole="button"
                     accessibilityLabel={`${t.id} page theme`}
-                    accessibilityState={{ selected: settings.theme === t.id }}
+                    disabled={settingsStatus !== 'ready'}
+                    accessibilityState={{ selected: settings.theme === t.id, ...(settingsStatus !== 'ready' ? { disabled: true } : {}) }}
                     style={[
                       styles.swatch,
                       { backgroundColor: t.bg },
@@ -1295,7 +1309,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           onClose={() => setBookmarksOpen(false)}
           onRetry={onRetryBookmarks}
           onRemove={onRemoveBookmark}
-          onSelect={(bookmark) => {
+          onSelect={async (bookmark) => {
             const target = findBookmarkPage(bookmark, pages);
             if (target < 0) {
               showToast('This saved passage is unavailable in this copy');
@@ -1303,7 +1317,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             }
             setBookmarksOpen(false);
             if (flowMode === 'single-line') {
-              onUpdateSettings({ readingFlowMode: 'continuous' });
+              if (!await onUpdateSettings({ readingFlowMode: 'continuous' })) return;
               jumpList(target);
             }
             goToSource(target);

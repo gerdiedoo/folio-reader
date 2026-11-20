@@ -63,8 +63,9 @@ Cloud uploads remain best-effort after local confirmation. There is no durable
 network outbox, cross-device deletion protocol or field-level conflict resolution
 in this step. Existing device cards win during merge; a different device's edit
 to the same ID does not replace them. Review other-device changes before manual
-**Upload to Supabase**. Book metadata/settings retain their older storage/merge
-paths. Profile's library metadata backup does not include these cards or archives.
+**Upload to Supabase**. Book metadata retains its older storage/merge path;
+[reading preferences](reader-settings-storage.md) have their own confirmed archive.
+Profile's library metadata backup does not include these cards or archives.
 
 Tests cover read/write failures, acknowledgements, concurrency, restart, malformed
 data, stale cloud results, account/backend/Guest isolation, book-removal markers,

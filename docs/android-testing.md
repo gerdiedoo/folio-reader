@@ -461,7 +461,7 @@ the existing step 6 migration is still required for signed-in cloud access.
 6. Verify the renamed **Upload to Supabase** action and device-first note merge
    explanation. Review edits on other devices before uploading; this step is not
    a full sync/conflict engine. Vocabulary protection is covered by step 13;
-   settings/book metadata need separate work. Test TalkBack pending/disabled controls, large
+   settings have their own step 14 checklist; book metadata needs separate work. Test TalkBack pending/disabled controls, large
    text, keyboard layout and modal dismissal on the phone.
 
 Automated tests cover queued storage acknowledgements, failures, corrupt/null
@@ -513,3 +513,41 @@ and retries, concurrent stores, stale cloud merges, mastery validation, account/
 backend/Guest separation, book-removal suppression and retained failure UI. They
 do not exercise actual Android storage faults, process death during a write, or
 live multi-device synchronization.
+
+## Reading preferences storage (step 14)
+
+Read the [preference storage rollout and limits](reader-settings-storage.md).
+Install over Folio Dev without uninstalling or clearing data; no new SQL is
+required. Older APKs cannot read new preference archive changes.
+
+1. Open Settings and choose a different typeface, size, spacing and margins.
+   Choose a page theme in Themes and a default cover style in Reading Info.
+   Tap **Keep Changes**: it should show **Saving…**, prevent duplicate saves and
+   confirm **on this device**. In the reader, confirm the choices took effect.
+2. Restart and check the same choices. Repeat with airplane mode enabled. Switch
+   reading mode between Scroll, Pages and Line, restart and verify the confirmed
+   mode. Line should remain paused when first opened. Its speed/Focus/Tape controls
+   retain their session behavior; they are not persistent preferences in this step.
+3. In quick typography, tap text size several times quickly. Each accepted tap
+   should count, within sizes 1–8, and the final confirmed size should survive
+   restart. Change theme or mode while a size save is pending; unrelated choices
+   should remain. From Line, use a saved bookmark to return to its passage in Scroll.
+4. Open Settings and change just margins, then close without saving. The previous
+   saved margins should remain. **Reset Defaults** should likewise remain a draft
+   until Keep Changes. If loading finishes while Settings is open, untouched fields
+   should follow saved preferences while your draft edits remain selected.
+5. If a write fails naturally, the settings sheet must keep the draft, show an
+   error, and allow retry. Quick typography must keep the confirmed appearance
+   and offer Open Settings. If saved preferences cannot load, Keep Changes must
+   be disabled with a persistent notice and **Try again**. Automated fault-injection
+   tests cover these paths; do not fill storage or corrupt actual app data.
+6. With disposable accounts in the test backend, compare Guest and two accounts.
+   Each space should retain independent preferences. Existing local choices
+   should survive startup with different cloud settings. A new account space
+   with no local settings can receive cloud choices; saving locally while that
+   fetch is pending must take precedence. Cloud delivery remains best effort.
+7. Check TalkBack selection, disabled and saving announcements, large system text,
+   landscape and Charcoal. Leave the Settings tab during a save if it lasts long
+   enough: completion must not bring you back unexpectedly. Return to verify the
+   confirmed choices. Actual focus order, native storage durability and live
+   multi-device behavior remain phone checks.

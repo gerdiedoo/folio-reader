@@ -22,6 +22,34 @@ export function readerTextMetrics(settings: Pick<ReadingSettings, 'fontSizeStep'
   return { fontSize, lineHeight: Math.round(fontSize * multiplier) };
 }
 
-export function normalizeReaderSettings(settings: ReadingSettings): ReadingSettings {
-  return { ...settings, font: normalizeTypeface(settings.font), usePublisherDefaults: false };
+export const DEFAULT_READER_SETTINGS: Readonly<ReadingSettings> = {
+  theme: 'parchment', font: 'Literata', fontSizeStep: 4, lineSpacing: 'standard', margins: 'regular',
+  usePublisherDefaults: false, displayReadingPace: true, defaultCoverStyle: 'image',
+  readingFlowMode: 'continuous', wpm: 240,
+};
+
+export type ReaderSettingsChange = Partial<ReadingSettings> | ((current: ReadingSettings) => Partial<ReadingSettings>);
+
+/** Saved JSON and cloud rows are untrusted; return only supported, bounded fields. */
+export function normalizeReaderSettings(value: unknown): ReadingSettings {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const own = (key: string) => Object.prototype.hasOwnProperty.call(source, key) ? source[key] : undefined;
+  const choice = <const T extends string>(key: string, options: readonly T[], fallback: T): T =>
+    options.includes(own(key) as T) ? own(key) as T : fallback;
+  const number = (key: string, min: number, max: number, fallback: number) => {
+    const n = own(key);
+    return typeof n === 'number' && Number.isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : fallback;
+  };
+  return {
+    theme: choice('theme', ['parchment', 'white', 'sepia', 'charcoal'], 'parchment'),
+    font: normalizeTypeface(own('font')),
+    fontSizeStep: number('fontSizeStep', 1, 8, 4),
+    lineSpacing: choice('lineSpacing', ['compact', 'standard', 'loose'], 'standard'),
+    margins: choice('margins', ['narrow', 'regular', 'wide'], 'regular'),
+    usePublisherDefaults: false,
+    displayReadingPace: typeof own('displayReadingPace') === 'boolean' ? own('displayReadingPace') as boolean : true,
+    defaultCoverStyle: choice('defaultCoverStyle', ['image', 'typographic'], 'image'),
+    readingFlowMode: choice('readingFlowMode', ['continuous', 'paginated', 'single-line'], 'continuous'),
+    wpm: number('wpm', 60, 600, 240),
+  };
 }
