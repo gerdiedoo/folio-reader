@@ -56,7 +56,8 @@ Tape and temporary text-size controls retain their session behavior; this step
 does not make those controls persistent.
 
 The library metadata backup does not contain this archive. Book metadata and
-reading goals retain their existing persistence paths. Tests cover read/write
+reading goals retain their existing persistence paths; [step 15](scroll-resume.md)
+adds precise Scroll resume within that metadata. Tests cover read/write
 failures, queue ordering, storage acknowledgement, safe normalization, legacy
 retention, account/backend separation, late cloud responses, draft preservation
 and pending/disabled controls. Native storage faults, process death during writes,

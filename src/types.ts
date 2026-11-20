@@ -27,6 +27,12 @@ export interface ReadingSettings {
   wpm?: number;
 }
 
+/** Device-local resume information, anchored to imported source text. */
+export interface ReadingPosition {
+  pageNumber: number;
+  scroll?: { offset: number; layout: string };
+}
+
 export interface Book {
   id: string;
   title: string;
@@ -35,6 +41,7 @@ export interface Book {
   coverStyle?: 'image' | 'typographic';
   progressPercent: number;
   currentPage: number;
+  readingPosition?: ReadingPosition;
   totalPages: number;
   minutesLeft: number;
   currentChapter: string;

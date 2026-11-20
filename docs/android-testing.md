@@ -551,3 +551,44 @@ required. Older APKs cannot read new preference archive changes.
    enough: completion must not bring you back unexpectedly. Return to verify the
    confirmed choices. Actual focus order, native storage durability and live
    multi-device behavior remain phone checks.
+
+## Scroll resume (step 15)
+
+Read the [resume behavior and limits](scroll-resume.md). Install over Folio Dev;
+no uninstall, clearing data or new SQL is needed. This targets reopening a book
+while the app stays open, as reported on the phone.
+
+1. In Scroll, move well into a long passage. Note the first visible sentence, or
+   take a screenshot for comparison. Go to Library and immediately reopen the
+   same book. The same sentence should return at approximately the same screen
+   position after layout. Repeat at least five times: it must not drift backward.
+   Also return through the Reading tab without tapping the book's Resume action.
+2. Repeat with only a small movement inside the same passage and close it quickly,
+   before the normal save delay. Repeat after crossing several passages and after
+   a fast fling has settled. Long passages must update position even when less
+   than a quarter of the passage fits on screen. Check airplane mode as well.
+3. Open two books in turn and alternate between them. Each should keep its own
+   passage/offset. Go to a quote through Notebook or a search result, scroll farther,
+   leave Reading and return. The earlier navigation target must not replay.
+4. Opening must not insert earlier passages automatically. Scroll to the top of
+   the current window to find **Previous passage** and activate it. It should go
+   back intentionally. Contents, bookmarks and the scrubber should still navigate
+   both forward and backward. Make sure restore never fights a new drag.
+5. Save a position, background/foreground the app and reopen the book. Separately
+   restart Folio Dev normally and check the device position. With a disposable
+   signed-in account, loading an older cloud snapshot must not rewind a book
+   already present on this device. Cloud-only books can still be added.
+6. Change text size, spacing, margins, typeface, system font scale or orientation.
+   The saved source passage should remain the fallback; exact pixel restoration
+   across those layout changes is not promised. Old installs initially have only
+   passage-level progress: scroll with the new APK before checking precise resume.
+7. Check TalkBack scrolling, the Previous passage button, large text, landscape,
+   Charcoal and a position near the book's end. A natural storage failure must
+   show the save problem; move slightly and allow another save before leaving.
+   Do not deliberately fill storage or corrupt data. Native failures and process
+   death during writes are not covered by adapter tests.
+
+Automated regressions cover layout-only opening events, same-passage offsets,
+closing before debounce, momentum, long/late-measured cells, background flushing,
+old-list callbacks, explicit backward navigation, stale Notebook jumps, layout
+fallback, cloud/device precedence and storage acknowledgement/failure ordering.

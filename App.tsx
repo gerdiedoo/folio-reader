@@ -29,6 +29,7 @@ import { SearchModal } from './src/components/SearchModal';
 import { SettingsSheet } from './src/components/SettingsSheet';
 import { Toast } from './src/components/ui/Toast';
 import { INITIAL_BOOKS, INITIAL_GOAL } from './src/data/initialData';
+import { applyReadingPosition, createReadingProgressWriter, mergeCloudBookForDevice } from './src/lib/readingPosition';
 import { useReaderSettings } from './src/lib/useReaderSettings';
 import { createBookmark, createBookmarkStore } from './src/lib/bookmarks';
 import { watchAccountSession } from './src/lib/accountSession';
@@ -64,6 +65,7 @@ import {
   LexiconEntry,
   ReadingGoal,
   ReadingSettings,
+  ReadingPosition,
   TabType,
   UserProfile,
 } from './src/types';
@@ -91,6 +93,7 @@ function applySavedReadingProgress(book: Book, entry: LibraryBackupEntry): Book 
   return {
     ...book,
     currentPage,
+    readingPosition: undefined,
     progressPercent: Math.max(0, Math.min(100, Math.round((currentPage / totalPages) * 100))),
     currentChapter: entry.currentChapter || book.currentChapter,
     currentLoc: entry.currentLoc ?? book.currentLoc,
@@ -122,6 +125,10 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   booksRef.current = books;
   const spaceActive = useRef(true);
   useEffect(() => { spaceActive.current = true; return () => { spaceActive.current = false; }; }, []);
+  const saveReadingProgress = useMemo(() => createReadingProgressWriter(
+    updatedBooks => saveJSONStrict('books', updatedBooks), upsertBookToSupabase,
+    () => { if (spaceActive.current) showToast('Couldn’t save your reading position on this device. Keep the book open and try again.'); },
+  ), [saveJSONStrict, upsertBookToSupabase, showToast]);
   const libraryLoadState = useRef<'loading' | 'ready' | 'error'>('loading');
   const importCommitterRef = useRef<ReturnType<typeof createImportCommitter> | null>(null);
   if (!importCommitterRef.current) {
@@ -195,7 +202,6 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   const [flashcardItem, setFlashcardItem] = useState<LexiconEntry | null>(null);
 
   // Reading progress
-  const readingPositionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const readingGoalRef = useRef(readingGoal);
   readingGoalRef.current = readingGoal;
   const readingDayKeyRef = useRef('');
@@ -266,9 +272,9 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
             const map = new Map<string, Book>();
             prev.forEach((b) => map.set(b.id, b));
             sbBooks.forEach((b) => {
-              // keep a local cover file path if the cloud row has none
+              // Existing device entries retain their progress and local file metadata.
               const local = map.get(b.id);
-              map.set(b.id, local ? { ...b, coverUrl: b.coverUrl || local.coverUrl } : b);
+              map.set(b.id, mergeCloudBookForDevice(local, b));
             });
             return Array.from(map.values());
           });
@@ -602,15 +608,17 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
 
   // ---- Actions ----
   const handleOpenBook = (bookId: string) => {
-    const book = books.find((b) => b.id === bookId);
+    const book = booksRef.current.find((b) => b.id === bookId);
     if (book) {
       const updatedBook = { ...book, lastOpened: new Date().toISOString() };
-      const updatedBooks = books.map((item) => (item.id === bookId ? updatedBook : item));
+      const updatedBooks = booksRef.current.map((item) => (item.id === bookId ? updatedBook : item));
+      booksRef.current = updatedBooks;
       setBooks(updatedBooks);
       if (libraryLoadState.current === 'ready') void saveJSON('books', updatedBooks);
       void upsertBookToSupabase(updatedBook);
     }
     setBookDetailsId(null);
+    setJumpTarget(null);
     setCurrentBookId(bookId);
     setActiveTab('reading');
     if (book) showToast(`Resumed "${book.title}"`);
@@ -622,28 +630,18 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   };
 
   const handleUpdateReadingPosition = useCallback(
-    (bookId: string, page: BookContentPage, totalPages: number) => {
-      const book = books.find((item) => item.id === bookId);
-      if (!book || book.currentPage === page.pageNumber) return;
-
-      const updatedBook: Book = {
-        ...book,
-        currentPage: page.pageNumber,
-        currentChapter: page.chapterNumber,
-        currentLoc: page.locNumber,
-        progressPercent: Math.round((page.pageNumber / Math.max(1, totalPages)) * 100),
-        lastOpened: new Date().toISOString(),
-      };
-      const updatedBooks = books.map((item) => (item.id === bookId ? updatedBook : item));
-      setBooks(updatedBooks);
-      if (libraryLoadState.current === 'ready') void saveJSON('books', updatedBooks);
-
-      if (readingPositionTimer.current) clearTimeout(readingPositionTimer.current);
-      readingPositionTimer.current = setTimeout(() => {
-        void upsertBookToSupabase(updatedBook);
-      }, 750);
+    (bookId: string, page: BookContentPage, totalPages: number, position: ReadingPosition) => {
+      const book = booksRef.current.find(item => item.id === bookId);
+      if (!book || libraryLoadState.current !== 'ready') return;
+      const updatedBook = applyReadingPosition(book, page, totalPages, position, new Date().toISOString());
+      const updatedBooks = booksRef.current.map(item => item.id === bookId ? updatedBook : item);
+      // Closing Reading flushes during unmount. Update this ref before another book opens.
+      booksRef.current = updatedBooks;
+      setBooks(previous => previous.map(item => item.id === bookId
+        ? applyReadingPosition(item, page, totalPages, position, updatedBook.lastOpened) : item));
+      void saveReadingProgress(updatedBooks, updatedBook);
     },
-    [books]
+    [saveReadingProgress]
   );
 
   const handleJumpToReader = (bookId: string, pageNumber: number) => {
@@ -822,6 +820,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
 
         {activeTab === 'reading' && (
           <ReaderView
+            key={currentBook?.id ?? 'empty'}
             currentBook={currentBook}
             customPages={currentBook ? customPagesMap[currentBook.id] : undefined}
             onUpdateReadingPosition={handleUpdateReadingPosition}
@@ -847,6 +846,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
             setNavVisibility={setReaderNavVisibility}
             showToast={showToast}
             jumpTarget={jumpTarget}
+            onJumpHandled={nonce => setJumpTarget(previous => previous?.nonce === nonce ? null : previous)}
             bottomSpace={readingBottomSpace}
             playbackBlocked={isSettingsSheetOpen || isSearchOpen || isProfileOpen || dictionaryState.isOpen || Boolean(flashcardItem)}
           />

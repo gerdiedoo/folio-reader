@@ -11,8 +11,10 @@ import {
   Text,
   useWindowDimensions,
   View,
-  ViewToken,
+  LayoutChangeEvent,
+  FlatListProps,
 } from 'react-native';
+import { savedReadingPosition, scrollPositionAtOffset } from '../lib/readingPosition';
 import { readerTextMetrics, type ReaderSettingsChange } from '../lib/readerPreferences';
 import { HIGHLIGHT_COLORS, highlightTextStyle } from '../lib/highlights';
 import { findBookmarkPage } from '../lib/bookmarks';
@@ -30,6 +32,7 @@ import {
   PaperTheme,
   ReadingFlowMode,
   ReadingSettings,
+  ReadingPosition,
 } from '../types';
 import { PassageSheet } from './PassageSheet';
 import { ChapterInfo, ChapterSheet, ScrubBar } from './ReaderNavigator';
@@ -46,7 +49,7 @@ export interface JumpTarget {
 interface ReaderViewProps {
   currentBook?: Book;
   customPages?: BookContentPage[];
-  onUpdateReadingPosition: (bookId: string, page: BookContentPage, totalPages: number) => void;
+  onUpdateReadingPosition: (bookId: string, page: BookContentPage, totalPages: number, position: ReadingPosition) => void;
   settings: ReadingSettings;
   onUpdateSettings: (change: ReaderSettingsChange) => Promise<boolean>;
   settingsStatus?: 'loading' | 'ready' | 'error';
@@ -69,6 +72,7 @@ interface ReaderViewProps {
   setNavVisibility: (visible: boolean) => void;
   showToast: (msg: string) => void;
   jumpTarget?: JumpTarget | null;
+  onJumpHandled?: (nonce: number) => void;
   /** Space to leave at the bottom (floating tab bar). */
   bottomSpace: number;
   playbackBlocked: boolean;
@@ -87,6 +91,7 @@ interface Seg {
   end: number;
   hl?: HighlightEntry;
 }
+
 
 interface PaginatedPage {
   sourceIndex: number;
@@ -339,6 +344,17 @@ const PageBlock = React.memo<PageBlockProps>(
 // ---------------------------------------------------------------------------
 // Reader
 // ---------------------------------------------------------------------------
+interface ScrollSession {
+  epoch: number;
+  rows: Map<number, { pageNumber: number; y: number; height: number }>;
+  tracking: boolean;
+  y: number;
+  height: number;
+  contentHeight: number;
+  restore?: { pageNumber: number; offset: number; layout: string };
+  restoredOffset?: number;
+}
+
 export const ReaderView: React.FC<ReaderViewProps> = ({
   currentBook,
   customPages,
@@ -365,6 +381,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   setNavVisibility,
   showToast,
   jumpTarget,
+  onJumpHandled,
   bottomSpace,
   playbackBlocked,
 }) => {
@@ -372,13 +389,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     () => customPages ?? (currentBook ? BOOK_PAGES[currentBook.id] : undefined) ?? [],
     [customPages, currentBook?.id]
   );
-  const getSavedPageIndex = () => {
-    if (!pages.length) return 0;
-    const savedIndex = pages.findIndex((p) => p.pageNumber === currentBook?.currentPage);
-    return savedIndex >= 0
-      ? savedIndex
-      : Math.max(0, Math.min(pages.length - 1, (currentBook?.currentPage ?? 1) - 1));
-  };
+  const getSavedPageIndex = () => savedReadingPosition(currentBook, pages).index;
+  const resumePosition = useRef(savedReadingPosition(currentBook, pages).position);
 
   const flowMode: ReadingFlowMode = settings.readingFlowMode || 'continuous';
   const paper = readerPaper[settings.theme];
@@ -388,7 +400,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const [pageIndex, setPageIndex] = useState(getSavedPageIndex);
   const pageIndexRef = useRef(pageIndex);
   pageIndexRef.current = pageIndex;
-  const { width: winWidth } = useWindowDimensions();
+  const { width: winWidth, fontScale } = useWindowDimensions();
   const winWidthRef = useRef(winWidth);
   winWidthRef.current = winWidth;
   const [chaptersOpen, setChaptersOpen] = useState(false);
@@ -397,23 +409,19 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const searchAnchor = useRef<{ match: BookSearchMatch; pages: BookContentPage[] } | null>(null);
   // Scroll mode renders a window of pages that starts at `listBase`. A jump just moves the
   // window (and remounts the list), so the destination shows instantly instead of the list
-  // scrolling through pages whose heights it hasn't measured yet. Earlier pages are
-  // prepended on demand when the reader scrolls back up.
+  // scrolling through pages whose heights it has not measured. Earlier passages
+  // are reached explicitly, so opening at the top never prepends and rewinds the list.
   const [listBase, setListBase] = useState(pageIndex);
   const [listKey, setListKey] = useState(0);
-  const listBaseRef = useRef(listBase);
-  listBaseRef.current = listBase;
   const listData = useMemo(() => pages.slice(listBase), [pages, listBase]);
+  const scrollSession = useRef<ScrollSession>({ epoch: 0, rows: new Map(), tracking: false, y: 0, height: 0, contentHeight: 0 });
   const jumpList = useCallback((idx: number) => {
-    listBaseRef.current = idx;
+    const anchor = resumePosition.current;
+    scrollSession.current = { epoch: scrollSession.current.epoch + 1, rows: new Map(), tracking: false,
+      y: 0, height: 0, contentHeight: 0,
+      restore: anchor.scroll ? { ...anchor.scroll, pageNumber: anchor.pageNumber } : undefined };
     setListBase(idx);
     setListKey((k) => k + 1);
-  }, []);
-  const handleStartReached = useCallback(() => {
-    if (listBaseRef.current <= 0) return;
-    const next = Math.max(0, listBaseRef.current - 6);
-    listBaseRef.current = next;
-    setListBase(next);
   }, []);
   const [paginatedIndex, setPaginatedIndex] = useState(0);
   const [lineSeekVersion, setLineSeekVersion] = useState(0);
@@ -448,13 +456,13 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const onUpdatePositionRef = useRef(onUpdateReadingPosition);
   onUpdatePositionRef.current = onUpdateReadingPosition;
   const positionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingPosition = useRef<{ bookId: string; page: BookContentPage; total: number } | null>(null);
+  const pendingPosition = useRef<{ bookId: string; page: BookContentPage; total: number; position: ReadingPosition } | null>(null);
   const flushPosition = useCallback(() => {
     if (positionTimer.current) clearTimeout(positionTimer.current);
     positionTimer.current = null;
     const pending = pendingPosition.current;
     pendingPosition.current = null;
-    if (pending) onUpdatePositionRef.current(pending.bookId, pending.page, pending.total);
+    if (pending) onUpdatePositionRef.current(pending.bookId, pending.page, pending.total, pending.position);
   }, []);
   useEffect(() => flushPosition, [flushPosition]);
   useEffect(() => {
@@ -464,20 +472,21 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     return () => subscription.remove();
   }, [flushPosition]);
   const updatePageIndex = useCallback(
-    (index: number) => {
+    (index: number, position?: ReadingPosition) => {
       const nextIndex = Math.max(0, Math.min(pages.length - 1, index));
+      pageIndexRef.current = nextIndex;
       setPageIndex(nextIndex);
       const nextPage = pages[nextIndex];
       if (bookId && nextPage) {
-        pendingPosition.current = { bookId, page: nextPage, total: pages.length };
+        const nextPosition = position ?? { pageNumber: nextPage.pageNumber };
+        resumePosition.current = nextPosition;
+        pendingPosition.current = { bookId, page: nextPage, total: pages.length, position: nextPosition };
         if (positionTimer.current) clearTimeout(positionTimer.current);
         positionTimer.current = setTimeout(flushPosition, 400);
       }
     },
     [bookId, flushPosition, pages]
   );
-  const updatePageIndexRef = useRef(updatePageIndex);
-  updatePageIndexRef.current = updatePageIndex;
   const paginatedIndexRef = useRef(paginatedIndex);
   paginatedIndexRef.current = paginatedIndex;
   const turnPageRef = useRef<(index: number) => void>(() => {});
@@ -540,6 +549,52 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const { fontSize: baseSize, lineHeight } = readerTextMetrics(settings);
   const fontFamily = readerFontFamily(settings.font);
   const hPad = MARGINS[settings.margins];
+
+  const scrollLayout = JSON.stringify([winWidth, fontScale, settings.font, baseSize, lineHeight, hPad]);
+  const scrollEpoch = scrollSession.current.epoch;
+  const restoreScrollRef = useRef<() => void>(() => {});
+  const recordScrollRef = useRef<(offset: number) => void>(() => {});
+  restoreScrollRef.current = () => {
+    const session = scrollSession.current;
+    const target = session.restore;
+    if (!target || session.tracking || !session.height || !session.contentHeight) return;
+    if (target.layout !== scrollLayout) { session.restore = undefined; return; }
+    const row = session.rows.get(target.pageNumber);
+    if (!row) return;
+    const offset = Math.min(row.y + Math.min(target.offset, Math.max(0, row.height - 1)), Math.max(0, session.contentHeight - session.height));
+    if (session.restoredOffset !== offset && listRef.current) {
+      session.restoredOffset = offset;
+      listRef.current.scrollToOffset({ offset, animated: false });
+    }
+  };
+  const ScrollCell = useMemo(() => {
+    const epoch = scrollSession.current.epoch;
+    return ({ item, onLayout, children, style, onFocusCapture }: React.ComponentProps<NonNullable<FlatListProps<BookContentPage>['CellRendererComponent']>>) => (
+      <View style={style} {...{ onFocusCapture }} onLayout={(event: LayoutChangeEvent) => {
+        onLayout?.(event);
+        if (scrollSession.current.epoch !== epoch) return;
+        const { y, height } = event.nativeEvent.layout;
+        const rows = scrollSession.current.rows;
+        rows.delete(item.pageNumber);
+        rows.set(item.pageNumber, { pageNumber: item.pageNumber, y, height });
+        if (rows.size > 128) rows.delete(rows.keys().next().value!);
+        restoreScrollRef.current();
+        if (scrollSession.current.tracking) recordScrollRef.current(scrollSession.current.y);
+      }}>{children}</View>
+    );
+  }, [listKey, bookId, pages]);
+  const recordScroll = (offset: number) => {
+    const session = scrollSession.current;
+    if (session.epoch !== scrollEpoch) return;
+    session.y = offset;
+    if (!session.tracking) return;
+    const position = scrollPositionAtOffset(session.rows.values(), offset, scrollLayout);
+    if (!position) return;
+    const index = pages.findIndex(source => source.pageNumber === position.pageNumber);
+    if (index >= 0) updatePageIndex(index, position);
+  };
+
+  recordScrollRef.current = recordScroll;
 
   const textStyle = useMemo(
     () => ({
@@ -686,19 +741,21 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   // reset when a different book is opened
   useEffect(() => {
-    const savedIndex = getSavedPageIndex();
+    const saved = savedReadingPosition(currentBook, pages);
+    const savedIndex = saved.index;
+    resumePosition.current = saved.position;
     setPageIndex(savedIndex);
     const savedSegmentIndex = paginatedPages.findIndex((item) => item.sourceIndex === savedIndex);
     setPaginatedIndex(Math.max(0, savedSegmentIndex));
     if (flowMode === 'continuous') jumpList(savedIndex);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookId]);
+  }, [bookId, pages]);
 
   // coming back to Scroll mode: start the list at the page being read
   useEffect(() => {
     if (flowMode === 'continuous') jumpList(pageIndexRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flowMode]);
+  }, [flowMode, scrollLayout]);
 
   useEffect(() => {
     if (flowMode !== 'paginated') return;
@@ -718,19 +775,14 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     }
     if (flowMode === 'continuous') jumpList(idx);
     if (flowMode === 'single-line') setLineSeekVersion(version => version + 1);
+    onJumpHandled?.(jumpTarget.nonce);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jumpTarget?.nonce]);
+  }, [jumpTarget?.nonce, bookId, pages]);
 
   // paginated: back to top on page change
   useEffect(() => {
     if (flowMode === 'paginated') scrollRef.current?.scrollTo({ y: 0, animated: false });
   }, [paginatedIndex, flowMode]);
-
-  const viewConfig = useRef({ itemVisiblePercentThreshold: 25 }).current;
-  const onViewable = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
-    const first = viewableItems.find((v) => v.index != null);
-    if (first && first.index != null) updatePageIndexRef.current(listBaseRef.current + first.index);
-  }).current;
 
   // ---- passage sheet ----
   const openSheet = useCallback(
@@ -1130,15 +1182,43 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             keyExtractor={keyExtractor}
             renderItem={renderListItem}
             contentContainerStyle={listContentStyle}
-            onViewableItemsChanged={onViewable}
-            viewabilityConfig={viewConfig}
+            CellRendererComponent={ScrollCell}
+            onLayout={event => {
+              const session = scrollSession.current;
+              if (session.epoch !== scrollEpoch) return;
+              session.height = event.nativeEvent.layout.height;
+              restoreScrollRef.current();
+            }}
+            onContentSizeChange={(_width, height) => {
+              if (scrollSession.current.epoch !== scrollEpoch) return;
+              scrollSession.current.contentHeight = height;
+              restoreScrollRef.current();
+            }}
+            onScrollBeginDrag={event => {
+              if (scrollSession.current.epoch !== scrollEpoch) return;
+              scrollSession.current.restore = undefined;
+              scrollSession.current.tracking = true;
+              recordScroll(event.nativeEvent.contentOffset.y);
+            }}
+            onMomentumScrollBegin={event => {
+              if (scrollSession.current.epoch !== scrollEpoch) return;
+              scrollSession.current.restore = undefined;
+              scrollSession.current.tracking = true;
+              recordScroll(event.nativeEvent.contentOffset.y);
+            }}
+            onScroll={event => recordScroll(event.nativeEvent.contentOffset.y)}
+            scrollEventThrottle={32}
+            onScrollEndDrag={event => { recordScroll(event.nativeEvent.contentOffset.y); flushPosition(); }}
+            onMomentumScrollEnd={event => { recordScroll(event.nativeEvent.contentOffset.y); flushPosition(); }}
+            ListHeaderComponent={listBase > 0 ? (
+              <Pressable onPress={() => goToSource(listBase - 1)} accessibilityRole="button" accessibilityLabel="Read previous passage" style={{ minHeight: 48, justifyContent: 'center', alignItems: 'center', marginBottom: 12 }}>
+                <Text style={{ color: accent }}>Previous passage</Text>
+              </Pressable>
+            ) : null}
             initialNumToRender={2}
             maxToRenderPerBatch={2}
             updateCellsBatchingPeriod={60}
             windowSize={5}
-            onStartReached={handleStartReached}
-            onStartReachedThreshold={1.5}
-            maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
             showsVerticalScrollIndicator={false}
           />
         ) : (

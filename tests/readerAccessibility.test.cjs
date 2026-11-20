@@ -61,6 +61,8 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
   theme.readerPaper = theme.previewPaper;
   const native = {
     View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView: 'ScrollView', Switch: 'Switch', Image: 'Image',
+    useWindowDimensions: () => ({ width: 400, height: 800, fontScale: 1 }),
+    PanResponder: { create: handlers => ({ panHandlers: handlers }) },
     FlatList: 'FlatList', TextInput: 'TextInput', ActivityIndicator: 'ActivityIndicator',
     Modal: 'Modal', KeyboardAvoidingView: 'KeyboardAvoidingView', Platform: { OS: 'android' },
     StyleSheet: { create: styles => styles, hairlineWidth: 1 },
@@ -1469,4 +1471,122 @@ test('Return to pages immediately pauses Line while the reading-mode save is pen
   root = h.render(SingleLineReader, props);
   assert.equal(labelled(root, 'Play chapter').disabled, false); assert.equal(h.timers.size, 0);
   h.unmount();
+});
+
+function scrollingReader(extra = {}) {
+  const h = harness({ runEffects: true, moduleMocks: {
+    'expo-clipboard': { setStringAsync: async () => {} },
+    './BookmarkSheet': { BookmarkSheet: 'BookmarkSheet' },
+    './BookSearchSheet': { BookSearchSheet: 'BookSearchSheet' },
+    './PassageSheet': { PassageSheet: 'PassageSheet' },
+    './ReaderNavigator': { ChapterSheet: 'ChapterSheet', ScrubBar: 'ScrubBar' },
+    './SingleLineReader': { SingleLineReader: 'SingleLineReader' },
+    './ui/ProgressBar': { ProgressBar: 'ProgressBar' },
+  } });
+  const { ReaderView } = h.load('../src/components/ReaderView.tsx');
+  const { INITIAL_SETTINGS } = h.load('../src/data/initialData.ts');
+  const positions = [], restored = [];
+  const pages = Array.from({ length: 12 }, (_, index) => ({ pageNumber: index + 1, chapterNumber: String(Math.floor(index / 3) + 1),
+    chapterTitle: 'Chapter', folioNumber: 'I', dropCap: 'A', paragraph1: ' long paragraph to read.', paragraph2Lead: 'More words.', highlightedText: '', paragraph2Rest: '',
+    totalBookPages: 12, locNumber: (index + 1) * 100, totalLoc: 1200, minutesLeftInChapter: 1 }));
+  let props = { currentBook: { id: 'reading-book', title: 'Read me', currentPage: 8, currentLoc: 800, totalPages: 12, progressPercent: 67 },
+    customPages: pages, settings: INITIAL_SETTINGS, highlights: [], bookmarks: [], bookmarkStatus: 'ready', bookmarkSaving: false,
+    onUpdateReadingPosition: (bookId, page, total, position) => positions.push({ bookId, page, total, position }),
+    onUpdateSettings: async () => true, onOpenSettingsSheet() {}, onOpenDictionary() {},
+    onAddHighlight: async () => true, onDeleteHighlight: async () => true, onAddReflectionNote: async () => true,
+    onRetryBookmarks() {}, onRemoveBookmark() {}, onToggleBookmark() {}, isNavVisible: true, isImmersiveMode: false,
+    onToggleNavVisibility() {}, setNavVisibility() {}, showToast() {}, bottomSpace: 0, playbackBlocked: false,
+    ...extra };
+  let root;
+  const render = () => { root = h.render(ReaderView, props); return root; };
+  const list = () => elements(root).find(node => node.type === 'FlatList').props;
+  const settle = () => { for (let i = 0; i < 3; i++) render(); if (list().ref) list().ref.current = { scrollToOffset: value => restored.push(value) }; };
+  settle();
+  const measure = (pageNumber, y, height) => {
+    const current = list();
+    const index = current.data.findIndex(page => page.pageNumber === pageNumber);
+    assert.ok(index >= 0, 'Cell must belong to the current scroll window');
+    const cell = current.CellRendererComponent({ item: current.data[index], index, children: null });
+    cell.props.onLayout({ nativeEvent: { layout: { y, height, x: 0, width: 360 } } });
+  };
+  const viewport = (height = 650, content = 4000) => {
+    list().onLayout({ nativeEvent: { layout: { width: 360, height } } });
+    list().onContentSizeChange(360, content);
+  };
+  return { h, pages, positions, restored, render, list, settle, measure, viewport,
+    root: () => root, props: () => props, change: next => { props = { ...props, ...next }; settle(); } };
+}
+const scrolled = y => ({ nativeEvent: { contentOffset: { y } } });
+
+test('reopening Scroll never prepends earlier passages or reports layout-only movement as reading', () => {
+  const f = scrollingReader();
+  f.viewport(); f.measure(8, 84, 1500); f.measure(9, 1584, 1400);
+  assert.equal(f.list().data[0].pageNumber, 8);
+  assert.equal(f.list().onStartReached, undefined);
+  for (const y of [0, 84, 0]) f.list().onScroll(scrolled(y));
+  assert.equal(f.positions.length, 0);
+  f.h.unmount(); assert.equal(f.positions.length, 0);
+});
+
+test('closing Scroll flushes its exact intra-passage offset before debounce and reopening restores it', () => {
+  const f = scrollingReader(); f.viewport(); f.measure(8, 84, 1500); f.measure(9, 1584, 1400);
+  f.list().onScrollBeginDrag(scrolled(84)); f.list().onScroll(scrolled(545));
+  assert.equal(f.positions.length, 0);
+  f.h.unmount();
+  assert.equal(f.positions.length, 1);
+  const saved = f.positions[0];
+  assert.equal(saved.page.pageNumber, 8); assert.equal(saved.position.scroll.offset, 461);
+  const next = scrollingReader({ currentBook: { ...f.props().currentBook, readingPosition: saved.position } });
+  next.viewport(); next.measure(8, 84, 1500);
+  assert.deepEqual(next.restored.at(-1), { offset: 545, animated: false });
+  next.list().onScroll(scrolled(545)); next.h.unmount();
+  assert.equal(next.positions.length, 0, 'Restoration must not overwrite the stored position');
+});
+
+test('Scroll tracks long passages and source identity through momentum, then saves the final offset', () => {
+  const f = scrollingReader(); f.viewport(); f.measure(8, 84, 3000); f.measure(9, 3084, 1400);
+  f.list().onMomentumScrollBegin(scrolled(1500));
+  f.list().onScroll(scrolled(3300)); f.list().onMomentumScrollEnd(scrolled(3400));
+  assert.equal(f.positions.length, 1);
+  assert.equal(f.positions[0].page.pageNumber, 9); assert.equal(f.positions[0].position.scroll.offset, 316);
+  assert.equal(f.positions[0].page.locNumber, 900);
+  f.h.unmount();
+});
+
+test('late measured cells capture the current viewport and backgrounding flushes it', () => {
+  const f = scrollingReader(); f.viewport(); f.list().onScrollBeginDrag(scrolled(84)); f.list().onScroll(scrolled(700));
+  f.measure(8, 84, 1500); f.h.appState('background');
+  assert.equal(f.positions.length, 1); assert.equal(f.positions[0].position.scroll.offset, 616);
+  f.h.unmount();
+});
+
+test('earlier passages require an explicit action and stale callbacks from the old list cannot rewind or advance it', () => {
+  const f = scrollingReader(); f.viewport(); f.measure(8, 84, 1500);
+  const old = f.list();
+  old.onScrollBeginDrag(scrolled(84)); old.onScroll(scrolled(600));
+  labelled(f.list().ListHeaderComponent, 'Read previous passage').onPress(); f.settle();
+  assert.equal(f.list().data[0].pageNumber, 7);
+  old.onScrollBeginDrag(scrolled(0)); old.onScroll(scrolled(1200)); old.onMomentumScrollEnd(scrolled(1200));
+  f.h.unmount();
+  assert.equal(f.positions.at(-1).page.pageNumber, 7);
+  assert.equal(f.positions.at(-1).position.scroll, undefined);
+});
+
+test('obsolete pixel offsets are not reused after typography changes; the source passage remains selected', () => {
+  const f = scrollingReader({ currentBook: { id: 'reading-book', title: 'Read me', currentPage: 8,
+    readingPosition: { pageNumber: 8, scroll: { offset: 800, layout: 'old-font-and-width' } } } });
+  f.viewport(); f.measure(8, 84, 1500);
+  assert.equal(f.restored.length, 0); assert.equal(f.list().data[0].pageNumber, 8);
+  f.h.unmount(); assert.equal(f.positions.length, 0);
+});
+
+test('Notebook jumps are acknowledged once and reopening Reading uses the later saved passage', () => {
+  let handled;
+  const f = scrollingReader({ jumpTarget: { bookId: 'reading-book', page: 3, nonce: 456 }, onJumpHandled: nonce => { handled = nonce; } });
+  assert.equal(handled, 456); assert.equal(f.list().data[0].pageNumber, 3);
+  f.change({ jumpTarget: null }); f.viewport(); f.measure(8, 84, 1500);
+  f.list().onScrollBeginDrag(scrolled(84)); f.list().onScroll(scrolled(400)); f.h.unmount();
+  const saved = f.positions.at(-1);
+  const next = scrollingReader({ currentBook: { ...f.props().currentBook, currentPage: saved.page.pageNumber, readingPosition: saved.position }, jumpTarget: null });
+  assert.equal(next.list().data[0].pageNumber, 8); next.h.unmount();
 });

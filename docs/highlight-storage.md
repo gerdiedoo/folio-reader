@@ -71,7 +71,8 @@ manual operation **Upload to Supabase** and warns to review other-device changes
 it pushes current records and does not reconcile remote deletions/conflicts.
 Vocabulary has its own [archive and merge rules](vocabulary-storage.md), and
 [reading preferences](reader-settings-storage.md) use a separate confirmed store.
-Book metadata retains its older merge policies. Profile's library metadata backup
+Book metadata keeps its existing storage path, with
+[device resume precedence](scroll-resume.md). Profile's library metadata backup
 does not include this archive or original EPUB files.
 
 ## Evidence
