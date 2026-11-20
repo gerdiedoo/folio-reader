@@ -336,3 +336,47 @@ native adapters and a lightweight hook/component harness. Actual Android setting
 delivery, TalkBack speech, native modal transitions, built-in loading indicators
 and large-text layout remain device checks; iOS has only bundle/code validation
 in this cloud environment.
+
+## Offline Find in book (step 10)
+
+No new database migration is required. Use a locally imported EPUB with multiple
+chapters, including a known phrase in the second paragraph of a passage. This
+feature searches the current book's imported text; the archive search keeps its
+existing metadata/annotation scope.
+
+1. Open the book, then **More → Find in book**. Type a known word/phrase. Confirm
+   the chapter and passage context, the emphasized match, and results in reading
+   order. Try an absent phrase, a blank/spaces-only query and Clear. A blank query
+   should show instructions; no matches should show a helpful message.
+2. Check case and accents (`café`/`CAFE`), repeated spaces/line breaks within a
+   paragraph, emoji and literal punctuation such as `[x]` or `.*`. Phrases spanning
+   two separate paragraphs are not matched. Search input is limited to 200
+   characters. Use a very common word to confirm the first-100 message appears
+   when more matches exist; refine the query to narrow it down.
+3. In Scroll, select a result in a later chapter. It should open that imported
+   passage. In Pages, choose a match late in a long source passage: it should open
+   the reflowed page containing the first matched word, including after the search
+   keyboard closes. Read Next if a phrase spans display pages. Turn pages normally
+   afterward; search must not keep jumping you back to the selected result.
+4. In Line, start playback and open Find. Playback should pause. Select a result:
+   it should open the matching imported passage, paused at its first word. Exact
+   word-level search jumps in Line are not included in this step. Confirm the
+   reading mode is retained in all three cases.
+5. Enable airplane mode and repeat with a downloaded book. Change the query
+   rapidly while searching, close the sheet mid-search, and open a different book.
+   Old matches must not appear under a new query or book. Restarting/closing search
+   clears its temporary query; results do not create Notebook highlights.
+6. With TalkBack, find the named input, Clear, Close and result buttons. Check
+   result-count announcements and whether selecting a result returns focus to
+   useful reader content. Android Back should dismiss search first. Verify that
+   the keyboard, scrolling results, larger system text, landscape and Charcoal
+   theme leave controls and snippets readable/reachable.
+7. Search a large EPUB, including one with a long paragraph. Check responsiveness
+   during typing/cancellation and result scrolling. Automated yields/cancellation
+   tests do not establish native frame rate or a maximum supported book size.
+
+Automated tests verify literal/folded matches and original UTF-16 offsets, source
+paragraph boundaries, bounded snippets/results, Unicode code points, cancellation
+within long paragraphs, reflowed target selection, debounce/retry, and stale
+query/book/unmount handling. Android/iOS bundle exports check packaging; they do
+not exercise native keyboard layout, TalkBack focus or actual phone performance.

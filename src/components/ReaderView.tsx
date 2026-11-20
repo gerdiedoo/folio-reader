@@ -17,6 +17,8 @@ import { readerTextMetrics } from '../lib/readerPreferences';
 import { HIGHLIGHT_COLORS, highlightTextStyle } from '../lib/highlights';
 import { findBookmarkPage } from '../lib/bookmarks';
 import { BookmarkSheet } from './BookmarkSheet';
+import { BookSearchSheet } from './BookSearchSheet';
+import { searchDisplayPage, type BookSearchMatch } from '../lib/bookSearch';
 import { useAppTheme } from '../AppTheme';
 import { BOOK_PAGES } from '../data/initialData';
 import { colors, F, readerFontFamily, readerPaper, type } from '../theme';
@@ -387,6 +389,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   winWidthRef.current = winWidth;
   const [chaptersOpen, setChaptersOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const searchAnchor = useRef<{ match: BookSearchMatch; pages: BookContentPage[] } | null>(null);
   // Scroll mode renders a window of pages that starts at `listBase`. A jump just moves the
   // window (and remounts the list), so the destination shows instantly instead of the list
   // scrolling through pages whose heights it hasn't measured yet. Earlier pages are
@@ -568,6 +572,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   }, [baseSize, hPad, lineHeight, pageArea.height, pageArea.width, pages]);
   const turnPaginatedPage = useCallback(
     (index: number) => {
+      searchAnchor.current = null;
       const nextIndex = Math.max(0, Math.min(paginatedPages.length - 1, index));
       const nextPage = paginatedPages[nextIndex];
       if (!nextPage) return;
@@ -577,6 +582,15 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     [paginatedPages, updatePageIndex]
   );
   turnPageRef.current = turnPaginatedPage;
+
+  // Keep the chosen word visible if dismissing the search keyboard reflows Pages.
+  // Ordinary page/chapter navigation releases this temporary search anchor.
+  useEffect(() => {
+    const anchor = searchAnchor.current;
+    if (flowMode !== 'paginated' || anchor?.pages !== pages) { searchAnchor.current = null; return; }
+    const target = searchDisplayPage(paginatedPages, anchor.match);
+    if (target >= 0) setPaginatedIndex(target);
+  }, [flowMode, pages, paginatedPages]);
 
   // ---- fast navigation: chapters and scrubber ----
   const chapters = useMemo<ChapterInfo[]>(() => {
@@ -597,6 +611,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   /** Jump to a source page in whichever reading mode is active. */
   const goToSource = useCallback(
     (target: number) => {
+      searchAnchor.current = null;
       const idx = Math.max(0, Math.min(pages.length - 1, target));
       updatePageIndex(idx);
       if (flowMode === 'paginated') {
@@ -662,6 +677,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   useEffect(() => {
     setChaptersOpen(false);
     setBookmarksOpen(false);
+    setFindOpen(false);
   }, [bookId]);
 
   // reset when a different book is opened
@@ -689,6 +705,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   // ---- jump from Notebook / Search ----
   useEffect(() => {
     if (!jumpTarget || jumpTarget.bookId !== bookId || pages.length === 0) return;
+    searchAnchor.current = null;
     const idx = Math.max(0, pages.findIndex((p) => p.pageNumber === jumpTarget.page));
     updatePageIndex(idx);
     if (flowMode === 'paginated') {
@@ -1036,6 +1053,18 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               <Pressable
                 style={styles.menuItem}
                 accessibilityRole="button"
+                accessibilityLabel="Find in book"
+                onPress={() => {
+                  setMenuOpen(false);
+                  setFindOpen(true);
+                }}
+              >
+                <Icon name="search" size={18} color={colors.onSurface} />
+                <Text style={styles.menuText}>Find in book</Text>
+              </Pressable>
+              <Pressable
+                style={styles.menuItem}
+                accessibilityRole="button"
                 accessibilityLabel="Look up a word"
                 onPress={() => {
                   setMenuOpen(false);
@@ -1070,7 +1099,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               const index = pages.indexOf(source);
               if (index >= 0 && index !== pageIndex) updatePageIndex(index);
             }}
-            playbackBlocked={playbackBlocked || chaptersOpen || bookmarksOpen || Boolean(sheet) || typesetOpen || menuOpen}
+            playbackBlocked={playbackBlocked || chaptersOpen || bookmarksOpen || findOpen || Boolean(sheet) || typesetOpen || menuOpen}
             settings={settings}
             onExit={() => onUpdateSettings({ readingFlowMode: 'paginated' })}
             onAddHighlight={onAddHighlight}
@@ -1229,6 +1258,31 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           )}
         </View>
       </View>
+
+      {findOpen && (
+        <BookSearchSheet
+          key={currentBook.id}
+          title={currentBook.title}
+          pages={pages}
+          onClose={() => setFindOpen(false)}
+          onSelect={match => {
+            if (!pages[match.sourceIndex] || pages[match.sourceIndex].pageNumber !== match.pageNumber) {
+              showToast('This passage is unavailable in this copy. Search again.');
+              return;
+            }
+            setFindOpen(false);
+            if (flowMode === 'paginated') {
+              const target = searchDisplayPage(paginatedPages, match);
+              if (target >= 0) {
+                turnPaginatedPage(target);
+                searchAnchor.current = { match, pages };
+                return;
+              }
+            }
+            goToSource(match.sourceIndex);
+          }}
+        />
+      )}
 
       {bookmarksOpen && (
         <BookmarkSheet

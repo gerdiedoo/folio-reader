@@ -8,7 +8,7 @@ const ts = require('typescript');
 
 // Exercise the actual components' native event handlers and exposed properties.
 // This lightweight hook harness does not simulate native focus or TalkBack speech.
-function harness({ runEffects = false, reducedMotion: initialReducedMotion = true } = {}) {
+function harness({ runEffects = false, reducedMotion: initialReducedMotion = true, moduleMocks = {} } = {}) {
   const slots = [];
   const effects = new Map();
   const timers = new Map();
@@ -16,6 +16,7 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
   let nextTimer = 1;
   let pending = [];
   let cursor = 0;
+  let stateWrites = 0;
   let now = 0;
   let reducedMotion = initialReducedMotion;
   const animations = [];
@@ -43,7 +44,7 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
     useState(initial) {
       const at = cursor++;
       if (!(at in slots)) slots[at] = typeof initial === 'function' ? initial() : initial;
-      return [slots[at], value => { slots[at] = typeof value === 'function' ? value(slots[at]) : value; }];
+      return [slots[at], value => { stateWrites++; slots[at] = typeof value === 'function' ? value(slots[at]) : value; }];
     },
   };
   react.default = react;
@@ -55,6 +56,7 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
   theme.readerPaper = theme.previewPaper;
   const native = {
     View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView: 'ScrollView', Switch: 'Switch', Image: 'Image',
+    FlatList: 'FlatList', TextInput: 'TextInput', ActivityIndicator: 'ActivityIndicator',
     Modal: 'Modal', KeyboardAvoidingView: 'KeyboardAvoidingView', Platform: { OS: 'android' },
     StyleSheet: { create: styles => styles, hairlineWidth: 1 },
     Easing: { linear: x => x },
@@ -104,6 +106,7 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
       setTimeout(fn, ms) { const id = nextTimer++; timers.set(id, { fn, ms }); return id; },
       clearTimeout(id) { timers.delete(id); },
     },
+    ...moduleMocks,
   };
   function load(relativePath) {
     const filename = path.resolve(__dirname, relativePath);
@@ -124,6 +127,7 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
   }
   return {
     load, timers, listeners, native, animations, announcements,
+    stateWrites: () => stateWrites,
     reduceMotion(value) { reducedMotion = value; },
     elapse(ms) { now += ms; },
     render(component, props) {
@@ -603,5 +607,121 @@ test('failed or shorter native recommendations retain five seconds; iOS announce
   h.render(useFeedbackMessage);
   assert.deepEqual(h.announcements, [{ message: 'Done', options: { queue: true } }, { message: 'Done', options: { queue: true } }]);
   assert.equal(h.timers.size, 1);
+  h.unmount();
+});
+
+function searchHarness() {
+  const jobs = [];
+  const h = harness({ runEffects: true, moduleMocks: {
+    './bookSearch': { searchBookPages(pages, query, { signal }) {
+      let resolve, reject;
+      const result = new Promise((ok, fail) => { resolve = ok; reject = fail; });
+      jobs.push({ pages, query, signal, resolve, reject });
+      return result; // Deliberately ignores abort, exercising the hook's stale-result guard.
+    } },
+  } });
+  const { useBookSearch } = h.load('../src/lib/useBookSearch.ts');
+  return { h, jobs, hook: ({ pages, query }) => useBookSearch(pages, query) };
+}
+
+test('book search debounces typing, ignores stale completions and clears results immediately', async () => {
+  const { h, jobs, hook } = searchHarness();
+  const pages = [page(1, 'first second third')];
+  let result = h.render(hook, { pages, query: 'first' });
+  assert.equal(result.status, 'searching');
+  assert.equal(jobs.length, 0);
+  assert.equal([...h.timers.values()][0].ms, 250);
+  h.render(hook, { pages, query: 'second' });
+  assert.equal(h.timers.size, 1);
+  h.tick();
+  assert.equal(jobs[0].query, 'second');
+  h.render(hook, { pages, query: 'third' });
+  assert.equal(jobs[0].signal.aborted, true);
+  h.tick();
+  jobs[0].resolve({ matches: [{ id: 'stale' }], hasMore: false });
+  await Promise.resolve();
+  result = h.render(hook, { pages, query: 'third' });
+  assert.equal(result.status, 'searching');
+  assert.deepEqual(result.matches, []);
+  jobs[1].resolve({ matches: [{ id: 'current' }], hasMore: false });
+  await Promise.resolve();
+  result = h.render(hook, { pages, query: 'third' });
+  assert.equal(result.status, 'ready');
+  assert.equal(result.matches[0].id, 'current');
+  result = h.render(hook, { pages, query: '' });
+  assert.equal(result.status, 'idle');
+  assert.deepEqual(result.matches, []);
+  assert.equal(h.timers.size, 0);
+  h.unmount();
+});
+
+test('changing books hides old matches; unmount cancels work and blocks late state writes', async () => {
+  const { h, jobs, hook } = searchHarness();
+  const a = [page(1, 'book A')], b = [page(1, 'book B')];
+  h.render(hook, { pages: a, query: 'book' });
+  h.tick();
+  jobs[0].resolve({ matches: [{ id: 'A' }], hasMore: false });
+  await Promise.resolve();
+  assert.equal(h.render(hook, { pages: a, query: 'book' }).matches[0].id, 'A');
+  const switched = h.render(hook, { pages: b, query: 'book' });
+  assert.equal(switched.status, 'searching');
+  assert.deepEqual(switched.matches, []);
+  h.tick();
+  assert.equal(jobs[0].signal.aborted, true);
+  const writes = h.stateWrites();
+  h.unmount();
+  assert.equal(jobs[1].signal.aborted, true);
+  jobs[1].resolve({ matches: [{ id: 'B' }], hasMore: false });
+  await Promise.resolve();
+  assert.equal(h.stateWrites(), writes);
+  assert.equal(h.timers.size, 0);
+});
+
+test('book search failures stay distinct from no matches and can be retried', async () => {
+  const { h, jobs, hook } = searchHarness();
+  const props = { pages: [page(1, 'a word')], query: 'word' };
+  h.render(hook, props);
+  h.tick();
+  jobs[0].reject(new Error('Could not search this text'));
+  await Promise.resolve(); await Promise.resolve();
+  let result = h.render(hook, props);
+  assert.equal(result.status, 'error');
+  assert.equal(result.error, 'Could not search this text');
+  result.retry();
+  h.render(hook, props);
+  h.tick();
+  jobs[1].resolve({ matches: [], hasMore: false });
+  await Promise.resolve();
+  result = h.render(hook, props);
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(result.matches, []);
+  h.unmount();
+});
+
+test('Find in book exposes named input/close controls and opens the selected source match', async () => {
+  const { h, jobs } = searchHarness();
+  const { BookSearchSheet } = h.load('../src/components/BookSearchSheet.tsx');
+  const selected = [];
+  let closed = false;
+  const props = { title: 'A book', pages: [page(2, 'A quiet garden')], onClose: () => { closed = true; }, onSelect: item => selected.push(item) };
+  let root = h.render(BookSearchSheet, props);
+  labelled(root, 'Find text in this book').onChangeText('garden');
+  root = h.render(BookSearchSheet, props);
+  h.tick();
+  const match = { id: '0:0:8:14', sourceIndex: 0, pageNumber: 2, chapterTitle: 'Arrival', before: 'A quiet ', match: 'garden', after: '', wordIndex: 2 };
+  jobs[0].resolve({ matches: [match], hasMore: false });
+  await Promise.resolve();
+  root = h.render(BookSearchSheet, props);
+  const list = elements(root).find(node => node.type === 'FlatList');
+  assert.equal(list.props.data[0], match);
+  const row = list.props.renderItem({ item: match });
+  assert.equal(row.props.accessibilityRole, 'button');
+  row.props.onPress();
+  assert.equal(selected[0], match);
+  labelled(root, 'Clear book search').onPress();
+  root = h.render(BookSearchSheet, props);
+  assert.equal(elements(root).find(node => node.type === 'FlatList').props.data.length, 0);
+  labelled(root, 'Close find in book').onPress();
+  assert.equal(closed, true);
   h.unmount();
 });

@@ -213,3 +213,23 @@ announcement without moving focus (queued on iOS). Expired messages and hidden
 headers are excluded from accessibility focus. The generic information icon does
 not imply success when a message reports an error, and text is no longer limited
 to two lines. See the [motion and feedback phone checks](docs/android-testing.md#system-motion-and-accessible-feedback-step-9).
+
+## Find in book
+
+In Reading, open **More → Find in book** to search the current book's downloaded
+text offline. Results show chapter/passage context and emphasize the matched
+text. Search ignores letter case, decomposable accents and whitespace differences;
+it treats punctuation literally and searches within each paragraph. It accepts
+up to 200 characters and shows the first 100 matches when more are available.
+
+Selecting a result preserves the reading mode. Scroll/Line opens the imported
+passage (Line stays paused); Pages targets the reflowed page containing the first
+matched word. A phrase split across display pages can continue on the next page.
+Search formatting in the result list does not create saved highlights. Queries
+are temporary, scoped to the current reader, and are not uploaded or indexed in
+Supabase. The archive search remains for metadata, saved quotes/notes and vocabulary.
+
+Search is debounced and cancellable, with yields between groups of passages and
+within long paragraphs. Tests cover original-text offsets, result limits, source
+navigation, cancellation and stale query/book results. Native keyboard/focus,
+layout and large-book responsiveness still need the [phone checks](docs/android-testing.md#offline-find-in-book-step-10).
