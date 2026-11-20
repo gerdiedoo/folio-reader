@@ -13,6 +13,11 @@ const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, esModuleInterop: true },
 }).outputText;
 
+const importHelpers = {};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname, '../src/lib/bookImport.ts'), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS },
+}).outputText, { exports: importHelpers, Error });
+
 async function fixture(body, { missingFile = false, missingReference = false, emptySpine = false } = {}) {
   const zip = new JSZip();
   zip.file('META-INF/container.xml', '<container><rootfiles><rootfile full-path="EPUB/content.opf"/></rootfiles></container>');
@@ -21,7 +26,7 @@ async function fixture(body, { missingFile = false, missingReference = false, em
   return zip.generateAsync({ type: 'uint8array' });
 }
 
-function parser(bytes) {
+function parser(bytes, { copyFails = false, cleanupFails = false } = {}) {
   const writes = [];
   class File {
     constructor() { this.size = bytes.length; }
@@ -30,12 +35,23 @@ function parser(bytes) {
   const exports = {};
   vm.runInNewContext(compiled, {
     exports,
+    Error,
     console,
     require(name) {
+      if (name === './bookImport') return importHelpers;
       if (name === 'expo-file-system') return { File };
       if (name === './localStore') return {
         coversDir() { writes.push('cover'); throw new Error('Unexpected cover access'); },
-        persistBookFile() { writes.push('epub'); return 'file:///saved.epub'; },
+        persistBookFile() {
+          writes.push('epub');
+          if (copyFails) throw new importHelpers.ImportStorageError('Could not save the EPUB file. Check available storage.');
+          return 'file:///saved.epub';
+        },
+        removeBookFiles() {
+          writes.push('cleanup');
+          if (cleanupFails === 'throw') throw new Error('Cleanup unavailable');
+          return !cleanupFails;
+        },
       };
       return require(name);
     },
@@ -130,4 +146,23 @@ test('the phone-test EPUB retains its entire expected text sequence', async () =
     'Table Check', 'Journey distances', 'Place', 'Miles', 'Home', '12',
     'First short line.', 'Second short line.', 'Fish & chips with salt and pepper.', 'THE END.',
   ]);
+});
+
+
+test('EPUB copy failure rejects parsing and attempts rollback', async () => {
+  const input = parser(await fixture('<p>Readable text.</p>'), { copyFails: true });
+  await assert.rejects(input.parse, /Could not save the EPUB file/);
+  assert.deepEqual(input.writes, ['epub', 'cleanup']);
+});
+
+test('EPUB copy failure reports incomplete cleanup instead of claiming success', async () => {
+  const input = parser(await fixture('<p>Readable text.</p>'), { copyFails: true, cleanupFails: true });
+  await assert.rejects(input.parse, /Some incomplete import files could not be removed/);
+  assert.deepEqual(input.writes, ['epub', 'cleanup']);
+});
+
+
+test('unexpected cleanup errors do not mask the original EPUB copy failure', async () => {
+  const input = parser(await fixture('<p>Readable text.</p>'), { copyFails: true, cleanupFails: 'throw' });
+  await assert.rejects(input.parse, /Could not save the EPUB file.*Some incomplete import files could not be removed/);
 });

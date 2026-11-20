@@ -37,7 +37,8 @@ import {
 } from './src/data/initialData';
 import { normalizeReaderSettings } from './src/lib/readerPreferences';
 import { createBookmark, createBookmarkStore } from './src/lib/bookmarks';
-import { loadJSON, loadPages, removeBookFiles, saveJSON, savePages } from './src/lib/localStore';
+import { loadJSON, loadJSONStrict, loadPages, removeBookFiles, saveJSON, saveJSONStrict, savePages } from './src/lib/localStore';
+import { createImportCommitter, ImportStorageError } from './src/lib/bookImport';
 import { parseEpubFile } from './src/lib/epubParser';
 import {
   CatalogBook,
@@ -125,6 +126,28 @@ function FolioApp() {
 
   const [activeTab, setActiveTab] = useState<TabType>('library');
   const [books, setBooks] = useState<Book[]>(INITIAL_BOOKS);
+  const booksRef = useRef(books);
+  booksRef.current = books;
+  const libraryLoadState = useRef<'loading' | 'ready' | 'error'>('loading');
+  const importCommitterRef = useRef<ReturnType<typeof createImportCommitter> | null>(null);
+  if (!importCommitterRef.current) {
+    importCommitterRef.current = createImportCommitter({
+      savePages,
+      removeFiles: removeBookFiles,
+      saveLibraryEntry: async (book) => {
+        if (libraryLoadState.current !== 'ready') {
+          throw new ImportStorageError(libraryLoadState.current === 'loading'
+            ? 'Your library is still loading. Try importing again in a moment.'
+            : 'Your saved library could not be loaded. Restart the app before importing more books.');
+        }
+        const next = [book, ...booksRef.current.filter(item => item.id !== book.id)];
+        await saveJSONStrict('books', next);
+        // Update the ref immediately so consecutive imports cannot use an old render.
+        booksRef.current = [book, ...booksRef.current.filter(item => item.id !== book.id)];
+        setBooks(previous => [book, ...previous.filter(item => item.id !== book.id)]);
+      },
+    });
+  }
   const [currentBookId, setCurrentBookId] = useState<string>('');
   const [bookDetailsId, setBookDetailsId] = useState<string | null>(null);
   const [customPagesMap, setCustomPagesMap] = useState<Record<string, BookContentPage[]>>({});
@@ -213,7 +236,15 @@ function FolioApp() {
 
     (async () => {
       const [lBooks, lSettings, lGoal, lHighlights, lLexicon, lReadingDay, lRecoveryBooks] = await Promise.all([
-        loadJSON<Book[]>('books'),
+        loadJSONStrict<Book[]>('books').then(saved => {
+          if (saved !== null && !Array.isArray(saved)) throw new Error('Invalid library index');
+          return saved;
+        }).catch(error => {
+          libraryLoadState.current = 'error';
+          console.warn('Could not load the library index:', error);
+          showToast("Couldn't load your saved library. Restart before importing more books.");
+          return null;
+        }),
         loadJSON<ReadingSettings>('settings'),
         loadJSON<ReadingGoal>('goal'),
         loadJSON<HighlightEntry[]>('highlights'),
@@ -224,7 +255,7 @@ function FolioApp() {
       if (cancelled) return;
 
       const mergedSettings = normalizeReaderSettings({ ...INITIAL_SETTINGS, ...(lSettings ?? {}) });
-      if (lBooks?.length) setBooks(lBooks);
+      if (lBooks?.length) { booksRef.current = lBooks; setBooks(lBooks); }
       if (lGoal) setReadingGoal(lGoal);
       if (lHighlights) setHighlights(lHighlights);
       if (lLexicon) setLexicon(lLexicon);
@@ -241,6 +272,7 @@ function FolioApp() {
         if (pages) pagesMap[id] = pages;
       });
       setCustomPagesMap(pagesMap);
+      if (libraryLoadState.current !== 'error') libraryLoadState.current = 'ready';
       if (lBooks?.length) setCurrentBookId(lBooks[0].id);
 
       // Remote data (cloud wins for items it has, local-only items are kept)
@@ -316,7 +348,7 @@ function FolioApp() {
 
   // ---- Persist local copies (only after hydration so we never clobber saved data) ----
   useEffect(() => {
-    if (hydrated) saveJSON('books', books);
+    if (hydrated && libraryLoadState.current === 'ready') saveJSON('books', books);
   }, [books, hydrated]);
   useEffect(() => {
     if (hydrated) saveJSON('settings', settings);
@@ -579,8 +611,7 @@ function FolioApp() {
           book.coverStyle = 'image';
         }
         const restoredBook = applySavedReadingProgress(book, entry);
-        savePages(book.id, pages);
-        handleAddEpubBook(restoredBook, pages);
+        await handleAddEpubBook(restoredBook, pages);
         catalogMappings = await rememberAdded(catalogMappings, catalogBook.id, book.id);
         existingTitles.add(titleKey);
         restored++;
@@ -618,8 +649,7 @@ function FolioApp() {
     pages: BookContentPage[]
   ) => {
     const restoredBook = applySavedReadingProgress(importedBook, recovery);
-    savePages(restoredBook.id, pages);
-    handleAddEpubBook(restoredBook, pages);
+    await handleAddEpubBook(restoredBook, pages);
     setRecoveryBooks((current) => current.filter((item) => item.id !== recovery.id));
     showToast(`Restored "${restoredBook.title}" with saved reading progress`);
   };
@@ -633,7 +663,7 @@ function FolioApp() {
       const updatedBook = { ...book, lastOpened: new Date().toISOString() };
       const updatedBooks = books.map((item) => (item.id === bookId ? updatedBook : item));
       setBooks(updatedBooks);
-      void saveJSON('books', updatedBooks);
+      if (libraryLoadState.current === 'ready') void saveJSON('books', updatedBooks);
       void upsertBookToSupabase(updatedBook);
     }
     setBookDetailsId(null);
@@ -662,7 +692,7 @@ function FolioApp() {
       };
       const updatedBooks = books.map((item) => (item.id === bookId ? updatedBook : item));
       setBooks(updatedBooks);
-      void saveJSON('books', updatedBooks);
+      if (libraryLoadState.current === 'ready') void saveJSON('books', updatedBooks);
 
       if (readingPositionTimer.current) clearTimeout(readingPositionTimer.current);
       readingPositionTimer.current = setTimeout(() => {
@@ -746,10 +776,10 @@ function FolioApp() {
     upsertLexiconToSupabase(updated);
   };
 
-  const handleAddEpubBook = (newBook: Book, newPages: BookContentPage[]) => {
-    setBooks((prev) => [newBook, ...prev]);
+  const handleAddEpubBook = async (newBook: Book, newPages: BookContentPage[]) => {
+    await importCommitterRef.current!(newBook, newPages);
     setCustomPagesMap((prev) => ({ ...prev, [newBook.id]: newPages }));
-    upsertBookToSupabase(newBook);
+    void upsertBookToSupabase(newBook);
     showToast(`Added "${newBook.title}" to your Library`);
   };
 
@@ -786,11 +816,13 @@ function FolioApp() {
       return remainingPages;
     });
     if (currentBookId === bookId) setCurrentBookId(remainingBooks[0]?.id ?? '');
-    removeBookFiles(bookId, book.coverUrl);
+    const removedLocalFiles = removeBookFiles(bookId, book.coverUrl);
 
     const removedFromCloud = await deleteBookFromSupabase(bookId);
     showToast(
-      removedFromCloud
+      !removedLocalFiles
+        ? `"${book.title}" removed from Library; some local files could not be deleted`
+        : removedFromCloud
         ? `"${book.title}" and its notes were removed`
         : `"${book.title}" removed locally; cloud cleanup failed`
     );

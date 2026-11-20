@@ -12,8 +12,8 @@ import {
   searchCatalog,
   TOPICS,
 } from '../lib/catalog';
+import { ImportStorageError } from '../lib/bookImport';
 import { parseEpubFile } from '../lib/epubParser';
-import { savePages } from '../lib/localStore';
 import { F, type } from '../theme';
 import { Book, BookContentPage } from '../types';
 import { BookCover } from './BookCover';
@@ -25,7 +25,7 @@ interface Props {
   books: Book[];
   viewMode: BrowseViewMode;
   onViewModeChange: (mode: BrowseViewMode) => void;
-  onAddEpubBook: (book: Book, pages: BookContentPage[]) => void;
+  onAddEpubBook: (book: Book, pages: BookContentPage[]) => Promise<void>;
   onOpenBook: (bookId: string) => void;
   showToast: (msg: string) => void;
   onClose: () => void;
@@ -278,14 +278,15 @@ export const BrowseBooksScreen: React.FC<Props> = ({
         book.coverUrl = item.coverUrl;
         book.coverStyle = 'image';
       }
-      savePages(book.id, pages);
-      onAddEpubBook(book, pages);
+      await onAddEpubBook(book, pages);
       setAdded(await rememberAdded(added, item.id, book.id));
     } catch (err: unknown) {
       console.warn('Catalog download failed:', err);
       const msg = err instanceof Error ? err.message : '';
       showToast(
-        /Invalid EPUB/i.test(msg) ? 'That file could not be read as an EPUB.' : 'Download failed. Check your connection and try again.'
+        err instanceof ImportStorageError ? msg
+          : /Invalid EPUB/i.test(msg) ? 'That file could not be read as an EPUB.'
+          : msg || 'Download failed. Check your connection and try again.'
       );
     } finally {
       if (uri) deleteDownloaded(uri);

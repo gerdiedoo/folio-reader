@@ -142,3 +142,18 @@ Passage selection, saved reader highlights, and notebook highlight labels use
 opaque colors with contrasting text. Tests verify normal-text contrast of at
 least 4.5:1 for the palette and representative saved colors. This is a targeted
 contrast improvement, not certification of the whole app's accessibility.
+
+## Import storage and recovery
+
+A new book is added only after its original EPUB, parsed reading pages, and local
+library entry have been saved. Local file imports, catalog downloads, and restore
+imports share the same commit path. Reported copy/write failures reject the
+import and attempt to remove its newly created files; the selected source EPUB
+and other books are not removed. Cleanup failures are included in the error.
+
+Import commits and per-key metadata writes are queued. Cloud synchronization
+starts after local import success; an Added message confirms local storage, not
+cloud backup. Optional cover extraction may fall back to a typographic cover.
+The tests inject file-copy, page-write, metadata-write and deletion failures using
+mocked storage adapters. This is not a filesystem-level atomic transaction or a
+claim of recovery from power loss/process termination during a write.

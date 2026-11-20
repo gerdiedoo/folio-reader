@@ -171,3 +171,34 @@ change or EPUB re-import is needed.
 Highlights now use opaque fills to keep text contrast independent of the theme.
 This step does not implement native text-selection handles, reduced-motion support,
 full document formatting, or a complete screen-reader interaction model.
+
+## Import storage check
+
+Install the updated APK over Folio Dev. No schema migration or re-import of
+existing books is required for this change; test a new, disposable EPUB import.
+
+1. Import the content-check EPUB from the local picker. Wait for Added before
+   opening it. Force-close/reopen the app, enable airplane mode, and verify the
+   book and text remain available. The original picked file must still exist.
+2. If catalog networking is configured, download a new free book. Wait through
+   Preparing and verify restart/offline reading. A storage error should describe
+   the save failure rather than incorrectly blaming the network.
+3. If the test account has a backup, exercise a download restore and manual
+   recovery re-import. Failed entries should remain recoverable, rather than
+   being counted as restored before their local save completes.
+4. If Android naturally reports insufficient storage, capture the import error.
+   The book must not be presented as successfully added; existing books must
+   remain readable. Free space and retry. Do not deliberately fill your phone's
+   storage just to reproduce this case; fault injection is covered in tests.
+
+Failures while writing the original EPUB, reading pages, or library entry are
+handled separately from optional covers and cloud sync. Cleanup is attempted only
+for the new import's app-owned files; incomplete cleanup is reported. Abrupt
+process termination during import, native disk behavior and the older cloud merge
+strategy still require separate validation. Generic settings/annotation saves
+continue to use best-effort persistence and are not covered by this import fix.
+
+If the saved library index cannot be read or parsed at startup, automatic library
+saves and new imports are blocked rather than replacing it with an empty index.
+Restart after resolving the storage problem. Persistent corruption may require
+recovery work; the app does not delete or reset the index automatically.

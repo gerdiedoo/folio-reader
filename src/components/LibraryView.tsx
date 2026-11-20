@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';
 import { parseEpubFile } from '../lib/epubParser';
-import { persistCoverImage, savePages } from '../lib/localStore';
+import { persistCoverImage } from '../lib/localStore';
 import { colors, F, NAV_SPACE, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
 import { Book, BookContentPage, ReadingGoal } from '../types';
@@ -32,7 +32,7 @@ interface LibraryViewProps {
   globalCoverStyle: 'image' | 'typographic';
   onOpenBook: (bookId: string) => void;
   onSelectBook: (bookId: string | null) => void;
-  onAddEpubBook: (book: Book, pages: BookContentPage[]) => void;
+  onAddEpubBook: (book: Book, pages: BookContentPage[]) => Promise<void>;
   onRestoreImportedProgress: (book: Book) => Promise<Book>;
   onReimportRecoveryBook: (
     recovery: LibraryRecoveryBook,
@@ -166,8 +166,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       setImporting(true);
       const { book, pages } = await parseEpubFile(asset.uri, asset.name);
       const bookWithProgress = await onRestoreImportedProgress(book);
-      savePages(book.id, pages);
-      onAddEpubBook(bookWithProgress, pages);
+      await onAddEpubBook(bookWithProgress, pages);
     } catch (err: unknown) {
       console.warn('EPUB import failed:', err);
       showToast(err instanceof Error ? err.message : 'Failed to read EPUB file');

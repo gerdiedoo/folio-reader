@@ -3,7 +3,8 @@ import { XMLParser } from 'fast-xml-parser';
 import JSZip from 'jszip';
 import { HTMLElement as HtmlNode, Node as HtmlTreeNode, NodeType, parse as parseHtml } from 'node-html-parser';
 import { Book, BookContentPage } from '../types';
-import { coversDir, persistBookFile } from './localStore';
+import { ImportStorageError } from './bookImport';
+import { coversDir, persistBookFile, removeBookFiles } from './localStore';
 
 export interface ParsedEpub {
   book: Book;
@@ -233,6 +234,7 @@ export async function parseEpubFile(fileUri: string, fileName: string): Promise<
 
   // Cover (saved to permanent storage; blob: URLs don't exist on native)
   let coverUrl = '';
+  let partialCover: File | undefined;
   try {
     const coverMeta = asArray<any>(opf.metadata?.meta).find((m) => m['@_name'] === 'cover');
     const coverId = coverMeta?.['@_content'];
@@ -253,6 +255,7 @@ export async function parseEpubFile(fileUri: string, fileName: string): Promise<
         const coverBytes = await coverZipFile.async('uint8array');
         const ext = (coverHref.split('.').pop() || 'jpg').toLowerCase().slice(0, 4);
         const dest = new File(coversDir(), `${bookId}.${ext}`);
+        partialCover = dest;
         if (!dest.exists) dest.create();
         dest.write(coverBytes);
         coverUrl = dest.uri;
@@ -260,9 +263,20 @@ export async function parseEpubFile(fileUri: string, fileName: string): Promise<
     }
   } catch (err) {
     console.warn('EPUB cover extraction failed:', err);
+    if (partialCover) {
+      try { if (partialCover.exists) partialCover.delete(); } catch { console.warn('Could not remove an incomplete cover.'); }
+    }
   }
 
-  const fileLocation = persistBookFile(fileUri, bookId);
+  let fileLocation: string;
+  try {
+    fileLocation = persistBookFile(fileUri, bookId);
+  } catch (error) {
+    let cleaned = false;
+    try { cleaned = removeBookFiles(bookId, coverUrl); } catch { /* Keep the storage failure as the main error. */ }
+    const reason = error instanceof Error ? error.message : 'Could not save this EPUB file. Try again.';
+    throw new ImportStorageError(cleaned ? reason : `${reason} Some incomplete import files could not be removed.`);
+  }
   const newBook: Book = {
     id: bookId,
     title,
