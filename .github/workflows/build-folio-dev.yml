@@ -11,6 +11,7 @@ on:
       - App.tsx
       - index.ts
       - src/**
+      - scripts/report-eas-build-error.cjs
       - supabase/**
       - assets/**
       - package.json
@@ -91,7 +92,16 @@ jobs:
           packager: npm
           token: ${{ secrets.EXPO_TOKEN }}
       - name: Build standalone Android APK
-        run: eas build --platform android --profile dev-preview --non-interactive --wait --json > "$RUNNER_TEMP/folio-dev-build.json"
+        run: |
+          set +e
+          # Keep JSON separate while streaming/capturing stderr for a readable failure.
+          eas build --platform android --profile dev-preview --non-interactive --wait --json 2>&1 > "$RUNNER_TEMP/folio-dev-build.json" | tee "$RUNNER_TEMP/folio-dev-build.stderr.log"
+          eas_build_status=${PIPESTATUS[0]}
+          set -e
+          if [ "$eas_build_status" -ne 0 ]; then
+            node scripts/report-eas-build-error.cjs "$RUNNER_TEMP/folio-dev-build.json" "$RUNNER_TEMP/folio-dev-build.stderr.log"
+          fi
+          exit "$eas_build_status"
       - name: Show APK download
         run: |
           node <<'JS'
@@ -125,7 +135,8 @@ jobs:
           cat >> "$GITHUB_STEP_SUMMARY" <<'EOF_SUMMARY'
           ## Folio Dev build did not complete
 
-          Open the failed step above for the error. Check that the saved Expo token
+          Open the **EAS APK build failed** annotation or the failed step for the
+          actual error, including the captured EAS JSON response. Check that the saved Expo token
           belongs to an account/robot with Developer access to this app's EAS project.
           EAS quota, Android signing setup, or project permissions may also block a build.
           Fix the reported issue, then use **Re-run failed jobs**. Do not post tokens in logs or chat.
