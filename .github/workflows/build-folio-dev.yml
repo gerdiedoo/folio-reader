@@ -45,7 +45,22 @@ jobs:
       - name: Run regression tests
         run: npm test
       - name: Test PostgreSQL account isolation
-        run: npm run test:account-db
+        run: |
+          set +e
+          npm run test:account-db 2>&1 | tee "$RUNNER_TEMP/folio-account-db.log"
+          account_test_status=${PIPESTATUS[0]}
+          set -e
+          if [ "$account_test_status" -ne 0 ]; then
+            node <<'JS'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          // This test only uses a disposable database and synthetic records.
+          const log = fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'folio-account-db.log'), 'utf8').slice(-12000);
+          const escaped = log.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+          console.log(`::error title=PostgreSQL isolation test failed::${escaped}`);
+          JS
+          fi
+          exit "$account_test_status"
       - name: Check TypeScript
         run: npm run typecheck
       - name: Check Expo token is configured

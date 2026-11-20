@@ -22,10 +22,16 @@ test('PostgreSQL account isolation, migration and legacy preservation', { timeou
     created = true;
     let ready = false;
     for (let attempt = 0; attempt < 150; attempt++) {
-      try { docker('exec', container, 'pg_isready', '-U', 'postgres'); ready = true; break; }
+      try {
+        // pg_isready can succeed against the image's temporary init server.
+        // Wait until init finishes, then require the final server to be ready.
+        const logs = docker('logs', container);
+        if (!logs.includes('PostgreSQL init process complete; ready for start up.')) throw new Error('Still initializing');
+        docker('exec', container, 'pg_isready', '-U', 'postgres'); ready = true; break;
+      }
       catch { await new Promise(resolve => setTimeout(resolve, 200)); }
     }
-    assert.ok(ready, 'PostgreSQL must be ready');
+    assert.ok(ready, `PostgreSQL must be ready after initialization. ${ready ? '' : docker('logs', container).slice(-3000)}`);
     sql(`create role anon nologin; create role authenticated nologin;
       create schema auth; create table auth.users (id uuid primary key);
       create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
