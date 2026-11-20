@@ -23,10 +23,15 @@ export function createLocalStore(scope?: string) {
     return bookId;
   }
 
-  async function loadJSONStrict<T>(key: string): Promise<T | null> {
+  async function loadJSONEntryStrict(key: string): Promise<{ present: boolean; value: unknown }> {
     await pendingWrites.get(storageKey(key))?.catch(() => undefined);
     const raw = await AsyncStorage.getItem(KEY_PREFIX + key);
-    return raw === null ? null : JSON.parse(raw) as T;
+    return raw === null ? { present: false, value: null } : { present: true, value: JSON.parse(raw) };
+  }
+
+  async function loadJSONStrict<T>(key: string): Promise<T | null> {
+    const entry = await loadJSONEntryStrict(key);
+    return entry.present ? entry.value as T : null;
   }
 
   async function loadJSON<T>(key: string): Promise<T | null> {
@@ -137,7 +142,7 @@ export function createLocalStore(scope?: string) {
     }
   }
 
-  return { storageKey, loadJSON, loadJSONStrict, saveJSON, saveJSONStrict, coversDir, savePages, getBookPagesLocation, persistBookFile, removeBookFiles, loadPages, persistCoverImage };
+  return { storageKey, loadJSON, loadJSONStrict, loadJSONEntryStrict, saveJSON, saveJSONStrict, coversDir, savePages, getBookPagesLocation, persistBookFile, removeBookFiles, loadPages, persistCoverImage };
 }
 
 export type LocalStore = ReturnType<typeof createLocalStore>;

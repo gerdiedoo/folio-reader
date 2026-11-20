@@ -196,8 +196,8 @@ Failures while writing the original EPUB, reading pages, or library entry are
 handled separately from optional covers and cloud sync. Cleanup is attempted only
 for the new import's app-owned files; incomplete cleanup is reported. Abrupt
 process termination during import, native disk behavior and the older cloud merge
-strategy still require separate validation. Generic settings/annotation saves
-continue to use best-effort persistence and are not covered by this import fix.
+strategy still require separate validation. Settings/vocabulary saves continue
+to use best-effort persistence. Step 12 separately protects highlights/reflections.
 
 If the saved library index cannot be read or parsed at startup, automatic library
 saves and new imports are blocked rather than replacing it with an empty index.
@@ -423,3 +423,47 @@ word/definition saving, source-context labels and pronunciation callbacks/cleanu
 Live Dictionary API access from this cloud was blocked by its outbound proxy
 (HTTP 403); the real service connection still needs testing on the phone. iOS was
 checked by bundle export, without a native runtime here.
+
+## Highlight and reflection storage (step 12)
+
+Read the [storage rollout and limits](highlight-storage.md) first. Export important
+notes before upgrading; install over Folio Dev without uninstalling or clearing
+data. The per-account local archive is created automatically. No new SQL is needed;
+the existing step 6 migration is still required for signed-in cloud access.
+
+1. In Guest, import a disposable EPUB. Save a highlight and a reflection from the
+   reader, a manual quote from Notebook, and a passage from Line. Save should
+   remain pending until storage confirms it; repeated taps must not add duplicates.
+   Confirm the success text says **on this device**. Reopen each draft after a
+   reported save failure, if one occurs naturally: it must not be cleared or
+   presented as saved. Fault injection covers these failures in automated tests;
+   do not fill the phone's storage deliberately.
+2. Edit an existing reflection in the reader, leave Reading, restart the app and
+   verify the highlight text, reflection and source passage remain correct.
+   Repeat in airplane mode. Export and verify the Markdown contains the saved
+   reflection. Deleting a note should remove it only after the local operation
+   completes; reopen the app to verify it stays removed.
+3. With a disposable signed-in account and the test backend, keep one local-only
+   highlight and edit another while offline. Reconnect and restart. Local-only
+   notes and the device's edited reflection must remain when cloud rows load.
+   A new cloud-only record should be added. Check another account and Guest:
+   neither should show or remove the first account's archive.
+4. Delete a highlight offline, reconnect and restart while its old server row
+   still exists. It must not return to this device's archive. Test book removal
+   only on a disposable book; notes for a different book must remain. Deletion
+   markers do not promise that other devices lose their server copies.
+5. If loading saved notes fails, Notebook must show the persistent notice and
+   Retry action, disable New Quote/export/upload, and avoid an empty-archive claim.
+   Reader Save should explain the load problem and keep the selection/draft.
+   Do not corrupt actual app data to reproduce this: malformed/null storage is
+   covered by tests. Repeated failure may require recovery, not a reset.
+6. Verify the renamed **Upload to Supabase** action and device-first note merge
+   explanation. Review edits on other devices before uploading; this step is not
+   a full sync/conflict engine. Vocabulary/settings/book metadata keep their
+   previous persistence behavior. Test TalkBack pending/disabled controls, large
+   text, keyboard layout and modal dismissal on the phone.
+
+Automated tests cover queued storage acknowledgements, failures, corrupt/null
+data, retry, concurrent instances, startup merges, deletion suppression, account
+scope and draft retention. Native storage semantics, process termination during
+a save, live Supabase transitions and actual device layouts remain unverified.

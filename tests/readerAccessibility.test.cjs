@@ -21,10 +21,15 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
   let reducedMotion = initialReducedMotion;
   const animations = [];
   const announcements = [];
+  const memo = (create, deps) => {
+    const at = cursor++, old = slots[at];
+    if (!old || !deps || old.deps?.length !== deps.length || deps.some((dep, i) => !Object.is(dep, old.deps[i]))) slots[at] = { value: create(), deps };
+    return slots[at].value;
+  };
   const react = {
     ...React,
-    useMemo: fn => fn(),
-    useCallback: fn => fn,
+    useMemo: memo,
+    useCallback: (fn, deps) => memo(() => fn, deps),
     useEffect(fn, deps) {
       const at = cursor++;
       if (!runEffects) return;
@@ -310,7 +315,7 @@ function lineReaderProps(overrides = {}) {
     chapterTitle: 'Arrival', chapterPages: [page(1, 'one two'), page(2, 'three four')],
     initialPageNumber: 1, onPassageChange() {},
     settings: { theme: 'parchment', font: 'Literata', wpm: 240 },
-    onExit() {}, onAddHighlight() {}, showToast() {}, ...overrides,
+    onExit() {}, onAddHighlight: async () => true, showToast() {}, ...overrides,
   };
 }
 function wordControl(root) { return elements(root).find(node => node.type === 'SeekBar').props; }
@@ -363,16 +368,16 @@ test('backgrounding cancels the tick immediately and returning never resumes pla
   assert.equal(h.listeners.size, 0);
 });
 
-test('single-line starts at the selected passage; seeking and saving pause at the correct source', () => {
+test('single-line starts at the selected passage; seeking and saving pause at the correct source', async () => {
   const h = harness({ runEffects: true });
   const { SingleLineReader } = h.load('../src/components/SingleLineReader.tsx');
   const quotes = [];
-  const props = lineReaderProps({ initialPageNumber: 2, onAddHighlight: quote => quotes.push(quote) });
+  const props = lineReaderProps({ initialPageNumber: 2, onAddHighlight: async quote => { quotes.push(quote); return true; } });
   let root = h.render(SingleLineReader, props);
   assert.equal(wordControl(root).index, 2);
   labelled(root, 'Play chapter').onPress();
   root = h.render(SingleLineReader, props);
-  labelled(root, 'Save current passage').onPress();
+  await labelled(root, 'Save current passage').onPress();
   root = h.render(SingleLineReader, props);
   assert.equal(h.timers.size, 0);
   assert.equal(quotes[0].text, 'three four');
@@ -426,16 +431,16 @@ test('speed changes replace the pending tick; Focus and Tape keep the current wo
   h.unmount();
 });
 
-test('empty and one-word chapters never schedule playback, and empty text cannot save a quote', () => {
+test('empty and one-word chapters never schedule playback, and empty text cannot save a quote', async () => {
   for (const text of ['', 'alone']) {
     const h = harness({ runEffects: true });
     const { SingleLineReader } = h.load('../src/components/SingleLineReader.tsx');
     const quotes = [];
-    const props = lineReaderProps({ chapterPages: [page(1, text)], onAddHighlight: q => quotes.push(q) });
+    const props = lineReaderProps({ chapterPages: [page(1, text)], onAddHighlight: async q => { quotes.push(q); return true; } });
     const root = h.render(SingleLineReader, props);
     assert.equal(labelled(root, 'Play chapter').disabled, true);
     labelled(root, 'Play chapter').onPress();
-    labelled(root, 'Save current passage').onPress();
+    await labelled(root, 'Save current passage').onPress();
     h.render(SingleLineReader, props);
     assert.equal(h.timers.size, 0);
     assert.equal(quotes.length, text ? 1 : 0);
@@ -865,4 +870,239 @@ test('pronunciation confirms native start/errors and stops on background or dict
   voices[1].options.onStart();
   assert.equal(toasts.length, count);
   assert.equal(h.listeners.size, 0);
+});
+
+let highlightScope = 0;
+const flushJobs = () => new Promise(resolve => setImmediate(resolve));
+function savedHighlight(id, extra = {}) {
+  return { id, bookId: 'book', bookTitle: 'A book', chapter: 'Arrival', page: 1, loc: 100, text: `Quote ${id}`, colorName: 'Amber Crayon', colorHex: '#F8E8A2', dateAdded: 'Added just now', ...extra };
+}
+function highlightHook() {
+  const data = new Map(), uploaded = [], deleted = [], reports = [];
+  const scope = `highlight-hook-${++highlightScope}.`;
+  let writeFails = false, gate, remote = async () => null;
+  const storage = {
+    storageKey: key => scope + key,
+    async loadJSONEntryStrict(key) {
+      const raw = data.get(scope + key);
+      return raw === undefined ? { present: false, value: null } : { present: true, value: JSON.parse(raw) };
+    },
+    async saveJSONStrict(key, value) {
+      if (gate) await gate;
+      if (writeFails) { writeFails = false; throw new Error('Storage full'); }
+      data.set(scope + key, JSON.stringify(value));
+    },
+  };
+  const cloud = {
+    fetchHighlightsFromSupabase: () => remote(),
+    async upsertHighlightToSupabase(entry) { uploaded.push(entry); return false; },
+    async deleteHighlightFromSupabase(id) { deleted.push(id); return false; },
+  };
+  const h = harness({ runEffects: true });
+  const { useHighlightArchive } = h.load('../src/lib/useHighlightArchive.ts');
+  const hook = () => useHighlightArchive(storage, cloud, message => reports.push(message));
+  return { h, hook, data, storage, cloud, uploaded, deleted, reports,
+    legacy: items => data.set(scope + 'highlights', JSON.stringify(items)),
+    failWrite: () => { writeFails = true; },
+    blockWrite: () => { let resolve; gate = new Promise(ok => { resolve = ok; }); return resolve; },
+    remote: fn => { remote = fn; },
+  };
+}
+
+test('highlight hook never publishes success or starts cloud upload before storage acknowledges a save', async () => {
+  const f = highlightHook(); f.legacy([savedHighlight('old')]);
+  f.h.render(f.hook); await flushJobs();
+  let result = f.h.render(f.hook);
+  const release = f.blockWrite();
+  const saving = result.add(savedHighlight('new'));
+  await flushJobs();
+  result = f.h.render(f.hook);
+  assert.deepEqual(result.items.map(item => item.id), ['old']);
+  assert.equal(result.busy, true);
+  assert.equal(f.uploaded.length, 0);
+  release();
+  assert.equal(await saving, true);
+  result = f.h.render(f.hook);
+  assert.deepEqual(result.items.map(item => item.id), ['new', 'old']);
+  assert.equal(result.busy, false);
+  assert.equal(f.uploaded[0].id, 'new');
+  f.h.unmount();
+});
+
+test('failed highlight writes retain saved state, report failure and do not upload; retry can succeed', async () => {
+  const f = highlightHook(); f.legacy([savedHighlight('old', { note: 'Original' })]);
+  f.h.render(f.hook); await flushJobs();
+  let result = f.h.render(f.hook);
+  f.failWrite();
+  assert.equal(await result.note('old', 'Draft'), false);
+  result = f.h.render(f.hook);
+  assert.equal(result.items[0].note, 'Original');
+  assert.equal(f.uploaded.length, 0);
+  assert.match(result.notice, /could not be saved/);
+  assert.equal(f.reports.length, 1);
+  assert.equal(await result.note('old', 'Draft'), true);
+  result = f.h.render(f.hook);
+  assert.equal(result.items[0].note, 'Draft');
+  assert.equal(result.notice, null);
+  f.h.unmount();
+});
+
+test('unreadable highlight archives block mutation and remote merge until an explicit successful retry', async () => {
+  const f = highlightHook();
+  f.data.set(f.storage.storageKey('highlights'), 'null');
+  let fetches = 0;
+  f.remote(async () => { fetches++; return [savedHighlight('remote')]; });
+  f.h.render(f.hook); await flushJobs();
+  let result = f.h.render(f.hook);
+  assert.equal(result.status, 'error');
+  assert.equal(fetches, 0);
+  assert.equal(await result.add(savedHighlight('new')), false);
+  assert.equal(f.data.get(f.storage.storageKey('highlights')), 'null');
+  assert.equal(f.data.has(f.storage.storageKey('highlightArchive')), false);
+  f.legacy([savedHighlight('recovered')]);
+  result.retry(); f.h.render(f.hook); await flushJobs();
+  result = f.h.render(f.hook);
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(result.items.map(item => item.id), ['recovered', 'remote']);
+  f.h.unmount();
+});
+
+test('a late startup cloud response preserves notes edited and added while it was pending', async () => {
+  const f = highlightHook(); f.legacy([savedHighlight('same', { note: 'Before' })]);
+  let resolve;
+  f.remote(() => new Promise(ok => { resolve = ok; }));
+  f.h.render(f.hook); await flushJobs();
+  let result = f.h.render(f.hook);
+  assert.equal(await result.note('same', 'Offline edit'), true);
+  assert.equal(await result.add(savedHighlight('local')), true);
+  resolve([savedHighlight('same', { note: 'Stale server edit' }), savedHighlight('remote')]);
+  await flushJobs();
+  result = f.h.render(f.hook);
+  assert.equal(result.items.find(item => item.id === 'same').note, 'Offline edit');
+  assert.equal(result.items.length, 3);
+  f.h.unmount();
+});
+
+test('unmounted note loaders ignore late cloud results without writing their archive', async () => {
+  const f = highlightHook(); f.legacy([savedHighlight('local')]);
+  let resolve;
+  f.remote(() => new Promise(ok => { resolve = ok; }));
+  f.h.render(f.hook); await flushJobs();
+  const writes = f.h.stateWrites();
+  f.h.unmount(); resolve([savedHighlight('remote')]); await flushJobs();
+  assert.equal(f.h.stateWrites(), writes);
+  assert.equal(f.data.has(f.storage.storageKey('highlightArchive')), false);
+});
+
+function notebookHarness(overrides = {}) {
+  const h = harness({ runEffects: true, moduleMocks: {
+    '../lib/supabase': { SUPABASE_SQL_SCHEMA: '' },
+    'expo-clipboard': {}, 'expo-file-system': {}, 'expo-sharing': {}, 'expo-speech': {},
+    './ui/Chip': { Chip: 'Chip' },
+  } });
+  const { NotebookView } = h.load('../src/components/NotebookView.tsx');
+  const messages = [];
+  const props = {
+    cloud: {}, books: [{ id: 'book', title: 'A book', currentPage: 1, currentChapter: 'Arrival', currentLoc: 100 }],
+    highlights: [], lexicon: [], highlightStatus: 'ready', highlightNotice: null, highlightBusy: false,
+    onRetryHighlights() {}, onJumpToReader() {}, onOpenFlashcard() {}, bottomInset: 0,
+    onAddHighlight: async () => true, onAddReflectionNote: async () => true, onDeleteHighlight: async () => true,
+    showToast: message => messages.push(message), ...overrides,
+  };
+  return { h, NotebookView, props, messages };
+}
+
+test('Notebook retains a new quote draft on failed save, blocks duplicates, and closes only after confirmed save', async () => {
+  let resolve, calls = 0;
+  const f = notebookHarness({ onAddHighlight: () => { calls++; return new Promise(ok => { resolve = ok; }); } });
+  let root = f.h.render(f.NotebookView, f.props);
+  labelled(root, 'New quote').onPress(); root = f.h.render(f.NotebookView, f.props);
+  labelled(root, 'Quote text').onChangeText('My exact draft'); root = f.h.render(f.NotebookView, f.props);
+  const saving = labelled(root, 'Save new highlight').onPress();
+  labelled(root, 'Save new highlight').onPress();
+  root = f.h.render(f.NotebookView, f.props);
+  assert.equal(calls, 1);
+  assert.equal(labelled(root, 'Save new highlight').disabled, true);
+  assert.equal(labelled(root, 'Quote text').value, 'My exact draft');
+  assert.equal(f.messages.length, 0);
+  resolve(false); await saving; root = f.h.render(f.NotebookView, f.props);
+  assert.equal(labelled(root, 'Quote text').value, 'My exact draft');
+  assert.equal(f.messages.length, 0);
+  const retry = labelled(root, 'Save new highlight').onPress(); resolve(true); await retry;
+  root = f.h.render(f.NotebookView, f.props);
+  assert.ok(!elements(root).some(node => node.props?.accessibilityLabel === 'Quote text'));
+  assert.deepEqual(f.messages, ['Highlight saved on this device']);
+  f.h.unmount();
+});
+
+test('Notebook read failures offer Retry and disable new quotes/export/upload without claiming an empty archive', () => {
+  let retried = false;
+  const f = notebookHarness({ highlightStatus: 'error', highlightNotice: 'Saved highlights could not be loaded.', onRetryHighlights: () => { retried = true; } });
+  const root = f.h.render(f.NotebookView, f.props);
+  for (const label of ['New quote', 'Export notes', 'Upload current records']) assert.equal(labelled(root, label).disabled, true);
+  assert.ok(!elements(root).some(node => node.props?.children === 'No highlights recorded yet.'));
+  labelled(root, 'Retry loading saved highlights').onPress();
+  assert.equal(retried, true);
+  f.h.unmount();
+});
+
+test('Notebook reflection drafts remain editable after a failed save', async () => {
+  const f = notebookHarness({ highlights: [savedHighlight('note')], onAddReflectionNote: async () => false });
+  let root = f.h.render(f.NotebookView, f.props);
+  labelled(root, 'Add reflection note').onPress(); root = f.h.render(f.NotebookView, f.props);
+  labelled(root, 'Reflection note').onChangeText('Keep this reflection'); root = f.h.render(f.NotebookView, f.props);
+  await labelled(root, 'Save reflection note').onPress(); root = f.h.render(f.NotebookView, f.props);
+  assert.equal(labelled(root, 'Reflection note').value, 'Keep this reflection');
+  assert.equal(labelled(root, 'Reflection note').editable, true);
+  assert.equal(f.messages.length, 0);
+  f.h.unmount();
+});
+
+test('single-line save waits for confirmation and never reports a failed save as successful', async () => {
+  const h = harness({ runEffects: true });
+  const { SingleLineReader } = h.load('../src/components/SingleLineReader.tsx');
+  let resolve, calls = 0;
+  const messages = [];
+  const props = lineReaderProps({ onAddHighlight: () => { calls++; return new Promise(ok => { resolve = ok; }); }, showToast: message => messages.push(message) });
+  let root = h.render(SingleLineReader, props);
+  const saving = labelled(root, 'Save current passage').onPress();
+  labelled(root, 'Save current passage').onPress();
+  root = h.render(SingleLineReader, props);
+  assert.equal(labelled(root, 'Save current passage').disabled, true);
+  assert.equal(calls, 1);
+  assert.deepEqual(messages, []);
+  resolve(false); await saving; root = h.render(SingleLineReader, props);
+  assert.deepEqual(messages, []);
+  assert.equal(wordControl(root).index, 0);
+  const retry = labelled(root, 'Save current passage').onPress(); resolve(true); await retry;
+  assert.deepEqual(messages, ['Passage saved on this device']);
+  h.unmount();
+});
+
+test('passage reflection saves block duplicates and retain the selected text and draft after failure', async () => {
+  const h = harness({ runEffects: true });
+  const { PassageSheet } = h.load('../src/components/PassageSheet.tsx');
+  let resolve, calls = 0, closed = false;
+  const props = {
+    text: 'A quiet garden.', initialSelection: 'quiet', onClose: () => { closed = true; },
+    onHighlight: async () => true, onSaveNote: (selected, _color, note) => {
+      calls++; assert.equal(selected, 'quiet'); assert.equal(note, 'Retain this draft');
+      return new Promise(ok => { resolve = ok; });
+    }, onDefine() {}, onCopy() {},
+  };
+  let root = h.render(PassageSheet, props);
+  elements(root).find(node => node.props?.label === 'Note').props.onPress();
+  root = h.render(PassageSheet, props);
+  labelled(root, 'Reflection note').onChangeText('Retain this draft'); root = h.render(PassageSheet, props);
+  const saving = labelled(root, 'Save reflection note').onPress();
+  labelled(root, 'Save reflection note').onPress();
+  root = h.render(PassageSheet, props);
+  assert.equal(calls, 1);
+  assert.equal(labelled(root, 'Save reflection note').disabled, true);
+  assert.equal(labelled(root, 'Reflection note').editable, false);
+  resolve(false); await saving; root = h.render(PassageSheet, props);
+  assert.equal(closed, false);
+  assert.equal(labelled(root, 'Reflection note').value, 'Retain this draft');
+  assert.equal(labelled(root, 'Reflection note').editable, true);
+  h.unmount();
 });

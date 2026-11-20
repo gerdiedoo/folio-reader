@@ -52,12 +52,12 @@ works in Expo Go; no custom native code.
 - Imported EPUBs and their parsed pages survive app restarts; importing adds them to the Library without automatically opening the Reader.
 - Selecting a library book opens its details page, with its reading position, EPUB metadata and local file location; **Start reading** opens the Reader.
 - Library and free-book browsing each support grid and list layouts.
-- Books can be removed from Library via **Customize cover → Remove Book**; confirming removes the saved EPUB, pages, highlights, and vocabulary cards locally and from Supabase.
+- Books can be removed via **Customize cover → Remove Book**. Removal spans local records, files and cloud requests and can partially fail; see the highlight storage guide for the note safeguards.
 - Odd paragraph counts no longer duplicate the last paragraph on a page.
 - Toasts show on every tab (they were only visible in the reader).
 - Dictionary uses dictionaryapi.dev for words outside the 4 built-in entries instead of showing a fake definition; saved cards are filed under the current book (was hard-coded to `remains-of-the-day`).
 - Notebook defaults to "All Books" (it defaulted to a mock book id, so real highlights were hidden).
-- "Sync to Supabase" now actually pushes books/highlights/vocabulary.
+- "Upload to Supabase" pushes current books/highlights/vocabulary; it does not resolve multi-device conflicts.
 - “Today’s reading” tracks foreground time while the reader is visible and resets at local midnight.
 - Signed-in profiles can back up book metadata to a private Supabase row and restore matching
   Project Gutenberg EPUBs on another device. EPUB files remain local; non-Gutenberg books are skipped.
@@ -249,3 +249,17 @@ selected book passage separately. Pronunciation confirms native start/error
 callbacks and stops when the word changes, the modal closes or the app becomes
 inactive. Saved cards retain the selected book context through the existing
 Lexicon persistence/sync path. See the [dictionary phone checks](docs/android-testing.md#dictionary-lookup-and-pronunciation-step-11).
+
+## Highlight and reflection storage
+
+Highlights and their reflection notes use a versioned archive in the current
+account/backend's local space. Save waits for storage acknowledgement; failures
+keep drafts open. Startup keeps local-only notes and device edits when adding new
+cloud records. Persistent local deletion markers prevent stale cloud notes from
+reappearing in this device's archive. Unreadable saved data blocks changes and
+offers Retry in Notebook instead of being replaced with an empty collection.
+
+The earlier per-account array is retained as the migration source. No new SQL is
+required, but export before upgrading/downgrading and keep app data installed.
+Cloud retry/conflict resolution and vocabulary persistence remain separate work.
+Read the [rollout, merge rules and limits](docs/highlight-storage.md) before testing.

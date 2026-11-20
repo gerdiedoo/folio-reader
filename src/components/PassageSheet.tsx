@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { F, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
@@ -15,11 +15,11 @@ interface PassageSheetProps {
   /** Present when the user tapped an already-saved highlight. */
   existing?: HighlightEntry | null;
   onClose: () => void;
-  onHighlight: (selected: string, color: (typeof HIGHLIGHT_COLORS)[number]) => void;
-  onSaveNote: (selected: string, color: (typeof HIGHLIGHT_COLORS)[number], note: string) => void;
+  onHighlight: (selected: string, color: (typeof HIGHLIGHT_COLORS)[number]) => Promise<boolean>;
+  onSaveNote: (selected: string, color: (typeof HIGHLIGHT_COLORS)[number], note: string) => Promise<boolean>;
   onDefine: (word: string, context: string) => void;
   onCopy: (selected: string) => void;
-  onDelete?: () => void;
+  onDelete?: () => Promise<boolean>;
 }
 
 interface Token {
@@ -105,11 +105,20 @@ export const PassageSheet: React.FC<PassageSheetProps> = ({
   );
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState(existing?.note ?? '');
+  const [saving, setSaving] = useState(false);
+  const pending = useRef(false);
+  const commit = async (operation: () => Promise<boolean>) => {
+    if (pending.current) return;
+    pending.current = true; setSaving(true);
+    try { await operation(); }
+    finally { pending.current = false; setSaving(false); }
+  };
 
   const selected = range ? text.slice(tokens[range.a].start, tokens[range.b].end) : '';
   const hasSelection = selected.length > 0;
 
   const onWordPress = useCallback((i: number) => {
+    if (pending.current) return;
     setRange((prev) => {
       if (!prev) return { a: i, b: i };
       if (prev.a === prev.b && prev.a !== i) return { a: Math.min(prev.a, i), b: Math.max(prev.a, i) };
@@ -124,8 +133,8 @@ export const PassageSheet: React.FC<PassageSheetProps> = ({
   };
 
   const handleSaveNote = () => {
-    if (!note.trim()) return;
-    onSaveNote(selected, activeColor, note.trim());
+    if (!note.trim() || !hasSelection) return;
+    return commit(() => onSaveNote(selected, activeColor, note.trim()));
   };
 
   const selectedStyle = useMemo(
@@ -161,11 +170,13 @@ export const PassageSheet: React.FC<PassageSheetProps> = ({
       </ScrollView>
 
       <View style={styles.actions}>
+        {saving ? <Text accessibilityLiveRegion="polite" style={styles.colorLabel}>Saving changes…</Text> : null}
         <View style={styles.colorRow}>
           {HIGHLIGHT_COLORS.map((c) => (
             <Pressable
               key={c.name}
               onPress={() => setActiveColor(c)}
+              disabled={saving}
               accessibilityRole="button"
               accessibilityState={{ selected: activeColor.name === c.name }}
               accessibilityLabel={`${c.label} highlight color`}
@@ -183,25 +194,25 @@ export const PassageSheet: React.FC<PassageSheetProps> = ({
           <ActionButton
             icon="format_ink_highlighter"
             label="Highlight"
-            disabled={!hasSelection}
-            onPress={() => onHighlight(selected, activeColor)}
+            disabled={!hasSelection || saving}
+            onPress={() => commit(() => onHighlight(selected, activeColor))}
           />
           <ActionButton
             icon="edit_note"
             label="Note"
-            disabled={!hasSelection}
+            disabled={!hasSelection || saving}
             active={noteOpen}
             onPress={() => setNoteOpen((o) => !o)}
           />
-          <ActionButton icon="menu_book" label="Define" disabled={!hasSelection} onPress={handleDefine} />
+          <ActionButton icon="menu_book" label="Define" disabled={!hasSelection || saving} onPress={handleDefine} />
           <ActionButton
             icon="content_copy"
             label="Copy"
-            disabled={!hasSelection && !existing}
+            disabled={saving || (!hasSelection && !existing)}
             onPress={() => onCopy(selected || existing?.text || '')}
           />
           {existing && onDelete ? (
-            <ActionButton icon="delete" label="Delete" danger onPress={onDelete} />
+            <ActionButton icon="delete" label="Delete" danger disabled={saving} onPress={() => commit(onDelete)} />
           ) : null}
         </View>
 
@@ -211,17 +222,19 @@ export const PassageSheet: React.FC<PassageSheetProps> = ({
               autoFocus
               multiline
               value={note}
+              accessibilityLabel="Reflection note"
+              editable={!saving}
               onChangeText={setNote}
               placeholder="Add reflection or marginalia note..."
               placeholderTextColor={colors.muted}
               style={styles.noteInput}
             />
             <View style={styles.noteButtons}>
-              <Pressable onPress={() => setNoteOpen(false)} style={{ padding: 8 }}>
+              <Pressable onPress={() => setNoteOpen(false)} disabled={saving} style={{ padding: 8 }}>
                 <Text style={styles.cancel}>Cancel</Text>
               </Pressable>
-              <Pressable onPress={handleSaveNote} style={styles.saveNote}>
-                <Text style={styles.saveNoteText}>Save Note</Text>
+              <Pressable onPress={handleSaveNote} disabled={saving || !note.trim() || !hasSelection} accessibilityRole="button" accessibilityLabel="Save reflection note" accessibilityState={{ disabled: saving || !note.trim() || !hasSelection, busy: saving }} style={styles.saveNote}>
+                <Text style={styles.saveNoteText}>{saving ? 'Saving…' : 'Save Note'}</Text>
               </Pressable>
             </View>
           </View>

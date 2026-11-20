@@ -31,7 +31,6 @@ import { Toast } from './src/components/ui/Toast';
 import {
   INITIAL_BOOKS,
   INITIAL_GOAL,
-  INITIAL_HIGHLIGHTS,
   INITIAL_LEXICON,
   INITIAL_SETTINGS,
 } from './src/data/initialData';
@@ -60,6 +59,7 @@ import { colors, NAV_SPACE } from './src/theme';
 import { AppThemeProvider, createPalette } from './src/AppTheme';
 import { MotionPreferencesProvider } from './src/MotionPreferences';
 import { useFeedbackMessage } from './src/lib/useFeedbackMessage';
+import { useHighlightArchive } from './src/lib/useHighlightArchive';
 import {
   Book,
   BookContentPage,
@@ -106,7 +106,10 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   const storage = useMemo(() => createLocalStore(scope), [scope]);
   const { loadJSON, loadJSONStrict, loadPages, removeBookFiles, saveJSON, saveJSONStrict, savePages } = storage;
   const cloud = useMemo(() => createAccountRepository(supabase, user?.id ?? null), [user?.id]);
-  const { deleteBookFromSupabase, deleteHighlightFromSupabase, fetchBooksFromSupabase, fetchHighlightsFromSupabase, fetchLexiconFromSupabase, fetchReadingGoalFromSupabase, fetchReadingSettingsFromSupabase, fetchLibraryBackup, saveLibraryBackup, upsertBookToSupabase, upsertHighlightToSupabase, upsertLexiconToSupabase, upsertReadingGoalToSupabase, upsertReadingSettingsToSupabase } = cloud;
+  const { deleteBookFromSupabase, fetchBooksFromSupabase, fetchLexiconFromSupabase, fetchReadingGoalFromSupabase, fetchReadingSettingsFromSupabase, fetchLibraryBackup, saveLibraryBackup, upsertBookToSupabase, upsertLexiconToSupabase, upsertReadingGoalToSupabase, upsertReadingSettingsToSupabase } = cloud;
+  const { message: toastMessage, showMessage: showToast } = useFeedbackMessage();
+  const highlightArchive = useHighlightArchive(storage, cloud, showToast);
+  const highlights = highlightArchive.items;
   const bookmarkStore = useMemo(() => createBookmarkStore(AsyncStorage, storage.storageKey('bookmarks')), [storage]);
   const parseEpubFile = (uri: string, name: string) => parseEpubForStore(uri, name, storage);
   const loadAdded = () => loadAddedForStore(storage);
@@ -145,7 +148,6 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   const [customPagesMap, setCustomPagesMap] = useState<Record<string, BookContentPage[]>>({});
   const [settings, setSettings] = useState<ReadingSettings>(INITIAL_SETTINGS);
   const [readingGoal, setReadingGoal] = useState<ReadingGoal>(INITIAL_GOAL);
-  const [highlights, setHighlights] = useState<HighlightEntry[]>(INITIAL_HIGHLIGHTS);
   const [lexicon, setLexicon] = useState<LexiconEntry[]>(INITIAL_LEXICON);
   const [recoveryBooks, setRecoveryBooks] = useState<LibraryRecoveryBook[]>([]);
   const [hydrated, setHydrated] = useState(false);
@@ -194,8 +196,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   });
   const [flashcardItem, setFlashcardItem] = useState<LexiconEntry | null>(null);
 
-  // Toast
-  const { message: toastMessage, showMessage: showToast } = useFeedbackMessage();
+  // Reading progress
   const readingPositionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const readingGoalRef = useRef(readingGoal);
   readingGoalRef.current = readingGoal;
@@ -220,7 +221,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
     let cancelled = false;
 
     (async () => {
-      const [lBooks, lSettings, lGoal, lHighlights, lLexicon, lReadingDay, lRecoveryBooks] = await Promise.all([
+      const [lBooks, lSettings, lGoal, lLexicon, lReadingDay, lRecoveryBooks] = await Promise.all([
         loadJSONStrict<Book[]>('books').then(saved => {
           if (saved !== null && !Array.isArray(saved)) throw new Error('Invalid library index');
           return saved;
@@ -232,7 +233,6 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
         }),
         loadJSON<ReadingSettings>('settings'),
         loadJSON<ReadingGoal>('goal'),
-        loadJSON<HighlightEntry[]>('highlights'),
         loadJSON<LexiconEntry[]>('lexicon'),
         loadJSON<string>('readingDay'),
         loadJSON<LibraryRecoveryBook[]>('libraryRecoveryBooks'),
@@ -242,7 +242,6 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
       const mergedSettings = normalizeReaderSettings({ ...INITIAL_SETTINGS, ...(lSettings ?? {}) });
       if (lBooks?.length) { booksRef.current = lBooks; setBooks(lBooks); }
       if (lGoal) setReadingGoal(lGoal);
-      if (lHighlights) setHighlights(lHighlights);
       if (lLexicon) setLexicon(lLexicon);
       if (lRecoveryBooks) setRecoveryBooks(lRecoveryBooks);
       setSettings(mergedSettings);
@@ -263,9 +262,8 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
       // Remote data (cloud wins for items it has, local-only items are kept)
       let mergedGoal = lGoal ?? INITIAL_GOAL;
       try {
-        const [sbBooks, sbHighlights, sbLexicon, sbGoal, sbSettings] = await Promise.all([
+        const [sbBooks, sbLexicon, sbGoal, sbSettings] = await Promise.all([
           fetchBooksFromSupabase(),
-          fetchHighlightsFromSupabase(),
           fetchLexiconFromSupabase(),
           fetchReadingGoalFromSupabase(),
           fetchReadingSettingsFromSupabase(),
@@ -284,7 +282,6 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
             return Array.from(map.values());
           });
         }
-        if (sbHighlights?.length) setHighlights(sbHighlights);
         if (sbLexicon?.length) setLexicon(sbLexicon);
         if (sbGoal) {
           mergedGoal = sbGoal;
@@ -323,9 +320,6 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   useEffect(() => {
     if (hydrated) saveJSON('goal', readingGoal);
   }, [readingGoal, hydrated]);
-  useEffect(() => {
-    if (hydrated) saveJSON('highlights', highlights);
-  }, [highlights, hydrated]);
   useEffect(() => {
     if (hydrated) saveJSON('lexicon', lexicon);
   }, [lexicon, hydrated]);
@@ -706,28 +700,19 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
     void writeBookmarks(() => bookmarkStore.remove(id), () => 'Bookmark removed');
   };
 
-  const handleAddHighlight = (newHl: Omit<HighlightEntry, 'id' | 'dateAdded'>) => {
+  const handleAddHighlight = (newHl: Omit<HighlightEntry, 'id' | 'dateAdded'>): Promise<boolean> => {
     const entry: HighlightEntry = {
       ...newHl,
       id: `hl-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       dateAdded: 'Added just now',
     };
-    setHighlights((prev) => [entry, ...prev]);
-    upsertHighlightToSupabase(entry);
+    return highlightArchive.add(entry);
   };
 
-  const handleDeleteHighlight = (id: string) => {
-    setHighlights((prev) => prev.filter((h) => h.id !== id));
-    deleteHighlightFromSupabase(id);
-  };
+  const handleDeleteHighlight = (id: string): Promise<boolean> => highlightArchive.remove(id);
 
-  const handleAddReflectionNote = (highlightId: string, noteText: string) => {
-    const target = highlights.find((h) => h.id === highlightId);
-    if (!target) return;
-    const updated = { ...target, note: noteText };
-    setHighlights((prev) => prev.map((h) => (h.id === highlightId ? updated : h)));
-    upsertHighlightToSupabase(updated);
-  };
+  const handleAddReflectionNote = (highlightId: string, noteText: string): Promise<boolean> =>
+    highlightArchive.note(highlightId, noteText);
 
   const handleSaveToLexicon = (newLex: Omit<LexiconEntry, 'id'>) => {
     const entry: LexiconEntry = { ...newLex, id: `lex-${Date.now()}` };
@@ -766,6 +751,10 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
     const book = books.find((item) => item.id === bookId);
     if (!book) return;
 
+    if (highlightArchive.status !== 'ready' || highlightArchive.busy) {
+      showToast('Wait for saved highlights to load before removing a book. Retry in Notebook if needed.');
+      return;
+    }
     try {
       setBookmarks(await bookmarkStore.removeBook(bookId));
     } catch {
@@ -773,9 +762,12 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
       return;
     }
 
+    if (!await highlightArchive.removeBook(bookId)) {
+      showToast('Book kept because its notes could not be removed. Its bookmarks were already removed; try again.');
+      return;
+    }
     const remainingBooks = books.filter((item) => item.id !== bookId);
     setBooks(remainingBooks);
-    setHighlights((prev) => prev.filter((item) => item.bookId !== bookId));
     setLexicon((prev) => prev.filter((item) => item.bookId !== bookId));
     setCustomPagesMap((prev) => {
       const remainingPages = { ...prev };
@@ -887,6 +879,10 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
         {activeTab === 'notebook' && (
           <NotebookView
             cloud={cloud}
+            highlightStatus={highlightArchive.status}
+            highlightNotice={highlightArchive.notice}
+            highlightBusy={highlightArchive.busy}
+            onRetryHighlights={highlightArchive.retry}
             books={books}
             highlights={highlights}
             lexicon={lexicon}

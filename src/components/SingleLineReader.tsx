@@ -16,7 +16,7 @@ interface SingleLineReaderProps {
   playbackBlocked?: boolean;
   settings: ReadingSettings;
   onExit: () => void;
-  onAddHighlight: (highlight: Omit<HighlightEntry, 'id' | 'dateAdded'>) => void;
+  onAddHighlight: (highlight: Omit<HighlightEntry, 'id' | 'dateAdded'>) => Promise<boolean>;
   showToast: (msg: string) => void;
 }
 
@@ -46,6 +46,8 @@ export const SingleLineReader: React.FC<SingleLineReaderProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [wpm, setWpm] = useState(() => lineSpeed(settings.wpm));
   const [fontSizeOffset, setFontSizeOffset] = useState<-1 | 0 | 1 | 2>(0);
+  const [saving, setSaving] = useState(false);
+  const savePending = useRef(false);
 
   const intervalMs = Math.round((60 / wpm) * 1000);
   const paper = readerPaper[settings.theme];
@@ -116,21 +118,24 @@ export const SingleLineReader: React.FC<SingleLineReaderProps> = ({
   const jump = (delta: number) =>
     seek(currentIndex + delta);
 
-  const saveCurrentPassage = () => {
+  const saveCurrentPassage = async () => {
     const quote = lineQuote(chapter, currentIndex);
-    if (!quote) return;
+    if (!quote || savePending.current) return;
     pausePlayback();
-    onAddHighlight({
-      bookId: book.id,
-      bookTitle: book.title,
-      chapter: quote.page.chapterTitle,
-      page: quote.page.pageNumber,
-      loc: quote.page.locNumber,
-      colorName: 'Amber Crayon',
-      colorHex: '#F8E8A2',
-      text: quote.text,
-    });
-    showToast('Saved passage from straight line to highlights');
+    savePending.current = true; setSaving(true);
+    try {
+      const saved = await onAddHighlight({
+        bookId: book.id,
+        bookTitle: book.title,
+        chapter: quote.page.chapterTitle,
+        page: quote.page.pageNumber,
+        loc: quote.page.locNumber,
+        colorName: 'Amber Crayon',
+        colorHex: '#F8E8A2',
+        text: quote.text,
+      });
+      if (saved) showToast('Passage saved on this device');
+    } finally { savePending.current = false; setSaving(false); }
   };
 
   const leftWindow = words.slice(Math.max(0, currentIndex - RIBBON_WINDOW), currentIndex);
@@ -318,9 +323,9 @@ export const SingleLineReader: React.FC<SingleLineReaderProps> = ({
             </Pressable>
           </View>
 
-          <Pressable onPress={saveCurrentPassage} accessibilityRole="button" accessibilityLabel="Save current passage" disabled={!words.length} accessibilityState={{ disabled: !words.length }} style={styles.saveBtn}>
+          <Pressable onPress={saveCurrentPassage} accessibilityRole="button" accessibilityLabel="Save current passage" disabled={!words.length || saving} accessibilityState={{ disabled: !words.length || saving, busy: saving }} style={styles.saveBtn}>
             <Icon name="format_ink_highlighter" size={16} color={colors.primary} />
-            <Text style={styles.saveText}>Save Passage</Text>
+            <Text style={styles.saveText}>{saving ? 'Saving…' : 'Save Passage'}</Text>
           </Pressable>
         </View>
       </View>

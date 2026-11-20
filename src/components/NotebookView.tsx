@@ -2,7 +2,7 @@ import * as Clipboard from 'expo-clipboard';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as Speech from 'expo-speech';
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SUPABASE_SQL_SCHEMA } from '../lib/supabase';
 import type { createAccountRepository } from '../lib/cloudAccount';
@@ -16,13 +16,17 @@ import { ModalShell } from './ui/ModalShell';
 
 interface NotebookViewProps {
   cloud: ReturnType<typeof createAccountRepository>;
+  highlightStatus: 'loading' | 'ready' | 'error';
+  highlightNotice: string | null;
+  highlightBusy: boolean;
+  onRetryHighlights: () => void;
   books: Book[];
   highlights: HighlightEntry[];
   lexicon: LexiconEntry[];
   onJumpToReader: (bookId: string, pageNumber: number) => void;
-  onAddReflectionNote: (highlightId: string, noteText: string) => void;
-  onDeleteHighlight: (id: string) => void;
-  onAddHighlight: (hl: Omit<HighlightEntry, 'id' | 'dateAdded'>) => void;
+  onAddReflectionNote: (highlightId: string, noteText: string) => Promise<boolean>;
+  onDeleteHighlight: (id: string) => Promise<boolean>;
+  onAddHighlight: (hl: Omit<HighlightEntry, 'id' | 'dateAdded'>) => Promise<boolean>;
   onOpenFlashcard: (item: LexiconEntry) => void;
   showToast: (msg: string) => void;
   bottomInset: number;
@@ -32,6 +36,10 @@ type NotebookFilter = 'all' | 'highlights' | 'notes' | 'lexicon';
 
 export const NotebookView: React.FC<NotebookViewProps> = ({
   cloud,
+  highlightStatus,
+  highlightNotice,
+  highlightBusy,
+  onRetryHighlights,
   books,
   highlights,
   lexicon,
@@ -54,6 +62,15 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   const [newNoteContent, setNewNoteContent] = useState('');
   const [lastSyncTime, setLastSyncTime] = useState('Never');
   const [isSyncing, setIsSyncing] = useState(false);
+  const [savingHighlight, setSavingHighlight] = useState(false);
+  const pendingHighlight = useRef(false);
+  const writeHighlight = async (operation: () => Promise<boolean>): Promise<boolean> => {
+    if (pendingHighlight.current) return false;
+    pendingHighlight.current = true; setSavingHighlight(true);
+    try { return await operation(); }
+    finally { pendingHighlight.current = false; setSavingHighlight(false); }
+  };
+  const notesUnavailable = highlightStatus !== 'ready' || highlightBusy || savingHighlight;
 
   const [isNewHighlightOpen, setIsNewHighlightOpen] = useState(false);
   const [newQuoteText, setNewQuoteText] = useState('');
@@ -89,6 +106,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   });
 
   const handleExportAll = async () => {
+    if (notesUnavailable) { showToast('Wait for saved highlights to load before exporting.'); return; }
     let md = `# Folio Marginalia Archive: ${selectedBook ? selectedBook.title : 'All Books'}\n\n`;
     md += `*Exported on ${new Date().toLocaleDateString()} via Folio Reader*\n\n---\n\n`;
 
@@ -133,6 +151,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   };
 
   const handleSyncCloud = async () => {
+    if (notesUnavailable || isSyncing) return;
     setIsSyncing(true);
     const conn = await testSupabaseConnection();
     setDbStatus(conn.message);
@@ -147,9 +166,9 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
     const failed = results.filter((ok) => !ok).length;
     if (failed === 0) {
       setLastSyncTime('Just now');
-      showToast('Synced with Supabase database!');
+      showToast('Uploaded this device’s current records to Supabase.');
     } else {
-      showToast(`${failed} item(s) failed to sync — check Supabase Config`);
+      showToast(`${failed} item(s) failed to upload — check Supabase Config`);
     }
   };
 
@@ -165,9 +184,9 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
     showToast(`Pronouncing: ${word}`);
   };
 
-  const handleCreateHighlight = () => {
+  const handleCreateHighlight = async () => {
     if (!newQuoteText.trim() || !targetBook) return;
-    onAddHighlight({
+    const saved = await writeHighlight(() => onAddHighlight({
       bookId: targetBook.id,
       bookTitle: targetBook.title,
       chapter: targetBook.currentChapter,
@@ -177,11 +196,12 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
       colorHex: newQuoteColor.hex,
       text: newQuoteText.trim(),
       note: newQuoteNote.trim() || undefined,
-    });
+    }));
+    if (!saved) return;
     setNewQuoteText('');
     setNewQuoteNote('');
     setIsNewHighlightOpen(false);
-    showToast('New highlight saved to archive');
+    showToast('Highlight saved on this device');
   };
 
   const filters: { id: NotebookFilter; label: string; icon?: React.ComponentProps<typeof Icon>['name'] }[] = [
@@ -202,12 +222,24 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
         <Text style={styles.title}>Marginalia</Text>
         <Pressable
           onPress={() => (targetBook ? setIsNewHighlightOpen(true) : showToast('Import a book first'))}
+          disabled={notesUnavailable}
+          accessibilityRole="button"
+          accessibilityLabel="New quote"
+          accessibilityState={{ disabled: notesUnavailable }}
           style={styles.newBtn}
         >
           <Icon name="add" size={18} color="#fff" />
           <Text style={styles.newBtnText}>New Quote</Text>
         </Pressable>
       </View>
+
+      {highlightStatus === 'loading' ? <Text accessibilityLiveRegion="polite" style={styles.hubBody}>Loading saved highlights…</Text> : null}
+      {highlightNotice ? <View style={styles.hub}>
+        <Text accessibilityLiveRegion="polite" style={styles.hubBody}>{highlightNotice}</Text>
+        <Pressable onPress={onRetryHighlights} disabled={highlightBusy || highlightStatus === 'loading'} accessibilityRole="button" accessibilityLabel="Retry loading saved highlights" accessibilityState={{ disabled: highlightBusy || highlightStatus === 'loading', busy: highlightStatus === 'loading' }} style={{ minHeight: 48, justifyContent: 'center' }}>
+          <Text style={styles.configText}>Try again</Text>
+        </Pressable>
+      </View> : null}
 
       {/* Search */}
       <View style={styles.searchBox}>
@@ -268,7 +300,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
       </ScrollView>
 
       {/* Highlights */}
-      {filteredHighlights.length === 0 && activeFilter !== 'lexicon' && (
+      {highlightStatus === 'ready' && filteredHighlights.length === 0 && activeFilter !== 'lexicon' && (
         <View style={styles.emptyCard}>
           <Text style={styles.emptyMain}>No highlights recorded yet.</Text>
           <Text style={styles.emptySub}>Long-press a paragraph while reading, or tap “New Quote” above.</Text>
@@ -315,26 +347,33 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
                 autoFocus
                 multiline
                 value={newNoteContent}
+                accessibilityLabel="Reflection note"
+                editable={!savingHighlight}
                 onChangeText={setNewNoteContent}
                 placeholder="Write reader reflection note..."
                 placeholderTextColor={colors.muted}
                 style={styles.noteInput}
               />
               <View style={styles.noteActions}>
-                <Pressable onPress={() => setAddingNoteId(null)} style={{ padding: 6 }}>
+                <Pressable onPress={() => setAddingNoteId(null)} disabled={savingHighlight} style={{ padding: 6 }}>
                   <Text style={styles.cancel}>Cancel</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => {
+                  onPress={async () => {
                     if (newNoteContent.trim()) {
-                      onAddReflectionNote(hl.id, newNoteContent.trim());
-                      showToast('Reflection note saved');
+                      const saved = await writeHighlight(() => onAddReflectionNote(hl.id, newNoteContent.trim()));
+                      if (!saved) return;
+                      showToast('Reflection note saved on this device');
                     }
                     setAddingNoteId(null);
                   }}
+                  disabled={notesUnavailable || !newNoteContent.trim()}
+                  accessibilityRole="button"
+                  accessibilityLabel="Save reflection note"
+                  accessibilityState={{ disabled: notesUnavailable || !newNoteContent.trim(), busy: savingHighlight }}
                   style={styles.saveNote}
                 >
-                  <Text style={styles.saveNoteText}>Save Note</Text>
+                  <Text style={styles.saveNoteText}>{savingHighlight ? 'Saving…' : 'Save Note'}</Text>
                 </Pressable>
               </View>
             </View>
@@ -345,6 +384,10 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
                 setNewNoteContent('');
               }}
               style={styles.addNote}
+              accessibilityRole="button"
+              accessibilityLabel="Add reflection note"
+              disabled={notesUnavailable}
+              accessibilityState={{ disabled: notesUnavailable }}
             >
               <Icon name="post_add" size={15} color={colors.muted} />
               <Text style={styles.addNoteText}>Add reader reflection note</Text>
@@ -357,7 +400,9 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
               <Pressable onPress={() => handleCopyQuote(hl.text)} hitSlop={6} accessibilityLabel="Copy quote">
                 <Icon name="content_copy" size={18} color={colors.muted} />
               </Pressable>
-              <Pressable onPress={() => onDeleteHighlight(hl.id)} hitSlop={6} accessibilityLabel="Delete highlight">
+              <Pressable onPress={async () => {
+                if (await writeHighlight(() => onDeleteHighlight(hl.id))) showToast('Highlight removed on this device');
+              }} disabled={notesUnavailable} accessibilityRole="button" accessibilityState={{ disabled: notesUnavailable }} hitSlop={6} accessibilityLabel="Delete highlight">
                 <Icon name="delete_outline" size={19} color={colors.muted} />
               </Pressable>
               <Pressable onPress={() => onJumpToReader(hl.bookId, hl.page)} style={styles.jump}>
@@ -422,30 +467,34 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
         <View style={styles.hubHead}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <Icon name="hub" size={22} color={colors.primary} />
-            <Text style={styles.hubTitle}>Folio Synchronization Hub</Text>
+            <Text style={styles.hubTitle}>Export &amp; cloud upload</Text>
           </View>
         </View>
         <Text style={styles.hubBody}>
           Export clean markdown files with bibliographic footnotes, or push your highlights and vocabulary
-          directly to your Supabase cloud database. Last sync: {lastSyncTime}.
+          directly to your Supabase cloud database. Last upload: {lastSyncTime}.
+          {'\n'}This device keeps its saved notes when loading cloud records. Review changes made on other devices before uploading.
         </Text>
         <Pressable onPress={() => setIsSchemaOpen(true)} style={styles.configBtn}>
           <Text style={styles.configText}>Supabase Config</Text>
         </Pressable>
 
         <View style={{ flexDirection: 'row', gap: 10 }}>
-          <Pressable onPress={handleExportAll} style={[styles.hubBtn, { backgroundColor: colors.primaryContainer }]}>
+          <Pressable onPress={handleExportAll} accessibilityRole="button" accessibilityLabel="Export notes" disabled={notesUnavailable} accessibilityState={{ disabled: notesUnavailable }} style={[styles.hubBtn, { backgroundColor: colors.primaryContainer }]}>
             <Icon name="output" size={18} color="#fff" />
             <Text style={[styles.hubBtnText, { color: '#fff' }]}>Export All ({bookHighlights.length})</Text>
           </Pressable>
           <Pressable
             onPress={handleSyncCloud}
-            disabled={isSyncing}
+            disabled={isSyncing || notesUnavailable}
+            accessibilityRole="button"
+            accessibilityLabel="Upload current records"
+            accessibilityState={{ disabled: isSyncing || notesUnavailable, busy: isSyncing }}
             style={[styles.hubBtn, { backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border }]}
           >
             <Icon name="sync" size={18} color={colors.primary} spin={isSyncing} />
             <Text style={[styles.hubBtnText, { color: colors.onSurface }]}>
-              {isSyncing ? 'Syncing...' : 'Sync to Supabase'}
+              {isSyncing ? 'Uploading…' : 'Upload to Supabase'}
             </Text>
           </Pressable>
         </View>
@@ -465,6 +514,8 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
             <TextInput
               multiline
               value={newQuoteText}
+              accessibilityLabel="Quote text"
+              editable={!savingHighlight}
               onChangeText={setNewQuoteText}
               placeholder="Paste or write the quote..."
               placeholderTextColor={colors.muted}
@@ -473,6 +524,8 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
             <TextInput
               multiline
               value={newQuoteNote}
+              accessibilityLabel="Quote reflection"
+              editable={!savingHighlight}
               onChangeText={setNewQuoteNote}
               placeholder="Personal note or thought..."
               placeholderTextColor={colors.muted}
@@ -483,6 +536,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
                 <Pressable
                   key={c.name}
                   onPress={() => setNewQuoteColor(c)}
+                  disabled={savingHighlight}
                   accessibilityLabel={c.label}
                   style={[
                     styles.colorDot,
@@ -493,15 +547,18 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
               ))}
             </View>
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 8 }}>
-              <Pressable onPress={() => setIsNewHighlightOpen(false)} style={{ padding: 10 }}>
+              <Pressable onPress={() => setIsNewHighlightOpen(false)} disabled={savingHighlight} style={{ padding: 10 }}>
                 <Text style={styles.cancel}>Cancel</Text>
               </Pressable>
               <Pressable
                 onPress={handleCreateHighlight}
-                disabled={!newQuoteText.trim()}
+                disabled={!newQuoteText.trim() || notesUnavailable}
+                accessibilityRole="button"
+                accessibilityLabel="Save new highlight"
+                accessibilityState={{ disabled: !newQuoteText.trim() || notesUnavailable, busy: savingHighlight }}
                 style={[styles.saveNote, { paddingVertical: 10 }, !newQuoteText.trim() && { opacity: 0.5 }]}
               >
-                <Text style={styles.saveNoteText}>Save Highlight</Text>
+                <Text style={styles.saveNoteText}>{savingHighlight ? 'Saving…' : 'Save Highlight'}</Text>
               </Pressable>
             </View>
           </ScrollView>

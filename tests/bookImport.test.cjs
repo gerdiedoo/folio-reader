@@ -74,6 +74,17 @@ test('filesystem adapter page writes and original EPUB copies return only after 
   assert.deepEqual(JSON.parse(d.files.get('file:///docs/folio/pages/new.json')), pages);
 });
 
+test('strict JSON entries distinguish a missing key from a stored null without hiding parsing failures', async () => {
+  const d = device(), scoped = d.store.createLocalStore('account-A');
+  assert.equal((await scoped.loadJSONEntryStrict('highlightArchive')).present, false);
+  d.storage.set(scoped.storageKey('highlightArchive'), 'null');
+  const entry = await scoped.loadJSONEntryStrict('highlightArchive');
+  assert.equal(entry.present, true);
+  assert.equal(entry.value, null);
+  d.storage.set(scoped.storageKey('highlightArchive'), '{');
+  await assert.rejects(scoped.loadJSONEntryStrict('highlightArchive'));
+});
+
 for (const failure of ['mkdir', 'write']) {
   test(`page ${failure} failure is surfaced instead of swallowed`, () => {
     const d = device(); d.setFailure(failure);

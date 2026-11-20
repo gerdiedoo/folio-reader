@@ -52,9 +52,9 @@ interface ReaderViewProps {
   onOpenSettingsSheet: () => void;
   onOpenDictionary: (word: string, context?: string) => void;
   highlights: HighlightEntry[];
-  onAddHighlight: (hl: Omit<HighlightEntry, 'id' | 'dateAdded'>) => void;
-  onDeleteHighlight: (id: string) => void;
-  onAddReflectionNote: (highlightId: string, note: string) => void;
+  onAddHighlight: (hl: Omit<HighlightEntry, 'id' | 'dateAdded'>) => Promise<boolean>;
+  onDeleteHighlight: (id: string) => Promise<boolean>;
+  onAddReflectionNote: (highlightId: string, note: string) => Promise<boolean>;
   bookmarks: Bookmark[];
   bookmarkStatus: 'loading' | 'ready' | 'error';
   bookmarkSaving: boolean;
@@ -745,19 +745,20 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     loc: p.locNumber,
   });
 
-  const handleHighlight = (selected: string, color: (typeof HIGHLIGHT_COLORS)[number]) => {
-    if (!sheet || !currentBook) return;
-    onAddHighlight({ ...baseHl(sheet.page), colorName: color.name, colorHex: color.hex, text: selected });
-    showToast('Highlight saved to Notebook');
-    closeSheet();
+  const handleHighlight = async (selected: string, color: (typeof HIGHLIGHT_COLORS)[number]) => {
+    if (!sheet || !currentBook) return false;
+    const saved = await onAddHighlight({ ...baseHl(sheet.page), colorName: color.name, colorHex: color.hex, text: selected });
+    if (saved) { showToast('Highlight saved on this device'); closeSheet(); }
+    return saved;
   };
 
-  const handleSaveNote = (selected: string, color: (typeof HIGHLIGHT_COLORS)[number], note: string) => {
-    if (!sheet || !currentBook) return;
+  const handleSaveNote = async (selected: string, color: (typeof HIGHLIGHT_COLORS)[number], note: string) => {
+    if (!sheet || !currentBook) return false;
+    let saved: boolean;
     if (sheet.existing && sheet.existing.text === selected) {
-      onAddReflectionNote(sheet.existing.id, note);
+      saved = await onAddReflectionNote(sheet.existing.id, note);
     } else {
-      onAddHighlight({
+      saved = await onAddHighlight({
         ...baseHl(sheet.page),
         colorName: color.name,
         colorHex: color.hex,
@@ -765,8 +766,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         note,
       });
     }
-    showToast('Reflection note saved');
-    closeSheet();
+    if (saved) { showToast('Reflection note saved on this device'); closeSheet(); }
+    return saved;
   };
 
   const handleDefine = (word: string, context: string) => {
@@ -781,12 +782,13 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     closeSheet();
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (sheet?.existing) {
-      onDeleteHighlight(sheet.existing.id);
-      showToast('Highlight removed');
+      const saved = await onDeleteHighlight(sheet.existing.id);
+      if (saved) { showToast('Highlight removed on this device'); closeSheet(); }
+      return saved;
     }
-    closeSheet();
+    return false;
   };
 
   // Pages mode: tap the left / right edge to turn the page, the middle to toggle the HUD.
