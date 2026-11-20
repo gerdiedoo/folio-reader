@@ -34,6 +34,8 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, onTabChange, vi
   return (
     <Animated.View
       pointerEvents={visible ? 'box-none' : 'none'}
+      accessibilityElementsHidden={!visible}
+      importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
       style={[styles.wrap, { bottom: 20 + insets.bottom, opacity, transform: [{ translateY }] }]}
     >
       <View style={[styles.nav, { backgroundColor: palette.surface, borderColor: palette.border }]}>
@@ -43,6 +45,8 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, onTabChange, vi
             <Pressable
               key={tab.id}
               onPress={() => onTabChange(tab.id)}
+              accessibilityRole="tab"
+              accessibilityLabel={tab.label}
               accessibilityState={{ selected: isActive }}
               style={styles.tab}
             >

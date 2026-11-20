@@ -168,3 +168,18 @@ RLS using two authenticated identities plus anon, then removes the container.
 It needs a running Docker daemon and the official `postgres:17-alpine` image.
 These checks also run in the Folio Dev build workflow. They do not contact the
 live Supabase project or validate Google sign-in on a phone.
+
+## Reading navigation accessibility
+
+The book-position control exposes screen-reader increase/decrease actions to
+move one reading page at a time and reports its chapter/page. Contents, reading
+modes, typography and chapter/page buttons expose names and relevant states;
+hidden bottom tabs are removed from accessibility focus. Navigation controls use
+larger targets, and spacing/margin groups wrap on narrow screens. The Settings
+text-size track is also adjustable without tapping individual dots.
+
+`npm test` covers the native event handlers and accessibility properties using a
+lightweight component harness. Actual TalkBack speech, focus and device layouts
+still require the [Android phone checklist](docs/android-testing.md#reading-navigation-accessibility-step-7).
+This is a focused navigation update; single-line playback, passage selection and
+the rest of the interface have not received a complete accessibility audit.

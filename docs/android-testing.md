@@ -211,3 +211,42 @@ installing this APK**. Older device data is retained but will not appear in the
 new account/Guest spaces automatically. Apply the entire SQL migration only to
 Folio Dev's test project; do not change the main Folio production project in this
 step. Guest works offline without the migration; signed-in sync needs it.
+
+## Reading navigation accessibility (step 7)
+
+This is a targeted improvement to navigation in **Scroll** and **Pages** modes,
+not a claim that the entire reader is accessible. Use a disposable EPUB with
+several chapters. The account-isolation migration instructions above still apply
+if you have not installed that update yet; this step adds no database changes.
+
+1. Enable Android **TalkBack** in the phone's accessibility settings. In Reading,
+   move focus through the mode buttons, Quick typography, More, Contents and
+   chapter controls. Each should have a clear name and role. Selected modes and
+   themes should report selection; drawers should report expanded/collapsed.
+2. Focus **Book position**. It should report the chapter and current page out of
+   the total. Use TalkBack's increase/decrease actions (gestures depend on your
+   settings). Each action should move exactly one reading page without dragging.
+   Check both Scroll and Pages; Pages uses the current reflowed pages, while
+   Scroll uses imported passages. At either end, adjustment must stay in bounds.
+3. Open Contents. Confirm the current chapter is selected, choose another chapter
+   and confirm its text appears. Find **Close contents** by swiping. Android Back
+   should dismiss the sheet before leaving Reading. Other dialogs should not
+   expose their blank scrim as an unnamed focus stop. Check focus return on close.
+4. In Settings → Font & Layout, focus **Text size** and adjust it. Check the spoken
+   step/value, preview, and saved size after Keep Changes. Decrease at size 1 and
+   Increase at size 8 should be disabled. Spacing and margin options should have
+   distinct names and selected states. Repeat in the reader's quick typography.
+5. Enter immersive mode. The offscreen bottom tabs should no longer receive
+   TalkBack focus. **Exit immersive mode** must remain discoverable; after exiting,
+   the tabs should return with the current tab selected.
+6. Turn TalkBack off. Drag the book scrubber: preview changes during the drag,
+   with one jump on release. Test ordinary chapter and page buttons. On a narrow
+   screen, spacing/margins should wrap into separate groups with usable targets.
+   Repeat at a large system text size and in landscape to check clipping.
+
+Automated component-handler tests cover adjustable actions, bounds, drag release
+and cancellation, selected chapter/settings states, hidden navigation, and modal
+escape. They do not run Android's accessibility service or prove native speech,
+focus order/return, layout, or switch-access behavior. Those checks remain on the
+phone. Paragraph selection, single-line playback, reduced motion and the remaining
+screens need separate accessibility work.

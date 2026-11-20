@@ -75,6 +75,25 @@ export const ScrubBar: React.FC<ScrubBarProps> = ({ count, index, labelFor, onCo
   return (
     <View
       style={styles.hit}
+      accessible
+      accessibilityRole="adjustable"
+      accessibilityLabel="Book position"
+      accessibilityHint="Adjust to move one reading page at a time."
+      accessibilityState={{ disabled: count <= 1 }}
+      accessibilityValue={{
+        min: count > 0 ? 1 : 0,
+        max: Math.max(0, count),
+        now: count > 0 ? Math.max(0, Math.min(count - 1, shown)) + 1 : 0,
+        text: count > 0 ? labelFor(Math.max(0, Math.min(count - 1, shown))).replace(/\n/g, ', ') : 'No pages',
+      }}
+      accessibilityActions={count > 1 ? [{ name: 'increment' }, { name: 'decrement' }] : []}
+      onAccessibilityAction={({ nativeEvent }) => {
+        if (count <= 1) return;
+        const delta = nativeEvent.actionName === 'increment' ? 1 : nativeEvent.actionName === 'decrement' ? -1 : 0;
+        if (!delta) return;
+        const next = Math.max(0, Math.min(count - 1, index + delta));
+        if (next !== index) onCommit(next);
+      }}
       onLayout={(e) => {
         widthRef.current = e.nativeEvent.layout.width || 1;
         setWidth(widthRef.current);
@@ -132,9 +151,9 @@ export const ChapterSheet: React.FC<ChapterSheetProps> = ({ chapters, currentInd
     <ModalShell onClose={onClose} align="bottom" maxWidth={560} cardStyle={{ maxHeight: '80%' }}>
       <View style={styles.handle} />
       <View style={styles.sheetHead}>
-        <Text style={styles.sheetTitle}>Contents</Text>
+        <Text accessibilityRole="header" style={styles.sheetTitle}>Contents</Text>
         <Text style={styles.sheetCount}>{chapters.length} chapters</Text>
-        <Pressable onPress={onClose} hitSlop={8} style={styles.closeBtn}>
+        <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close contents" style={styles.closeBtn}>
           <Icon name="close" size={20} color={palette.muted} />
         </Pressable>
       </View>
@@ -145,6 +164,9 @@ export const ChapterSheet: React.FC<ChapterSheetProps> = ({ chapters, currentInd
             <Pressable
               key={`${c.number}-${i}`}
               onPress={() => onSelect(c.startIndex)}
+              accessibilityRole="button"
+              accessibilityLabel={`Chapter ${i + 1}: ${c.title}, starts at page ${c.startIndex + 1}`}
+              accessibilityState={{ selected: active }}
               onLayout={(e) => {
                 if (active) scrollRef.current?.scrollTo({ y: Math.max(0, e.nativeEvent.layout.y - 80), animated: false });
               }}
@@ -170,10 +192,10 @@ export const ChapterSheet: React.FC<ChapterSheetProps> = ({ chapters, currentInd
 
 const createStyles = (p: AppPalette) =>
   StyleSheet.create({
-    hit: { height: 36, justifyContent: 'center' },
+    hit: { height: 48, justifyContent: 'center' },
     track: { height: 6, borderRadius: 3, backgroundColor: p.surfaceHighest, overflow: 'hidden' },
     fill: { height: '100%', backgroundColor: p.primary },
-    tick: { position: 'absolute', top: 12, width: 2, height: 12, borderRadius: 1, backgroundColor: p.outline, opacity: 0.45 },
+    tick: { position: 'absolute', top: 18, width: 2, height: 12, borderRadius: 1, backgroundColor: p.outline, opacity: 0.45 },
     thumb: {
       position: 'absolute',
       width: 16,
@@ -182,12 +204,12 @@ const createStyles = (p: AppPalette) =>
       backgroundColor: p.primary,
       borderWidth: 2,
       borderColor: '#fff',
-      top: 10,
+      top: 16,
     },
-    thumbActive: { width: 22, height: 22, borderRadius: 11, top: 7, elevation: 4 },
+    thumbActive: { width: 22, height: 22, borderRadius: 11, top: 13, elevation: 4 },
     bubble: {
       position: 'absolute',
-      bottom: 40,
+      bottom: 52,
       paddingHorizontal: 12,
       paddingVertical: 8,
       borderRadius: 12,
@@ -206,7 +228,7 @@ const createStyles = (p: AppPalette) =>
     sheetHead: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 20, paddingVertical: 10 },
     sheetTitle: { ...type.headlineSm, color: p.onSurface },
     sheetCount: { ...type.bodySm, color: p.muted, flex: 1 },
-    closeBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+    closeBtn: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
     row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingVertical: 12 },
     rowNo: { fontFamily: F.serifSemi, fontSize: 18, width: 28, textAlign: 'center', color: p.muted },
     rowTitle: { fontFamily: F.serifMedium, fontSize: 16, lineHeight: 21, color: p.onSurface },

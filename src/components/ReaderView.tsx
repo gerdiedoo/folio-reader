@@ -297,7 +297,7 @@ const PageBlock = React.memo<PageBlockProps>(
         {showChapterHeader && (
           <View style={styles.chapterHead}>
             <Text style={[styles.chapterNo, { color: accent }]}>{page.chapterNumber}</Text>
-            <Text style={[styles.chapterTitle, { color: fg }]}>{page.chapterTitle}</Text>
+            <Text accessibilityRole="header" style={[styles.chapterTitle, { color: fg }]}>{page.chapterTitle}</Text>
             <View style={[styles.rule, { backgroundColor: accent }]} />
           </View>
         )}
@@ -898,6 +898,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                   setMenuOpen(false);
                 }}
                 label="Quick typography"
+                expanded={typesetOpen}
               />
               <HudButton
                 icon={isBookmarked ? 'bookmark' : 'bookmark_border'}
@@ -922,6 +923,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                   setTypesetOpen(false);
                 }}
                 label="More"
+                expanded={menuOpen}
               />
             </View>
           </View>
@@ -933,6 +935,9 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                 <Pressable
                   key={o.id}
                   onPress={() => onUpdateSettings({ readingFlowMode: o.id })}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${o.label} reading mode`}
+                  accessibilityState={{ selected: active }}
                   style={[styles.flowBtn, active && { backgroundColor: colors.primary }]}
                 >
                   <Icon name={o.icon} size={15} color={active ? '#fff' : colors.muted} />
@@ -947,7 +952,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               <View style={styles.drawerRow}>
                 <Pressable
                   onPress={() => onUpdateSettings({ fontSizeStep: Math.max(1, settings.fontSizeStep - 1) })}
-                  style={styles.sizeBtn}
+                  accessibilityRole="button"
+                  accessibilityLabel="Decrease text size"
+                  accessibilityValue={{ min: 1, max: 8, now: settings.fontSizeStep }}
+                  disabled={settings.fontSizeStep <= 1}
+                  accessibilityState={{ disabled: settings.fontSizeStep <= 1 }}
+                  style={[styles.sizeBtn, settings.fontSizeStep <= 1 && { opacity: 0.35 }]}
                 >
                   <Text style={styles.sizeSmall}>A</Text>
                 </Pressable>
@@ -956,7 +966,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                 </View>
                 <Pressable
                   onPress={() => onUpdateSettings({ fontSizeStep: Math.min(8, settings.fontSizeStep + 1) })}
-                  style={styles.sizeBtn}
+                  accessibilityRole="button"
+                  accessibilityLabel="Increase text size"
+                  accessibilityValue={{ min: 1, max: 8, now: settings.fontSizeStep }}
+                  disabled={settings.fontSizeStep >= 8}
+                  accessibilityState={{ disabled: settings.fontSizeStep >= 8 }}
+                  style={[styles.sizeBtn, settings.fontSizeStep >= 8 && { opacity: 0.35 }]}
                 >
                   <Text style={styles.sizeLarge}>A</Text>
                 </Pressable>
@@ -966,7 +981,9 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                   <Pressable
                     key={t.id}
                     onPress={() => onUpdateSettings({ theme: t.id })}
-                    accessibilityLabel={t.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${t.id} page theme`}
+                    accessibilityState={{ selected: settings.theme === t.id }}
                     style={[
                       styles.swatch,
                       { backgroundColor: t.bg },
@@ -982,6 +999,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             <View style={styles.menu}>
               <Pressable
                 style={styles.menuItem}
+                accessibilityRole="button"
+                accessibilityLabel="Typography and layout"
                 onPress={() => {
                   setMenuOpen(false);
                   onOpenSettingsSheet();
@@ -992,6 +1011,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               </Pressable>
               <Pressable
                 style={styles.menuItem}
+                accessibilityRole="button"
+                accessibilityLabel="Contents"
                 onPress={() => {
                   setMenuOpen(false);
                   setChaptersOpen(true);
@@ -1013,6 +1034,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               </Pressable>
               <Pressable
                 style={styles.menuItem}
+                accessibilityRole="button"
+                accessibilityLabel="Look up a word"
                 onPress={() => {
                   setMenuOpen(false);
                   onOpenDictionary('', '');
@@ -1106,6 +1129,9 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               <View style={styles.pager}>
                 <Pressable
                   onPress={() => turnPaginatedPage(paginatedIndex - 1)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Previous page"
+                  accessibilityState={{ disabled: paginatedIndex === 0 }}
                   disabled={paginatedIndex === 0}
                   style={[styles.pagerBtn, paginatedIndex === 0 && { opacity: 0.35 }]}
                 >
@@ -1117,6 +1143,9 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                 </Text>
                 <Pressable
                   onPress={() => turnPaginatedPage(paginatedIndex + 1)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Next page"
+                  accessibilityState={{ disabled: paginatedIndex >= paginatedPages.length - 1 }}
                   disabled={paginatedIndex >= paginatedPages.length - 1}
                   style={[
                     styles.pagerBtn,
@@ -1140,6 +1169,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
           <View style={styles.navRow}>
             <Pressable
               onPress={() => setChaptersOpen(true)}
+              accessibilityRole="button"
               accessibilityLabel="Contents"
               hitSlop={6}
               style={styles.navBtn}
@@ -1148,9 +1178,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             </Pressable>
             <Pressable
               onPress={goPrevChapter}
-              accessibilityLabel="Previous chapter"
+              accessibilityRole="button"
+              accessibilityLabel={pageIndex > (chapters[currentChapterIdx]?.startIndex ?? 0) ? 'Restart chapter' : 'Previous chapter'}
+              disabled={currentChapterIdx === 0 && pageIndex === 0}
+              accessibilityState={{ disabled: currentChapterIdx === 0 && pageIndex === 0 }}
               hitSlop={6}
-              style={styles.navBtn}
+              style={[styles.navBtn, currentChapterIdx === 0 && pageIndex === 0 && { opacity: 0.35 }]}
             >
               <Icon name="skip_previous" size={22} color={colors.onSurface} />
             </Pressable>
@@ -1166,6 +1199,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             <Pressable
               onPress={goNextChapter}
               accessibilityLabel="Next chapter"
+              accessibilityRole="button"
+              accessibilityState={{ disabled: currentChapterIdx >= chapters.length - 1 }}
               disabled={currentChapterIdx >= chapters.length - 1}
               hitSlop={6}
               style={[styles.navBtn, currentChapterIdx >= chapters.length - 1 && { opacity: 0.35 }]}
@@ -1247,15 +1282,16 @@ const HudButton: React.FC<{
   label: string;
   active?: boolean;
   selected?: boolean;
+  expanded?: boolean;
   disabled?: boolean;
-}> = ({ icon, onPress, label, active, selected, disabled }) => {
+}> = ({ icon, onPress, label, active, selected, expanded, disabled }) => {
   const palette = useAppTheme();
   return (
     <Pressable
       onPress={onPress}
       accessibilityLabel={label}
       accessibilityRole="button"
-      accessibilityState={{ selected, disabled }}
+      accessibilityState={{ selected, expanded, disabled }}
       disabled={disabled}
       hitSlop={4}
       style={[styles.hudBtn, active && { backgroundColor: palette.primaryFixed }, disabled && { opacity: 0.4 }]}
@@ -1286,6 +1322,7 @@ const styles = StyleSheet.create({
   },
   flowRow: { flexDirection: 'row', backgroundColor: colors.surfaceContainer, padding: 3, borderRadius: 12, gap: 3 },
   flowBtn: {
+    minHeight: 48,
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1304,11 +1341,11 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   drawerRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  sizeBtn: { width: 36, height: 32, alignItems: 'center', justifyContent: 'center' },
+  sizeBtn: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
   sizeSmall: { fontFamily: F.serifSemi, fontSize: 15, color: colors.onSurface },
   sizeLarge: { fontFamily: F.serifSemi, fontSize: 24, color: colors.onSurface },
   swatchRow: { flexDirection: 'row', justifyContent: 'space-around' },
-  swatch: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: colors.border },
+  swatch: { width: 48, height: 48, borderRadius: 24, borderWidth: 1, borderColor: colors.border },
   menu: {
     position: 'absolute',
     right: 0,
@@ -1326,7 +1363,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     zIndex: 30,
   },
-  menuItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
+  menuItem: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
   menuText: { ...type.bodyMd, color: colors.onSurface },
 
   article: {
@@ -1349,7 +1386,7 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.borderMid,
   },
-  pagerBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingVertical: 6, paddingHorizontal: 8 },
+  pagerBtn: { minWidth: 48, minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 2, paddingVertical: 6, paddingHorizontal: 8 },
   pagerText: { ...type.labelLg, color: colors.onSurface },
   pagerCount: { ...type.labelMd, color: colors.muted },
   pagerMinimal: { justifyContent: 'center', paddingVertical: 5 },
@@ -1357,7 +1394,7 @@ const styles = StyleSheet.create({
 
   footer: { paddingTop: 6, gap: 2, zIndex: 10 },
   navRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  navBtn: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  navBtn: { width: 48, height: 48, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   minimalProgress: { opacity: 0.55 },
   footerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   paceRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },

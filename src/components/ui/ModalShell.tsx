@@ -62,8 +62,15 @@ export const ModalShell: React.FC<ModalShellProps> = ({
             },
           ]}
         >
-          <Pressable style={[styles.scrim, { backgroundColor: palette.scrim }]} onPress={onClose} />
+          <Pressable
+            style={[styles.scrim, { backgroundColor: palette.scrim }]}
+            onPress={onClose}
+            accessible={false}
+            importantForAccessibility="no"
+          />
           <View
+            accessibilityViewIsModal
+            onAccessibilityEscape={onClose}
             style={[
               styles.card,
               isBottom ? styles.sheet : styles.dialog,

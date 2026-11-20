@@ -85,7 +85,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
             <Text style={styles.headerTitle}>Typography &amp; Layout</Text>
           </View>
           {isSheetOnly && (
-            <Pressable onPress={onClose} accessibilityLabel="Close Settings" style={styles.closeBtn}>
+            <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close Settings" style={styles.closeBtn}>
               <Icon name="close" size={20} color={colors.muted} />
             </Pressable>
           )}
@@ -99,6 +99,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                 key={t.id}
                 onPress={() => setActiveTab(t.id)}
                 accessibilityRole="tab"
+                accessibilityLabel={t.label}
                 accessibilityState={{ selected: active }}
                 style={[styles.segBtn, active && styles.segBtnActive]}
               >
@@ -186,20 +187,34 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
               <View style={styles.stepper}>
                 <Pressable
                   onPress={() => update({ fontSizeStep: Math.max(1, step - 1) })}
-                  style={styles.stepBtn}
+                  style={[styles.stepBtn, step <= 1 && { opacity: 0.35 }]}
                   accessibilityLabel="Decrease text size"
+                  accessibilityRole="button"
+                  disabled={step <= 1}
+                  accessibilityState={{ disabled: step <= 1 }}
                 >
                   <Text style={{ fontFamily: F.serifSemi, fontSize: 15, color: colors.onSurface }}>Aa-</Text>
                 </Pressable>
 
-                <View style={styles.track}>
+                <View
+                  style={styles.track}
+                  accessible
+                  accessibilityRole="adjustable"
+                  accessibilityLabel="Text size"
+                  accessibilityValue={{ min: 1, max: TOTAL_STEPS, now: step, text: `${metrics.fontSize} points, size ${step} of ${TOTAL_STEPS}` }}
+                  accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+                  onAccessibilityAction={({ nativeEvent }) => {
+                    const delta = nativeEvent.actionName === 'increment' ? 1 : nativeEvent.actionName === 'decrement' ? -1 : 0;
+                    if (delta) update({ fontSizeStep: Math.max(1, Math.min(TOTAL_STEPS, step + delta)) });
+                  }}
+                >
                   {Array.from({ length: TOTAL_STEPS }).map((_, idx) => {
                     const n = idx + 1;
                     const isCurrent = n === step;
                     const isPast = n < step;
                     return (
                       <React.Fragment key={n}>
-                        <Pressable onPress={() => update({ fontSizeStep: n })} hitSlop={8}>
+                        <Pressable accessible={false} importantForAccessibility="no" onPress={() => update({ fontSizeStep: n })} hitSlop={8}>
                           <View
                             style={
                               isCurrent
@@ -223,8 +238,11 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
 
                 <Pressable
                   onPress={() => update({ fontSizeStep: Math.min(TOTAL_STEPS, step + 1) })}
-                  style={styles.stepBtn}
+                  style={[styles.stepBtn, step >= TOTAL_STEPS && { opacity: 0.35 }]}
                   accessibilityLabel="Increase text size"
+                  accessibilityRole="button"
+                  disabled={step >= TOTAL_STEPS}
+                  accessibilityState={{ disabled: step >= TOTAL_STEPS }}
                 >
                   <Text style={{ fontFamily: F.serifSemi, fontSize: 20, color: colors.onSurface }}>Aa+</Text>
                 </Pressable>
@@ -232,8 +250,8 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
             </View>
 
             {/* Line spacing & margins */}
-            <View style={{ flexDirection: 'row', gap: 12 }}>
-              <View style={{ flex: 1, gap: 6 }}>
+            <View style={styles.layoutOptions}>
+              <View style={styles.layoutGroup}>
                 <Text style={styles.fieldLabel}>LINE SPACING</Text>
                 <View style={styles.iconSegment}>
                   {SPACING_OPTIONS.map((o) => {
@@ -242,7 +260,9 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                       <Pressable
                         key={o.id}
                         onPress={() => update({ lineSpacing: o.id })}
-                        accessibilityLabel={o.id}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${o.id} line spacing`}
+                        accessibilityState={{ selected }}
                         style={[styles.iconSegBtn, selected && { backgroundColor: colors.surfaceContainer }]}
                       >
                         <Icon name={o.icon} size={18} color={selected ? colors.primary : colors.muted} />
@@ -252,7 +272,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                 </View>
               </View>
 
-              <View style={{ flex: 1, gap: 6 }}>
+              <View style={styles.layoutGroup}>
                 <Text style={styles.fieldLabel}>MARGINS</Text>
                 <View style={styles.iconSegment}>
                   {MARGIN_OPTIONS.map((o) => {
@@ -261,7 +281,9 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                       <Pressable
                         key={o.id}
                         onPress={() => update({ margins: o.id })}
-                        accessibilityLabel={o.id}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${o.id} margins`}
+                        accessibilityState={{ selected }}
                         style={[styles.iconSegBtn, selected && { backgroundColor: colors.surfaceContainer }]}
                       >
                         <Icon name={o.icon} size={18} color={selected ? colors.primary : colors.muted} />
@@ -284,6 +306,9 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                   <Pressable
                     key={t.id}
                     onPress={() => update({ theme: t.id })}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${t.label} page theme`}
+                    accessibilityState={{ selected }}
                     style={[
                       styles.themeBtn,
                       selected
@@ -389,10 +414,10 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
         )}
 
         <View style={{ flexDirection: 'row', gap: 8, paddingTop: 4 }}>
-          <Pressable onPress={reset} style={[styles.actionBtn, { backgroundColor: colors.surfaceContainer }]}>
+          <Pressable onPress={reset} accessibilityRole="button" style={[styles.actionBtn, { backgroundColor: colors.surfaceContainer }]}>
             <Text style={[styles.actionText, { color: colors.muted }]}>Reset Defaults</Text>
           </Pressable>
-          <Pressable onPress={apply} style={[styles.actionBtn, { backgroundColor: colors.primaryContainer }]}>
+          <Pressable onPress={apply} accessibilityRole="button" style={[styles.actionBtn, { backgroundColor: colors.primaryContainer }]}>
             <Text style={[styles.actionText, { color: '#fff' }]}>Keep Changes</Text>
           </Pressable>
         </View>
@@ -422,6 +447,9 @@ const ChoiceButton: React.FC<{
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: active }}
       style={[
         styles.choice,
         active
@@ -528,7 +556,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  track: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 4 },
+  track: { flex: 1, minHeight: 48, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 4 },
   dot: { width: 8, height: 8, borderRadius: 4 },
   dotCurrent: {
     width: 14,
@@ -548,7 +576,9 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.borderSoft,
   },
-  iconSegBtn: { flex: 1, paddingVertical: 7, borderRadius: 8, alignItems: 'center' },
+  layoutOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  layoutGroup: { flexGrow: 1, flexBasis: 168, minWidth: 168, gap: 6 },
+  iconSegBtn: { flex: 1, minWidth: 48, minHeight: 48, justifyContent: 'center', paddingVertical: 7, borderRadius: 8, alignItems: 'center' },
   themeBtn: {
     flex: 1,
     alignItems: 'center',
