@@ -884,6 +884,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
             showToast={showToast}
             jumpTarget={jumpTarget}
             bottomSpace={readingBottomSpace}
+            playbackBlocked={isSettingsSheetOpen || isSearchOpen || isProfileOpen || dictionaryState.isOpen || Boolean(flashcardItem)}
           />
         )}
 

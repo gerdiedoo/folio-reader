@@ -1,6 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AppState,
   FlatList,
   GestureResponderEvent,
   PanResponder,
@@ -66,6 +67,7 @@ interface ReaderViewProps {
   jumpTarget?: JumpTarget | null;
   /** Space to leave at the bottom (floating tab bar). */
   bottomSpace: number;
+  playbackBlocked: boolean;
 }
 
 const MARGINS = { narrow: 14, regular: 20, wide: 30 } as const;
@@ -358,6 +360,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   showToast,
   jumpTarget,
   bottomSpace,
+  playbackBlocked,
 }) => {
   const pages = useMemo<BookContentPage[]>(
     () => customPages ?? (currentBook ? BOOK_PAGES[currentBook.id] : undefined) ?? [],
@@ -405,6 +408,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     setListBase(next);
   }, []);
   const [paginatedIndex, setPaginatedIndex] = useState(0);
+  const [lineSeekVersion, setLineSeekVersion] = useState(0);
   const [pageArea, setPageArea] = useState({ width: 0, height: 0 });
   const [menuOpen, setMenuOpen] = useState(false);
   const [typesetOpen, setTypesetOpen] = useState(false);
@@ -445,6 +449,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     if (pending) onUpdatePositionRef.current(pending.bookId, pending.page, pending.total);
   }, []);
   useEffect(() => flushPosition, [flushPosition]);
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => {
+      if (state !== 'active') flushPosition();
+    });
+    return () => subscription.remove();
+  }, [flushPosition]);
   const updatePageIndex = useCallback(
     (index: number) => {
       const nextIndex = Math.max(0, Math.min(pages.length - 1, index));
@@ -594,6 +604,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         setPaginatedIndex(Math.max(0, seg));
       } else if (flowMode === 'continuous') {
         jumpList(idx);
+      } else {
+        setLineSeekVersion(version => version + 1);
       }
     },
     [flowMode, jumpList, paginatedPages, pages.length, updatePageIndex]
@@ -684,6 +696,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       setPaginatedIndex(Math.max(0, segmentIndex));
     }
     if (flowMode === 'continuous') jumpList(idx);
+    if (flowMode === 'single-line') setLineSeekVersion(version => version + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jumpTarget?.nonce]);
 
@@ -808,20 +821,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     () => ({ paddingHorizontal: hPad, paddingTop: 24, paddingBottom: 32 }),
     [hPad]
   );
-  const chapterText = useMemo(
-    () =>
-      page
-        ? pages
-            .filter((p) => p.chapterNumber === page.chapterNumber)
-            .map(
-              (p) =>
-                p.dropCap +
-                p.paragraph1 +
-                ' ' +
-                (p.paragraph2Lead + p.highlightedText + p.paragraph2Rest)
-            )
-            .join(' ')
-        : '',
+  const chapterPages = useMemo(
+    () => page ? pages.filter(p => p.chapterNumber === page.chapterNumber) : [],
     [page?.chapterNumber, pages]
   );
 
@@ -1060,9 +1061,16 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       <View style={[styles.article, { backgroundColor: paper.bg }]}>
         {flowMode === 'single-line' ? (
           <SingleLineReader
+            key={`${currentBook.id}:${chapterPages[0]?.pageNumber}:${lineSeekVersion}`}
             book={currentBook}
             chapterTitle={page.chapterTitle}
-            chapterText={chapterText}
+            chapterPages={chapterPages}
+            initialPageNumber={page.pageNumber}
+            onPassageChange={source => {
+              const index = pages.indexOf(source);
+              if (index >= 0 && index !== pageIndex) updatePageIndex(index);
+            }}
+            playbackBlocked={playbackBlocked || chaptersOpen || bookmarksOpen || Boolean(sheet) || typesetOpen || menuOpen}
             settings={settings}
             onExit={() => onUpdateSettings({ readingFlowMode: 'paginated' })}
             onAddHighlight={onAddHighlight}

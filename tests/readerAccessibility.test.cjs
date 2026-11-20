@@ -8,13 +8,28 @@ const ts = require('typescript');
 
 // Exercise the actual components' native event handlers and exposed properties.
 // This lightweight hook harness does not simulate native focus or TalkBack speech.
-function harness() {
+function harness({ runEffects = false } = {}) {
   const slots = [];
+  const effects = new Map();
+  const timers = new Map();
+  const listeners = new Set();
+  let nextTimer = 1;
+  let pending = [];
   let cursor = 0;
   const react = {
     ...React,
     useMemo: fn => fn(),
-    useEffect: () => {},
+    useEffect(fn, deps) {
+      const at = cursor++;
+      if (!runEffects) return;
+      const old = effects.get(at);
+      if (!old || !deps || deps.some((dep, i) => !Object.is(dep, old.deps[i]))) {
+        pending.push(() => {
+          old?.cleanup?.();
+          effects.set(at, { deps, cleanup: fn() });
+        });
+      }
+    },
     useRef(initial) {
       const at = cursor++;
       if (!(at in slots)) slots[at] = { current: initial };
@@ -32,11 +47,13 @@ function harness() {
     colors: palette, F: {}, type: {}, readerFontFamily: () => 'test-font',
     previewPaper: Object.fromEntries(['parchment', 'white', 'sepia', 'charcoal'].map(name => [name, { bg: '#fff', fg: '#111' }])),
   };
+  theme.readerPaper = theme.previewPaper;
   const native = {
     View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView: 'ScrollView', Switch: 'Switch',
     Modal: 'Modal', KeyboardAvoidingView: 'KeyboardAvoidingView', Platform: { OS: 'android' },
     StyleSheet: { create: styles => styles, hairlineWidth: 1 },
     Animated: { View: 'Animated.View', Value: class { interpolate() { return 0; } } },
+    AppState: { currentState: 'active', addEventListener(_event, callback) { listeners.add(callback); return { remove: () => listeners.delete(callback) }; } },
   };
   const dependencies = {
     react,
@@ -46,6 +63,11 @@ function harness() {
     '../../AppTheme': { useAppTheme: () => palette },
     '../theme': theme, '../../theme': theme,
     './ui/Icon': { Icon: 'Icon' }, './ui/ModalShell': { ModalShell: 'ModalShell' },
+    './ui/SeekBar': { SeekBar: 'SeekBar' },
+    __timers: {
+      setTimeout(fn, ms) { const id = nextTimer++; timers.set(id, { fn, ms }); return id; },
+      clearTimeout(id) { timers.delete(id); },
+    },
   };
   function load(relativePath) {
     const filename = path.resolve(__dirname, relativePath);
@@ -58,12 +80,36 @@ function harness() {
       if (name.startsWith('.')) return load(path.relative(__dirname, path.resolve(path.dirname(filename), name)) + '.ts');
       return originalRequire(name);
     };
-    loaded._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
+    const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
       compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React, esModuleInterop: true },
-    }).outputText, filename);
+    }).outputText;
+    loaded._compile((runEffects ? "const { setTimeout, clearTimeout } = require('__timers');\n" : '') + code, filename);
     return loaded.exports;
   }
-  return { load, render(component, props) { cursor = 0; return component(props); } };
+  return {
+    load, timers, listeners,
+    render(component, props) {
+      cursor = 0;
+      pending = [];
+      const root = component(props);
+      for (const effect of pending) effect();
+      return root;
+    },
+    tick() {
+      const [id, timer] = timers.entries().next().value ?? [];
+      assert.ok(timer, 'No playback timer scheduled');
+      timers.delete(id);
+      timer.fn();
+    },
+    appState(state) {
+      native.AppState.currentState = state;
+      for (const listener of listeners) listener(state);
+    },
+    unmount() {
+      for (const effect of effects.values()) effect.cleanup?.();
+      effects.clear();
+    },
+  };
 }
 
 function elements(root) {
@@ -210,4 +256,169 @@ test('modal scrim stays out of focus and its card handles accessibility escape',
   const card = elements(root).find(node => node.props?.accessibilityViewIsModal);
   card.props.onAccessibilityEscape();
   assert.equal(closed, true);
+});
+
+function page(pageNumber, text) {
+  return { chapterNumber: 'I', chapterTitle: 'Arrival', dropCap: '', paragraph1: text, paragraph2Lead: '', highlightedText: '', paragraph2Rest: '', pageNumber, locNumber: pageNumber * 100 };
+}
+function lineReaderProps(overrides = {}) {
+  return {
+    book: { id: 'book', title: 'A book', currentPage: 1, currentLoc: 100 },
+    chapterTitle: 'Arrival', chapterPages: [page(1, 'one two'), page(2, 'three four')],
+    initialPageNumber: 1, onPassageChange() {},
+    settings: { theme: 'parchment', font: 'Literata', wpm: 240 },
+    onExit() {}, onAddHighlight() {}, showToast() {}, ...overrides,
+  };
+}
+function wordControl(root) { return elements(root).find(node => node.type === 'SeekBar').props; }
+
+test('single-line playback waits for Play, reports source passages and stops at chapter end', () => {
+  const h = harness({ runEffects: true });
+  const { SingleLineReader } = h.load('../src/components/SingleLineReader.tsx');
+  const passages = [];
+  const props = lineReaderProps({ onPassageChange: p => passages.push(p.pageNumber) });
+  let root = h.render(SingleLineReader, props);
+  assert.equal(h.timers.size, 0);
+  assert.equal(wordControl(root).index, 0);
+  labelled(root, 'Play chapter').onPress();
+  root = h.render(SingleLineReader, props);
+  assert.equal(h.timers.size, 1);
+  assert.equal([...h.timers.values()][0].ms, 250);
+  for (let i = 0; i < 3; i++) { h.tick(); root = h.render(SingleLineReader, props); }
+  root = h.render(SingleLineReader, props);
+  assert.equal(wordControl(root).index, 3);
+  assert.equal(h.timers.size, 0);
+  assert.deepEqual(passages, [1, 2]);
+  labelled(root, 'Replay chapter').onPress();
+  root = h.render(SingleLineReader, props);
+  assert.equal(wordControl(root).index, 0);
+  assert.equal(h.timers.size, 1);
+  h.unmount();
+});
+
+test('backgrounding cancels the tick immediately and returning never resumes playback', () => {
+  const h = harness({ runEffects: true });
+  const { SingleLineReader } = h.load('../src/components/SingleLineReader.tsx');
+  const props = lineReaderProps();
+  let root = h.render(SingleLineReader, props);
+  labelled(root, 'Play chapter').onPress();
+  root = h.render(SingleLineReader, props);
+  assert.equal(h.timers.size, 1);
+  h.appState('inactive');
+  assert.equal(h.timers.size, 0);
+  root = h.render(SingleLineReader, props);
+  assert.equal(wordControl(root).index, 0);
+  h.appState('background');
+  h.appState('active');
+  root = h.render(SingleLineReader, props);
+  assert.equal(h.timers.size, 0);
+  labelled(root, 'Play chapter').onPress();
+  root = h.render(SingleLineReader, props);
+  assert.equal(h.timers.size, 1);
+  h.unmount();
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.listeners.size, 0);
+});
+
+test('single-line starts at the selected passage; seeking and saving pause at the correct source', () => {
+  const h = harness({ runEffects: true });
+  const { SingleLineReader } = h.load('../src/components/SingleLineReader.tsx');
+  const quotes = [];
+  const props = lineReaderProps({ initialPageNumber: 2, onAddHighlight: quote => quotes.push(quote) });
+  let root = h.render(SingleLineReader, props);
+  assert.equal(wordControl(root).index, 2);
+  labelled(root, 'Play chapter').onPress();
+  root = h.render(SingleLineReader, props);
+  labelled(root, 'Save current passage').onPress();
+  root = h.render(SingleLineReader, props);
+  assert.equal(h.timers.size, 0);
+  assert.equal(quotes[0].text, 'three four');
+  assert.equal(quotes[0].page, 2);
+  assert.equal(quotes[0].loc, 200);
+  labelled(root, 'Play chapter').onPress();
+  root = h.render(SingleLineReader, props);
+  wordControl(root).onChange(1);
+  root = h.render(SingleLineReader, props);
+  assert.equal(wordControl(root).index, 1);
+  assert.equal(h.timers.size, 0);
+  h.unmount();
+});
+
+test('opening an overlay stops playback and closing it waits for another explicit Play', () => {
+  const h = harness({ runEffects: true });
+  const { SingleLineReader } = h.load('../src/components/SingleLineReader.tsx');
+  const props = lineReaderProps();
+  let root = h.render(SingleLineReader, props);
+  labelled(root, 'Play chapter').onPress();
+  root = h.render(SingleLineReader, props);
+  assert.equal(h.timers.size, 1);
+  root = h.render(SingleLineReader, { ...props, playbackBlocked: true });
+  root = h.render(SingleLineReader, { ...props, playbackBlocked: true });
+  assert.equal(h.timers.size, 0);
+  assert.equal(labelled(root, 'Play chapter').disabled, true);
+  labelled(root, 'Play chapter').onPress();
+  root = h.render(SingleLineReader, props);
+  assert.equal(h.timers.size, 0);
+  assert.equal(wordControl(root).index, 0);
+  h.unmount();
+});
+
+test('speed changes replace the pending tick; Focus and Tape keep the current word', () => {
+  const h = harness({ runEffects: true });
+  const { SingleLineReader } = h.load('../src/components/SingleLineReader.tsx');
+  const props = lineReaderProps();
+  let root = h.render(SingleLineReader, props);
+  wordControl(root).onChange(1);
+  root = h.render(SingleLineReader, props);
+  labelled(root, 'Tape display').onPress();
+  root = h.render(SingleLineReader, props);
+  assert.deepEqual(labelled(root, 'Tape display').accessibilityState, { selected: true });
+  assert.equal(wordControl(root).index, 1);
+  labelled(root, 'Play chapter').onPress();
+  root = h.render(SingleLineReader, props);
+  labelled(root, '300 words per minute').onPress();
+  root = h.render(SingleLineReader, props);
+  assert.equal(h.timers.size, 1);
+  assert.equal([...h.timers.values()][0].ms, 200);
+  h.unmount();
+});
+
+test('empty and one-word chapters never schedule playback, and empty text cannot save a quote', () => {
+  for (const text of ['', 'alone']) {
+    const h = harness({ runEffects: true });
+    const { SingleLineReader } = h.load('../src/components/SingleLineReader.tsx');
+    const quotes = [];
+    const props = lineReaderProps({ chapterPages: [page(1, text)], onAddHighlight: q => quotes.push(q) });
+    const root = h.render(SingleLineReader, props);
+    assert.equal(labelled(root, 'Play chapter').disabled, true);
+    labelled(root, 'Play chapter').onPress();
+    labelled(root, 'Save current passage').onPress();
+    h.render(SingleLineReader, props);
+    assert.equal(h.timers.size, 0);
+    assert.equal(quotes.length, text ? 1 : 0);
+    assert.equal(labelled(root, 'Save current passage').disabled, !text);
+    h.unmount();
+  }
+});
+
+test('word-position actions move one word, clamp at bounds, and retain touch seeking', () => {
+  for (const [count, index] of [[5, 2], [5, 0], [5, 4], [1, 0], [0, 0]]) {
+    const h = harness();
+    const { SeekBar } = h.load('../src/components/ui/SeekBar.tsx');
+    const changes = [];
+    const root = h.render(SeekBar, { count, index, word: 'garden', onChange: i => changes.push(i) });
+    const slider = labelled(root, 'Word position');
+    assert.equal(slider.accessibilityRole, 'adjustable');
+    slider.onAccessibilityAction(action('increment'));
+    slider.onAccessibilityAction(action('decrement'));
+    slider.onAccessibilityAction(action('activate'));
+    const expected = count <= 1 ? [] : [index + 1, index - 1].filter(i => i >= 0 && i < count);
+    assert.deepEqual(changes, expected);
+    assert.equal(slider.accessibilityState.disabled, count <= 1);
+    if (count > 1) {
+      slider.onLayout({ nativeEvent: { layout: { width: 200 } } });
+      slider.onResponderGrant({ nativeEvent: { locationX: 200 } });
+      assert.equal(changes.at(-1), count - 1);
+    }
+  }
 });

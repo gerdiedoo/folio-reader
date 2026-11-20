@@ -181,5 +181,20 @@ text-size track is also adjustable without tapping individual dots.
 `npm test` covers the native event handlers and accessibility properties using a
 lightweight component harness. Actual TalkBack speech, focus and device layouts
 still require the [Android phone checklist](docs/android-testing.md#reading-navigation-accessibility-step-7).
-This is a focused navigation update; single-line playback, passage selection and
-the rest of the interface have not received a complete accessibility audit.
+This is a focused navigation update; passage selection and the rest of the
+interface have not received a complete accessibility audit. Single-line changes
+are described below and still require native accessibility testing.
+
+## Single-line playback
+
+Line mode starts paused at the selected imported passage. It pauses when the app
+becomes inactive, an overlay opens, the user seeks, or a passage is saved. Closing
+an overlay/returning to the app does not resume it; the last chapter word stops
+playback and offers Replay. The word-position bar supports screen-reader
+increase/decrease actions, and the controls use the selected app palette.
+
+Words retain their source paragraph and page. Saved quotes keep the exact source
+text and anchor; reading progress follows the active imported passage through the
+existing position-save path. Exact word progress and the temporary speed/display
+selection are not persisted. See the [single-line phone checks](docs/android-testing.md#single-line-playback-and-source-locations-step-8)
+for remaining native validation.

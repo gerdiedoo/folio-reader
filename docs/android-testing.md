@@ -248,5 +248,51 @@ Automated component-handler tests cover adjustable actions, bounds, drag release
 and cancellation, selected chapter/settings states, hidden navigation, and modal
 escape. They do not run Android's accessibility service or prove native speech,
 focus order/return, layout, or switch-access behavior. Those checks remain on the
-phone. Paragraph selection, single-line playback, reduced motion and the remaining
-screens need separate accessibility work.
+phone. Paragraph selection, reduced motion and the remaining screens need separate
+accessibility work. The next section covers the single-line update.
+
+## Single-line playback and source locations (step 8)
+
+No new SQL migration is required for this step. The step 6 migration/legacy-data
+precautions still apply when upgrading from an older APK.
+
+1. In Scroll or Pages, go to the middle of a chapter, then choose **Line**.
+   Playback should start paused at the first word of the selected imported
+   passage, not at the beginning of the chapter. Tap Play to start. Focus and Tape
+   should retain the same word when switching display; speed changes should affect
+   subsequent words without starting a second playback loop.
+2. While playing, press Home, switch apps or lock the phone. Return to Folio Dev:
+   the word should be unchanged from when it paused, with no catch-up playback.
+   Tap Play to continue. Also open Contents, Bookmarks, Settings, Search and Profile
+   while playing. Closing an overlay should leave playback paused.
+3. Scrub the **word-position** bar or use the 15-word controls. Seeking should
+   pause. With TalkBack enabled, the bar should report the current word and its
+   index; increase/decrease actions should move one word, staying in bounds.
+   Verify button names, selected speed/display, and the disabled end controls.
+4. Use the book-position bar or Contents to select another passage/chapter.
+   Single-line should reset to that selection and stay paused. Test two chapters
+   with different lengths, including a very short final chapter. At the last
+   word, playback stops and offers **Replay chapter**; it never jumps into the next
+   chapter automatically. Empty text must not start a timer or save a blank quote.
+5. Play past the initially selected imported passage, then save the current
+   passage. Saving should pause. In Notebook, jump to that quote: it should open
+   the source passage where the active word occurred. Quotes are limited to one
+   original paragraph so they can be found and rendered as highlights; they keep
+   original punctuation, line breaks and spacing.
+6. Return to Pages/Scroll, leave Reading, and reopen the book after allowing a
+   moment for the position save. It should resume the active imported passage.
+   Reopening Line starts paused at that passage's first word. **Exact word-level
+   progress is not persisted**; the saved anchor is the same imported-passage
+   granularity used by the rest of the reader.
+7. Test Focus/Tape and controls on Charcoal as well as light themes, with long
+   words, larger system text and landscape. The controls should remain reachable
+   by scrolling if they do not fit vertically. Check contrast and native layout
+   on the phone; no screenshots or native accessibility-service tests were run in
+   the cloud for this step.
+
+Automated tests exercise real component handlers/effects with simulated timers
+and AppState events, including pause, resume, overlay blocking, end/replay, source
+callbacks, and cleanup. Pure source-mapping tests cover exact paragraph excerpts,
+Unicode, empty text, and invalid speeds. These do not simulate Android process
+death, native timer scheduling, OAuth, or cloud sync reliability. Position and
+annotation durability still use the existing persistence paths.
