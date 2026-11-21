@@ -10,7 +10,9 @@ report_failure() {
   if [ "$status" -ne 0 ]; then
     node - "$setup_log" "$emulator_log" <<'JS'
 const fs=require('node:fs');
-const details=process.argv.slice(2).filter(file=>fs.existsSync(file)).map(file=>fs.readFileSync(file,'utf8').slice(-8000)).join('\n');
+const lines=process.argv.slice(2).filter(file=>fs.existsSync(file)).flatMap(file=>fs.readFileSync(file,'utf8').split(/[\r\n]+/));
+const errors=lines.filter(line=>/error|warning|exception|no space|not found|failed|killed|fatal|insufficient|cannot|virtual device|timed out/i.test(line));
+const details=[...errors.slice(-12).reverse(),...lines.filter(line=>line.trim()&&!/^\s*\[/.test(line)).slice(-15)].join('\n').slice(0,3500);
 const escaped=details.replace(/%/g,'%25').replace(/\r/g,'%0D').replace(/\n/g,'%0A');
 console.log(`::error title=Android emulator setup failed::${escaped || 'Emulator setup failed before creating a log.'}`);
 JS

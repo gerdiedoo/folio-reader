@@ -14,7 +14,11 @@ Apply the separate Dev project's [revision-sync migration](revision-sync.md)
 after installing the new APK on test devices. Earlier sections saying “no new
 SQL” refer only to those older numbered steps.
 
-The APK workflow also runs a disposable Android emulator journey. Its
+The APK workflow also runs a disposable Android emulator journey on a separate
+runner, after downloading the signed APK. **Re-run failed jobs** can repeat
+native verification without recompiling a successful build. Workflow-only fixes
+can reuse the known signed APK only when all application build inputs match;
+changed app inputs or an unavailable artifact require compilation. Its
 **folio-android-evidence** artifact includes screenshots, startup timings and
 results when execution reaches those checks. A green compile alone is not a
 native interaction result; inspect the smoke step and evidence separately.

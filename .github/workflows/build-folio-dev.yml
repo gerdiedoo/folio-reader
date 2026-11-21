@@ -22,6 +22,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: folio-dev-apk
@@ -66,7 +67,29 @@ jobs:
           exit "$account_test_status"
       - name: Check TypeScript
         run: npm run typecheck
+      # A known APK may be reused for workflow-only fixes. Any changed build
+      # input, unavailable artifact, or expired artifact falls back to compilation.
+      - name: Check whether application inputs match the verified APK
+        id: matching-apk
+        run: |
+          baseline=43864d2939ee22926a3b4cd60a8ee40005d3ddb4
+          if git fetch --no-tags --depth=1 origin "$baseline"; then
+            previous=$(git ls-tree -r "$baseline" -- App.tsx index.ts app.json app.config.js eas.json package.json package-lock.json src assets plugins | sha256sum | cut -d ' ' -f 1)
+            current=$(git ls-tree -r HEAD -- App.tsx index.ts app.json app.config.js eas.json package.json package-lock.json src assets plugins | sha256sum | cut -d ' ' -f 1)
+            if [ "$previous" = "$current" ]; then echo 'eligible=true' >> "$GITHUB_OUTPUT"; fi
+          fi
+      - name: Reuse the matching signed APK when still available
+        id: reused-apk
+        if: steps.matching-apk.outputs.eligible == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: folio-dev-apk
+          run-id: 44958391360
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}
       - name: Check Expo token is configured
+        if: steps.reused-apk.outcome != 'success'
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
@@ -75,6 +98,7 @@ jobs:
             exit 1
           fi
       - name: Load the test profile for local EAS config evaluation
+        if: steps.reused-apk.outcome != 'success'
         run: |
           node <<'JS'
           const fs = require('node:fs');
@@ -86,6 +110,7 @@ jobs:
           }
           JS
       - name: Set up authenticated EAS CLI
+        if: steps.reused-apk.outcome != 'success'
         uses: expo/expo-github-action@5273c2136bd09c2a341fe3340d3e767ce5a13015 # v9.0.2
         with:
           eas-version: 24.13.0
@@ -94,11 +119,13 @@ jobs:
           packager: npm
           token: ${{ secrets.EXPO_TOKEN }}
       - name: Set up Java for the Android build
+        if: steps.reused-apk.outcome != 'success'
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '17'
       - name: Check the runner Android SDK
+        if: steps.reused-apk.outcome != 'success'
         run: |
           if [ -z "${ANDROID_HOME:-}" ] || [ ! -d "$ANDROID_HOME" ]; then
             echo '::error::The GitHub runner Android SDK is unavailable.'
@@ -106,6 +133,7 @@ jobs:
           fi
           java -version
       - name: Build standalone Android APK on this runner
+        if: steps.reused-apk.outcome != 'success'
         env:
           GRADLE_OPTS: -Dorg.gradle.workers.max=2
           CMAKE_BUILD_PARALLEL_LEVEL: '2'
@@ -135,6 +163,7 @@ jobs:
       - name: Show APK download
         env:
           APK_ARTIFACT_URL: ${{ steps.apk.outputs.artifact-url }}
+          APK_REUSED: ${{ steps.reused-apk.outcome == 'success' }}
         run: |
           node <<'JS'
           const fs = require('node:fs');
@@ -154,12 +183,44 @@ jobs:
             'The APK was built on the GitHub runner using the existing Expo signing credentials.',
             'This does not use an Expo cloud Android build slot. The artifact is kept for 7 days.',
             '',
-            `Source commit: ${process.env.GITHUB_SHA}`,
+            `Reviewed source commit: ${process.env.GITHUB_SHA}`,
+            process.env.APK_REUSED === 'true' ? 'The signed APK was reused from run 44958391360 after verifying that all application build inputs match.' : 'The APK was compiled in this run.',
             '',
             'Use the phone checklist in docs/android-testing.md.',
             '',
           ].join('\n'));
           JS
+      - name: Explain build failure
+        if: failure()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF_SUMMARY'
+          ## Folio Dev build or native verification did not complete
+
+          Open the **EAS APK build failed** annotation or the failed step for the
+          actual error from the local Android build. Check that the saved Expo token
+          belongs to an account/robot with Developer access to this app's EAS project.
+          Android signing setup, project permissions or the runner toolchain may block a build.
+          This workflow builds locally on GitHub and does not use the Expo cloud build quota.
+          If APK upload succeeded, the APK is available even if the later emulator check failed.
+          Fix the reported issue, then use **Re-run failed jobs**. Do not post tokens in logs or chat.
+          EOF_SUMMARY
+
+  android-smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.22.1
+      - name: Download the built APK
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: folio-dev-apk
+          path: ${{ runner.temp }}
       - name: Start disposable Android emulator
         timeout-minutes: 15
         run: bash scripts/device-checks/start-emulator.sh
@@ -182,17 +243,3 @@ jobs:
             ${{ runner.temp }}/folio-emulator-setup.log
           if-no-files-found: warn
           retention-days: 7
-      - name: Explain build failure
-        if: failure()
-        run: |
-          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF_SUMMARY'
-          ## Folio Dev build or native verification did not complete
-
-          Open the **EAS APK build failed** annotation or the failed step for the
-          actual error from the local Android build. Check that the saved Expo token
-          belongs to an account/robot with Developer access to this app's EAS project.
-          Android signing setup, project permissions or the runner toolchain may block a build.
-          This workflow builds locally on GitHub and does not use the Expo cloud build quota.
-          If APK upload succeeded, the APK is available even if the later emulator check failed.
-          Fix the reported issue, then use **Re-run failed jobs**. Do not post tokens in logs or chat.
-          EOF_SUMMARY
