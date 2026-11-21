@@ -72,14 +72,14 @@ def run():
     tap('Import EPUB')
     # Recent files often already contains the pushed EPUB. Only navigate roots
     # if it is not visible; Android DocumentsUI varies across system images.
-    try:tap('folio-device-journey.epub',contains=True,timeout=4)
+    try:tap('folio-device-journey.epub',timeout=4)
     except AssertionError:
         try:tap('Show roots',timeout=3)
         except AssertionError:
             try:tap('Show navigation drawer',timeout=3)
             except AssertionError:pass
-        tap('Downloads',contains=True)
-        tap('folio-device-journey.epub',contains=True)
+        tap('Downloads')
+        tap('folio-device-journey.epub')
     find('Folio device journey by Folio test fixture.',contains=True,timeout=45)
     screenshot('02-imported-library')
     tap('Folio device journey by Folio test fixture.',contains=True)
