@@ -2092,3 +2092,90 @@ test('duplicate-download confirmation prevents repeated taps from starting concu
   const confirm = labelled(root, 'Download another copy'); confirm.onPress(); confirm.onPress();
   assert.equal(f.calls.downloads.length, 1); f.h.unmount();
 });
+
+function renderedText(root) {
+  if (typeof root === 'string' || typeof root === 'number') return String(root);
+  if (Array.isArray(root)) return root.map(renderedText).join(' ');
+  return renderedText(root?.props?.children ?? '');
+}
+const selectNotebookFilter = (root, label) => elements(root).find(node => node.type === 'Chip' && node.props.label === label).props.onPress();
+
+test('Notebook counts vocabulary-only results without displaying an empty highlight archive', () => {
+  const f = notebookHarness({ lexicon: [vocabularyCard('word')] });
+  const root = f.h.render(f.NotebookView, f.props), text = renderedText(root);
+  assert.match(text, /0 highlights · 1 vocabulary card/); assert.match(text, /Quietude/);
+  assert.doesNotMatch(text, /No highlights|Notebook is empty/); f.h.unmount();
+});
+
+test('Notebook normalized search finds quotes and vocabulary context; misses offer reset rather than an empty archive claim', () => {
+  const f = notebookHarness({ highlights: [savedHighlight('one', { text: 'A café [garden]', chapter: 'Arrival' })], lexicon: [vocabularyCard('word')] });
+  let root = f.h.render(f.NotebookView, f.props);
+  labelled(root, 'Search Notebook').onChangeText(' CAFE  ARRIVAL '); root = f.h.render(f.NotebookView, f.props);
+  assert.match(renderedText(root), /1 highlight · 0 vocabulary cards/);
+  labelled(root, 'Search Notebook').onChangeText('garden arrival quietude'); root = f.h.render(f.NotebookView, f.props);
+  assert.match(renderedText(root), /0 highlights · 1 vocabulary card/);
+  labelled(root, 'Search Notebook').onChangeText('absent'); root = f.h.render(f.NotebookView, f.props);
+  assert.match(renderedText(root), /No matching entries/); assert.doesNotMatch(renderedText(root), /Notebook is empty/);
+  labelled(root, 'Show all Notebook entries').onPress(); root = f.h.render(f.NotebookView, f.props);
+  assert.equal(labelled(root, 'Search Notebook').value, ''); assert.match(renderedText(root), /1 highlight · 1 vocabulary card/); f.h.unmount();
+});
+
+test('Notebook book picker announces expansion and selection; clear search keeps scope while Show all resets it', () => {
+  const f = notebookHarness({ books: [{ id: 'book', title: 'A book' }, { id: 'other', title: 'Another book' }], highlights: [savedHighlight('one', { note: 'A reflection' })] });
+  let root = f.h.render(f.NotebookView, f.props);
+  const picker = labelled(root, 'Filter Notebook by book: All Books'); assert.equal(picker.accessibilityRole, 'button'); assert.equal(picker.accessibilityState.expanded, false);
+  picker.onPress(); root = f.h.render(f.NotebookView, f.props); assert.equal(labelled(root, 'Filter Notebook by book: All Books').accessibilityState.expanded, true);
+  labelled(root, 'Show Notebook entries for A book').onPress(); root = f.h.render(f.NotebookView, f.props);
+  selectNotebookFilter(root, 'Notes'); root = f.h.render(f.NotebookView, f.props);
+  labelled(root, 'Search Notebook').onChangeText('missing'); root = f.h.render(f.NotebookView, f.props);
+  labelled(root, 'Clear Notebook search').onPress(); root = f.h.render(f.NotebookView, f.props);
+  assert.ok(labelled(root, 'Filter Notebook by book: A book')); assert.equal(elements(root).find(node => node.type === 'Chip' && node.props.label === 'Notes').props.active, true);
+  labelled(root, 'Filter Notebook by book: A book').onPress(); root = f.h.render(f.NotebookView, f.props);
+  assert.equal(labelled(root, 'Show Notebook entries for A book').accessibilityState.selected, true);
+  labelled(root, 'Show Notebook entries for Another book').onPress(); root = f.h.render(f.NotebookView, f.props);
+  labelled(root, 'Show all Notebook entries').onPress(); root = f.h.render(f.NotebookView, f.props);
+  assert.ok(labelled(root, 'Filter Notebook by book: All Books')); assert.equal(elements(root).find(node => node.type === 'Chip' && node.props.label === 'All Entries').props.active, true); f.h.unmount();
+});
+
+test('Notebook empty messages reflect the chosen entry type and never mask relevant loading/errors', () => {
+  const f = notebookHarness(); let root = f.h.render(f.NotebookView, f.props);
+  assert.match(renderedText(root), /Your Notebook is empty/);
+  selectNotebookFilter(root, 'Notes'); root = f.h.render(f.NotebookView, f.props); assert.match(renderedText(root), /No reflection notes yet/);
+  selectNotebookFilter(root, 'Lexicon Cards'); root = f.h.render(f.NotebookView, f.props); assert.match(renderedText(root), /No vocabulary cards yet/);
+  f.props.vocabularyStatus = 'loading'; root = f.h.render(f.NotebookView, f.props); assert.doesNotMatch(renderedText(root), /No vocabulary cards yet/); assert.match(renderedText(root), /Loading saved entries/);
+  f.props.vocabularyStatus = 'error'; root = f.h.render(f.NotebookView, f.props); assert.doesNotMatch(renderedText(root), /No vocabulary cards yet/); assert.match(renderedText(root), /Some saved entries unavailable/);
+  f.props.vocabularyStatus = 'ready'; f.props.highlightStatus = 'error'; root = f.h.render(f.NotebookView, f.props); assert.match(renderedText(root), /No vocabulary cards yet/); f.h.unmount();
+});
+
+test('Notebook does not silently create a quote under another book when the selected book disappears', () => {
+  const f = notebookHarness({ books: [{ id: 'book', title: 'A book' }, { id: 'other', title: 'Another book' }] });
+  let root = f.h.render(f.NotebookView, f.props); labelled(root, 'Filter Notebook by book: All Books').onPress(); root = f.h.render(f.NotebookView, f.props);
+  labelled(root, 'Show Notebook entries for A book').onPress(); root = f.h.render(f.NotebookView, f.props);
+  f.props.books = [{ id: 'other', title: 'Another book' }]; root = f.h.render(f.NotebookView, f.props);
+  assert.ok(labelled(root, 'Filter Notebook by book: Selected book unavailable')); assert.match(renderedText(root), /Selected book unavailable/);
+  assert.equal(labelled(root, 'New quote').disabled, true); labelled(root, 'New quote').onPress(); root = f.h.render(f.NotebookView, f.props);
+  assert.equal(elements(root).some(node => node.props?.accessibilityLabel === 'Quote text'), false); f.h.unmount();
+});
+
+test('Notebook filtering preserves a reflection draft and export counts include scoped vocabulary', () => {
+  const f = notebookHarness({ highlights: [savedHighlight('one')], lexicon: [vocabularyCard('word')] });
+  let root = f.h.render(f.NotebookView, f.props); labelled(root, 'Add reflection note').onPress(); root = f.h.render(f.NotebookView, f.props);
+  labelled(root, 'Reflection note').onChangeText('Unsaved reflection'); root = f.h.render(f.NotebookView, f.props);
+  labelled(root, 'Search Notebook').onChangeText('missing'); root = f.h.render(f.NotebookView, f.props);
+  assert.match(renderedText(root), /Export \( 2 \)/); assert.match(renderedText(root), /Search and entry filters do not limit the export/);
+  labelled(root, 'Show all Notebook entries').onPress(); root = f.h.render(f.NotebookView, f.props);
+  assert.equal(labelled(root, 'Reflection note').value, 'Unsaved reflection'); f.h.unmount();
+});
+
+test('manual quote keeps its chosen book through list reordering and retains a draft if that book disappears', async () => {
+  const calls = [];
+  const f = notebookHarness({ books: [{ id: 'book', title: 'A book', currentPage: 1 }, { id: 'other', title: 'Another book', currentPage: 2 }], onAddHighlight: async entry => { calls.push(entry); return true; } });
+  let root = f.h.render(f.NotebookView, f.props); labelled(root, 'New quote').onPress(); root = f.h.render(f.NotebookView, f.props);
+  labelled(root, 'Quote text').onChangeText('Keep this quote');
+  f.props.books = [...f.props.books].reverse(); root = f.h.render(f.NotebookView, f.props);
+  await labelled(root, 'Save new highlight').onPress(); assert.equal(calls[0].bookId, 'book');
+  root = f.h.render(f.NotebookView, f.props); labelled(root, 'New quote').onPress(); root = f.h.render(f.NotebookView, f.props);
+  labelled(root, 'Quote text').onChangeText('A pending quote'); f.props.books = f.props.books.filter(book => book.id !== 'other'); root = f.h.render(f.NotebookView, f.props);
+  assert.equal(labelled(root, 'Save new highlight').disabled, true); await labelled(root, 'Save new highlight').onPress();
+  assert.equal(calls.length, 1); assert.equal(labelled(root, 'Quote text').value, 'A pending quote'); assert.match(renderedText(root), /This book is unavailable. Your draft is kept/); f.h.unmount();
+});

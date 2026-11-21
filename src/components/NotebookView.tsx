@@ -10,8 +10,10 @@ import { colors, F, NAV_SPACE, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
 import { Book, HighlightEntry, LexiconEntry } from '../types';
 import { HIGHLIGHT_COLORS, highlightTextStyle } from '../lib/highlights';
+import { browseNotebook, type NotebookFilter } from '../lib/notebookBrowser';
 import { Chip } from './ui/Chip';
 import { Icon } from './ui/Icon';
+import { choiceAppearance, choiceStyles } from './ui/choiceStyles';
 import { ModalShell } from './ui/ModalShell';
 
 interface NotebookViewProps {
@@ -35,8 +37,6 @@ interface NotebookViewProps {
   showToast: (msg: string) => void;
   bottomInset: number;
 }
-
-type NotebookFilter = 'all' | 'highlights' | 'notes' | 'lexicon';
 
 export const NotebookView: React.FC<NotebookViewProps> = ({
   cloud,
@@ -83,6 +83,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   const archivesUnavailable = notesUnavailable || vocabularyUnavailable;
 
   const [isNewHighlightOpen, setIsNewHighlightOpen] = useState(false);
+  const [quoteBookId, setQuoteBookId] = useState<string | null>(null);
   const [newQuoteText, setNewQuoteText] = useState('');
   const [newQuoteNote, setNewQuoteNote] = useState('');
   const [newQuoteColor, setNewQuoteColor] = useState(HIGHLIGHT_COLORS[0]);
@@ -91,33 +92,48 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   const [dbStatus, setDbStatus] = useState('Ready to test');
 
   const selectedBook = selectedBookId === 'all' ? undefined : books.find((b) => b.id === selectedBookId);
-  // Used when recording a manual quote with no specific book chosen
-  const targetBook = selectedBook ?? books[0];
-
-  const q = searchQuery.toLowerCase();
-  const bookHighlights = highlights.filter((h) => selectedBookId === 'all' || h.bookId === selectedBookId);
-  const bookLexicon = lexicon.filter((l) => selectedBookId === 'all' || l.bookId === selectedBookId);
-
-  const filteredHighlights = bookHighlights.filter((h) => {
-    const matches =
-      h.text.toLowerCase().includes(q) ||
-      (h.note && h.note.toLowerCase().includes(q)) ||
-      h.chapter.toLowerCase().includes(q);
-    if (!matches) return false;
-    if (activeFilter === 'notes') return Boolean(h.note);
-    if (activeFilter === 'lexicon') return false;
-    return true;
-  });
-
-  const filteredLexicon = bookLexicon.filter((l) => {
-    const matches = l.word.toLowerCase().includes(q) || l.definition.toLowerCase().includes(q);
-    if (!matches) return false;
-    return activeFilter === 'all' || activeFilter === 'lexicon';
-  });
+  const selectedBookLabel = selectedBookId === 'all' ? 'All Books' : selectedBook?.title ?? 'Selected book unavailable';
+  // Never attach a quote to a different book if its selected book disappears.
+  const targetBook = selectedBookId === 'all' ? books[0] : selectedBook;
+  const quoteBook = books.find(book => book.id === quoteBookId);
+  const { bookHighlights, bookLexicon, highlights: filteredHighlights, lexicon: filteredLexicon } = useMemo(
+    () => browseNotebook(books, highlights, lexicon, { bookId: selectedBookId, filter: activeFilter, query: searchQuery }),
+    [books, highlights, lexicon, selectedBookId, activeFilter, searchQuery],
+  );
+  const showHighlights = activeFilter !== 'lexicon';
+  const showVocabulary = activeFilter === 'all' || activeFilter === 'lexicon';
+  const relevantError = (showHighlights && highlightStatus === 'error') || (showVocabulary && vocabularyStatus === 'error');
+  const relevantLoading = (showHighlights && highlightStatus === 'loading') || (showVocabulary && vocabularyStatus === 'loading');
+  const resultsReady = !relevantError && !relevantLoading;
+  const hasSearch = Boolean(searchQuery.trim());
+  const constrained = hasSearch || activeFilter !== 'all' || selectedBookId !== 'all';
+  const count = filteredHighlights.length + filteredLexicon.length;
+  const resultSummary = [
+    ...(showHighlights ? [`${filteredHighlights.length} ${filteredHighlights.length === 1 ? 'highlight' : 'highlights'}`] : []),
+    ...(showVocabulary ? [`${filteredLexicon.length} ${filteredLexicon.length === 1 ? 'vocabulary card' : 'vocabulary cards'}`] : []),
+    ...(relevantError ? ['Some saved entries unavailable'] : relevantLoading ? ['Loading saved entries…'] : []),
+  ].join(' · ');
+  const emptyTitle = selectedBookId !== 'all' && !selectedBook ? 'Selected book unavailable'
+    : hasSearch ? 'No matching entries'
+    : activeFilter === 'notes' ? 'No reflection notes yet'
+    : activeFilter === 'highlights' ? 'No highlights yet'
+    : activeFilter === 'lexicon' ? 'No vocabulary cards yet'
+    : selectedBookId !== 'all' ? 'No entries for this book yet' : 'Your Notebook is empty';
+  const emptyDescription = selectedBookId !== 'all' && !selectedBook ? 'Choose another book, or show all entries.'
+    : hasSearch ? 'Try other words, or clear your search and filters.'
+    : activeFilter === 'notes' ? 'Add a reflection to a saved highlight.'
+    : activeFilter === 'lexicon' ? 'Save a word from the reader to build your vocabulary.'
+    : 'Save a passage while reading, or add a new quote.';
+  const resetBrowsing = () => { setSearchQuery(''); setActiveFilter('all'); setSelectedBookId('all'); setIsBookPickerOpen(false); };
+  const bookChoices = [
+    { id: 'all', title: 'All Books' },
+    ...books.map(book => ({ id: book.id, title: book.title })),
+    ...(selectedBookId !== 'all' && !selectedBook ? [{ id: selectedBookId, title: 'Selected book unavailable' }] : []),
+  ];
 
   const handleExportAll = async () => {
     if (archivesUnavailable) { showToast('Wait for saved notes and vocabulary to load before exporting.'); return; }
-    let md = `# Folio Marginalia Archive: ${selectedBook ? selectedBook.title : 'All Books'}\n\n`;
+    let md = `# Folio Marginalia Archive: ${selectedBookLabel}\n\n`;
     md += `*Exported on ${new Date().toLocaleDateString()} via Folio Reader*\n\n---\n\n`;
 
     bookHighlights.forEach((h, idx) => {
@@ -195,13 +211,13 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   };
 
   const handleCreateHighlight = async () => {
-    if (!newQuoteText.trim() || !targetBook) return;
+    if (!newQuoteText.trim() || !quoteBook || notesUnavailable) return;
     const saved = await writeHighlight(() => onAddHighlight({
-      bookId: targetBook.id,
-      bookTitle: targetBook.title,
-      chapter: targetBook.currentChapter,
-      page: targetBook.currentPage,
-      loc: targetBook.currentLoc,
+      bookId: quoteBook.id,
+      bookTitle: quoteBook.title,
+      chapter: quoteBook.currentChapter,
+      page: quoteBook.currentPage,
+      loc: quoteBook.currentLoc,
       colorName: newQuoteColor.name,
       colorHex: newQuoteColor.hex,
       text: newQuoteText.trim(),
@@ -229,17 +245,19 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
     >
       {/* Title row */}
       <View style={styles.titleRow}>
-        <Text style={styles.title}>Marginalia</Text>
+        <Text accessibilityRole="header" style={styles.title}>Notebook</Text>
         <Pressable
-          onPress={() => (targetBook ? setIsNewHighlightOpen(true) : showToast('Import a book first'))}
-          disabled={notesUnavailable}
+          onPress={() => { if (!notesUnavailable && targetBook) { setQuoteBookId(targetBook.id); setIsNewHighlightOpen(true); } }}
+          disabled={notesUnavailable || !targetBook}
           accessibilityRole="button"
           accessibilityLabel="New quote"
-          accessibilityState={{ disabled: notesUnavailable }}
-          style={styles.newBtn}
+          accessibilityState={{ disabled: notesUnavailable || !targetBook }}
+          style={choiceStyles.target}
         >
-          <Icon name="add" size={18} color="#fff" />
-          <Text style={styles.newBtnText}>New Quote</Text>
+          <View style={[choiceStyles.face, choiceAppearance(colors, true)]} pointerEvents="none">
+            <Icon name="add" size={18} color={colors.onPrimaryContainer} />
+            <Text style={styles.newBtnText}>New Quote</Text>
+          </View>
         </Pressable>
       </View>
 
@@ -263,27 +281,39 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
         <Icon name="search" size={20} color={colors.muted} />
         <TextInput
           value={searchQuery}
-          onChangeText={setSearchQuery}
-          placeholder="Search quotes, marginalia, or keywords..."
+          onChangeText={value => setSearchQuery(value.slice(0, 200))}
+          maxLength={200}
+          accessibilityLabel="Search Notebook"
+          autoCapitalize="none"
+          autoCorrect={false}
+          returnKeyType="search"
+          placeholder="Search quotes, notes or words"
           placeholderTextColor={colors.muted}
           style={styles.searchInput}
         />
+        {searchQuery.length > 0 && <Pressable accessibilityRole="button" accessibilityLabel="Clear Notebook search" onPress={() => setSearchQuery('')} style={styles.smallAction}>
+          <Icon name="close" size={18} color={colors.muted} />
+        </Pressable>}
       </View>
 
       {/* Book picker */}
       <View>
-        <Pressable onPress={() => setIsBookPickerOpen(!isBookPickerOpen)} style={styles.picker}>
+        <Pressable onPress={() => setIsBookPickerOpen(!isBookPickerOpen)} style={styles.picker}
+          accessibilityRole="button" accessibilityLabel={`Filter Notebook by book: ${selectedBookLabel}`} accessibilityState={{ expanded: isBookPickerOpen }}>
           <Icon name="menu_book" size={20} color={colors.primary} />
           <Text style={styles.pickerText} numberOfLines={1}>
-            {selectedBook ? selectedBook.title : 'All Books'}
+            {selectedBookLabel}
           </Text>
           <Icon name="expand_more" size={22} color={colors.muted} />
         </Pressable>
         {isBookPickerOpen && (
           <View style={styles.pickerList}>
-            {[{ id: 'all', title: 'All Books' }, ...books.map((b) => ({ id: b.id, title: b.title }))].map((b) => (
+            {bookChoices.map((b) => (
               <Pressable
                 key={b.id}
+                accessibilityRole="button"
+                accessibilityLabel={b.id === 'all' ? 'Show Notebook entries for all books' : `Show Notebook entries for ${b.title}`}
+                accessibilityState={{ selected: selectedBookId === b.id }}
                 onPress={() => {
                   setSelectedBookId(b.id);
                   setIsBookPickerOpen(false);
@@ -315,14 +345,18 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
         ))}
       </ScrollView>
 
-      {/* Highlights */}
-      {highlightStatus === 'ready' && filteredHighlights.length === 0 && activeFilter !== 'lexicon' && (
+      <Text accessibilityLiveRegion="polite" style={styles.resultCount}>{resultSummary}</Text>
+      {resultsReady && count === 0 && (
         <View style={styles.emptyCard}>
-          <Text style={styles.emptyMain}>No highlights recorded yet.</Text>
-          <Text style={styles.emptySub}>Long-press a paragraph while reading, or tap “New Quote” above.</Text>
+          <Text accessibilityRole="header" style={styles.emptyMain}>{emptyTitle}</Text>
+          <Text style={styles.emptySub}>{emptyDescription}</Text>
+          {constrained && <Pressable onPress={resetBrowsing} accessibilityRole="button" accessibilityLabel="Show all Notebook entries" style={styles.smallAction}>
+            <Text style={styles.configText}>Show all entries</Text>
+          </Pressable>}
         </View>
       )}
 
+      {/* Highlights */}
       {filteredHighlights.map((hl) => (
         <View key={hl.id} style={styles.card}>
           <View style={styles.cardTop}>
@@ -487,9 +521,8 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
           </View>
         </View>
         <Text style={styles.hubBody}>
-          Export clean markdown files with bibliographic footnotes, or push your highlights and vocabulary
-          directly to your Supabase cloud database. Last upload: {lastSyncTime}.
-          {'\n'}This device keeps its saved notes and vocabulary when loading cloud records. Review changes made on other devices before uploading.
+          Export highlights and vocabulary for {selectedBookId === 'all' ? 'all books' : selectedBookLabel}. Search and entry filters do not limit the export.
+          {'\n'}Cloud upload sends all current records in this reading space. Last upload: {lastSyncTime}. Review changes from other devices before uploading.
         </Text>
         <Pressable onPress={() => setIsSchemaOpen(true)} style={styles.configBtn}>
           <Text style={styles.configText}>Supabase Config</Text>
@@ -498,7 +531,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
         <View style={{ flexDirection: 'row', gap: 10 }}>
           <Pressable onPress={handleExportAll} accessibilityRole="button" accessibilityLabel="Export notes" disabled={archivesUnavailable} accessibilityState={{ disabled: archivesUnavailable }} style={[styles.hubBtn, { backgroundColor: colors.primaryContainer }]}>
             <Icon name="output" size={18} color="#fff" />
-            <Text style={[styles.hubBtnText, { color: '#fff' }]}>Export All ({bookHighlights.length})</Text>
+            <Text style={[styles.hubBtnText, { color: '#fff' }]}>Export ({bookHighlights.length + bookLexicon.length})</Text>
           </Pressable>
           <Pressable
             onPress={handleSyncCloud}
@@ -526,7 +559,8 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
             </Pressable>
           </View>
           <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }} keyboardShouldPersistTaps="handled">
-            {targetBook ? <Text style={styles.meta}>Filed under: {targetBook.title}</Text> : null}
+            {quoteBook ? <Text style={styles.meta}>Filed under: {quoteBook.title}</Text>
+              : <Text accessibilityRole="alert" style={styles.hubBody}>This book is unavailable. Your draft is kept; close this dialog and choose a book before saving.</Text>}
             <TextInput
               multiline
               value={newQuoteText}
@@ -568,10 +602,10 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
               </Pressable>
               <Pressable
                 onPress={handleCreateHighlight}
-                disabled={!newQuoteText.trim() || notesUnavailable}
+                disabled={!newQuoteText.trim() || !quoteBook || notesUnavailable}
                 accessibilityRole="button"
                 accessibilityLabel="Save new highlight"
-                accessibilityState={{ disabled: !newQuoteText.trim() || notesUnavailable, busy: savingHighlight }}
+                accessibilityState={{ disabled: !newQuoteText.trim() || !quoteBook || notesUnavailable, busy: savingHighlight }}
                 style={[styles.saveNote, { paddingVertical: 10 }, !newQuoteText.trim() && { opacity: 0.5 }]}
               >
                 <Text style={styles.saveNoteText}>{savingHighlight ? 'Saving…' : 'Save Highlight'}</Text>
@@ -628,49 +662,43 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
 };
 
 const createStyles = (colors: AppPalette) => StyleSheet.create({
-  scroll: { gap: 16, paddingTop: 4 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  title: { ...type.headlineLg, color: colors.onSurface },
-  newBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: colors.primaryContainer,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 999,
-  },
-  newBtnText: { ...type.labelMd, color: '#fff' },
+  scroll: { gap: 12, paddingTop: 4 },
+  titleRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  title: { ...type.headlineMd, color: colors.onSurface },
+  newBtnText: { ...type.labelMd, color: colors.onPrimaryContainer },
+  smallAction: { minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
+  resultCount: { ...type.bodySm, color: colors.muted },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     backgroundColor: colors.surfaceContainer,
-    borderRadius: 14,
-    paddingHorizontal: 14,
+    borderRadius: 8,
+    paddingHorizontal: 12,
   },
-  searchInput: { flex: 1, paddingVertical: 12, fontFamily: F.sans, fontSize: 14, color: colors.onSurface },
+  searchInput: { flex: 1, minHeight: 48, paddingVertical: 10, fontFamily: F.sans, fontSize: 14, color: colors.onSurface },
   picker: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     backgroundColor: colors.surfaceLow,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    minHeight: 48,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.borderMid,
   },
-  pickerText: { flex: 1, fontFamily: F.serifMedium, fontSize: 17, color: colors.onSurface },
+  pickerText: { flex: 1, fontFamily: F.sansSemi, fontSize: 14, color: colors.onSurface },
   pickerList: {
     marginTop: 6,
     backgroundColor: colors.surface,
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
     overflow: 'hidden',
   },
-  pickerItem: { paddingHorizontal: 14, paddingVertical: 12 },
+  pickerItem: { minHeight: 48, justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 8 },
   pickerItemText: { fontFamily: F.sans, fontSize: 14, color: colors.onSurface },
   chipRow: { gap: 6, paddingRight: 6 },
 
@@ -683,7 +711,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     borderColor: colors.borderSoft,
     gap: 4,
   },
-  emptyMain: { ...type.bodyMd, color: colors.muted },
+  emptyMain: { ...type.bodyMd, color: colors.onSurface, textAlign: 'center' },
   emptySub: { ...type.bodySm, color: colors.muted, textAlign: 'center' },
 
   card: {

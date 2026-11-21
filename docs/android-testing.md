@@ -819,3 +819,31 @@ When a later APK includes it, check the following on the phone:
 TypeScript and the existing 336 regression tests pass. Styling is shared in
 `src/components/ui/choiceStyles.ts`; native appearance and touch checks remain
 pending until an APK is requested.
+
+## Notebook browsing (step 23, awaiting an APK)
+
+See [Notebook behavior and limits](notebook-browsing.md). This step remains local;
+no APK is built until requested. When a later APK includes it:
+
+1. Check the compact Notebook title, New Quote action, search and book selector.
+   Search for words in quotes, reflections, vocabulary context and chapter/book
+   titles. Try mixed case, accent-free spellings, multiple terms and punctuation.
+   Clear search should retain the selected book and entry filter.
+2. Combine book and entry filters. Try All Entries with vocabulary cards only:
+   it must show their count without claiming the Notebook is empty. Search misses,
+   no reflections, no vocabulary and an empty Notebook should have distinct text.
+   Show all entries should reset search, book and entry type together.
+3. Check expanded/selected announcements for the book selector with TalkBack.
+   Loading or failed relevant archives should not claim empty results; existing
+   retry controls should remain available. Do not corrupt files to force failures;
+   automated tests inject these states safely.
+4. Start a reflection, type a draft, search so the card is hidden, then show all
+   entries. The draft should remain. In a manual quote dialog, review Filed under
+   before saving; it should retain that book if the Library list changes. If the
+   book becomes unavailable, save should disable and retain the quote draft.
+5. Export should count both scoped highlights and vocabulary, regardless of the
+   visible search/filter. Upload should still explain that it sends the reading
+   space's current records. Verify a disposable export before using important data.
+6. Check Charcoal, large system text, landscape and narrow screens for clipping,
+   readable selected colors, reachable actions, keyboard behavior and book names.
+   No native visual/focus behavior is claimed by the local event tests.
