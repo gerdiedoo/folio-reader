@@ -97,6 +97,9 @@ batch adds structured EPUB content, lazy loading and revision synchronization:
   preferences persist per reading space. Failed opens retain actionable details.
 - Dictionary cards retain their source anchor and offer **Read in book**. A failed
   or uncertain new note/card save retries its identity without duplicating it.
+- Large JSON archives use bounded immutable segments and an acknowledged commit
+  pointer, avoiding Android’s per-row cursor limit. Interrupted segments never
+  replace a confirmed archive; reads finish before old segments are cleaned up.
 - Personal records and pending mutations share one local write. Foreground retry,
   compare-and-swap revisions, persistent server tombstones, owner checks, explicit
   conflict review and full source-anchor transport replace best-effort uploads.

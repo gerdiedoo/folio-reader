@@ -61,6 +61,8 @@ function device({ fixedClock = false } = {}) {
     require(name) {
       if (name === '@react-native-async-storage/async-storage') return asyncStorage;
       if (name === 'expo-file-system') return { File, Directory, Paths: { document: 'file:///docs' } };
+      if (name === 'expo-crypto') return { randomUUID: require('node:crypto').randomUUID };
+      if (name === './jsonChunks') return require('./loadTypeScript.cjs').loadTypeScript(path.resolve(__dirname, '../src/lib/jsonChunks.ts'));
       if (name === './bookPages') return require('./loadTypeScript.cjs').loadTypeScript(path.resolve(__dirname, '../src/lib/bookPages.ts'));
       if (name === './bookImport') return helper;
       if (name === './bookCover') return coverHelpers;

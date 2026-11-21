@@ -149,3 +149,11 @@ test('matching account progress keeps this device’s measured pixels; other pos
  await d.store.replication.pull('book',[{...original,revision:3,changeId:3,payload:{...original.payload,readingPosition:{pageNumber:2,wordOffset:5}}}]);
  assert.equal((await d.library.load()).books[0].readingPosition.scroll,undefined);
 });
+
+test('a batched upload receipt retains edits made during transfer and retries a lost batch safely',async()=>{
+ const d=device(),s=server();for(let index=0;index<12;index++)await d.highlights.add(note('batch-'+index));
+ const pending=await d.store.replication.pending();const receipts=pending.map(change=>{const answer=s.send(change);return{kind:change.kind,id:change.id,sent:change.pending,response:answer.record,accepted:answer.accepted};});
+ await d.highlights.note('batch-3','Edited while uploading');d.fail(true);await assert.rejects(d.store.replication.acknowledgeMany(receipts));d.fail(false);
+ await d.make().replication.acknowledgeMany(receipts);const queued=await d.store.replication.pending();assert.equal(queued.length,1);assert.equal(queued[0].pending.payload.note,'Edited while uploading');assert.equal(queued[0].pending.baseRevision,1);
+ await s.flush(d);assert.equal(s.rows.size,12);assert.equal(s.rows.get('highlight:batch-3').revision,2);
+});

@@ -1,3 +1,5 @@
+import { randomUUID } from 'expo-crypto';
+import { createChunkedJsonStorage } from './jsonChunks';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Directory, File, Paths } from 'expo-file-system';
 import { Book, BookContentPage } from '../types';
@@ -12,7 +14,7 @@ import { validatedBookPages } from './bookPages';
  *  - parsed book pages and covers as files in the app's document directory
  */
 
-const pendingWrites = new Map<string, Promise<void>>();
+const jsonStorage = createChunkedJsonStorage(AsyncStorage, randomUUID);
 
 export function createLocalStore(scope?: string) {
   const KEY_PREFIX = scope ? `folio.v2.${encodeURIComponent(scope)}.` : 'folio.v1.';
@@ -26,8 +28,7 @@ export function createLocalStore(scope?: string) {
   }
 
   async function loadJSONEntryStrict(key: string): Promise<{ present: boolean; value: unknown }> {
-    await pendingWrites.get(storageKey(key))?.catch(() => undefined);
-    const raw = await AsyncStorage.getItem(KEY_PREFIX + key);
+    const raw = await jsonStorage.getItem(KEY_PREFIX + key);
     return raw === null ? { present: false, value: null } : { present: true, value: JSON.parse(raw) };
   }
 
@@ -44,13 +45,7 @@ export function createLocalStore(scope?: string) {
   /** Queue each key so an older asynchronous write cannot finish after a newer one. */
   function saveJSONStrict(key: string, value: unknown): Promise<void> {
     const data = JSON.stringify(value);
-    const previous = pendingWrites.get(storageKey(key)) ?? Promise.resolve();
-    const operation = previous.catch(() => undefined).then(() => AsyncStorage.setItem(KEY_PREFIX + key, data));
-    pendingWrites.set(storageKey(key), operation);
-    void operation.finally(() => {
-      if (pendingWrites.get(storageKey(key)) === operation) pendingWrites.delete(storageKey(key));
-    }).catch(() => undefined);
-    return operation;
+    return jsonStorage.setItem(storageKey(key), data);
   }
 
   async function saveJSON(key: string, value: unknown): Promise<void> {

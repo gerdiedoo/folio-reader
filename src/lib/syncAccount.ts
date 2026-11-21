@@ -25,6 +25,7 @@ export function createSyncAccountRepository(client: SupabaseClient, owner: strin
       if (!store.replication.enabled || !await owns()) return false;
       const changes = await store.replication.pending();
       let failed = false;
+      const receipts: Parameters<typeof store.replication.acknowledgeMany>[0] = [];
       for (const change of changes.slice(0, 30)) {
         if (!await owns()) return false;
         try {
@@ -34,12 +35,17 @@ export function createSyncAccountRepository(client: SupabaseClient, owner: strin
           }).abortSignal(signal));
           if (error || !data?.record) throw Error('Account synchronization is unavailable. Device changes are kept.');
           if (!await owns()) return false;
-          await store.replication.acknowledge(change.kind, change.id, change.pending, remote(data.record), data.accepted === true);
+          receipts.push({ kind:change.kind,id:change.id,sent:change.pending,response:remote(data.record),accepted:data.accepted === true });
           lastError = null;
         } catch {
           lastError = 'Account synchronization is unavailable. Device changes are kept and will retry.'; failed = true; break;
         }
       }
+      if (!await owns()) return false;
+      // Persist one receipt batch per archive, rather than rewriting a large
+      // notebook for every network acknowledgement. Lost receipts retry UUIDs.
+      try { await store.replication.acknowledgeMany(receipts); }
+      catch { lastError = 'Upload acknowledgement could not be saved on this device. Saved work is kept; retries are safe.'; return false; }
       return !failed && (await store.replication.status()).pending === 0;
     })();
     pendingFlush = operation;

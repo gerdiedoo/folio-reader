@@ -103,7 +103,12 @@ def run():
     adb('shell','settings','put','system','font_scale','1.0')
     (OUT/'result.json').write_text(json.dumps({'passed':True,'checks':['native import','rich reader render','bookmark persistence control','scroll close/reopen position','process restart position','reflection creation','large text rendering capture'],'talkback':'requires phone testing','book':before['id']},indent=2))
 try:run()
-except Exception:
+except Exception as error:
+    try:
+        labels=[node.get('content-desc') or node.get('text') for node in nodes()]
+        message=json.dumps({'error':str(error),'visible':[label for label in labels if label]},ensure_ascii=True)[:6000]
+        print('::error title=Android reading journey failed::'+message.replace('%','%25').replace('\r','%0D').replace('\n','%0A'),flush=True)
+    except Exception:pass
     try:screenshot('failure')
     except Exception:pass
     raise

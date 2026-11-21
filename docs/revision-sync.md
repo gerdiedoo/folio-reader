@@ -1,7 +1,10 @@
 # Revision sync in Folio Dev
 
 The new Dev client saves each personal archive and its pending uploads in one
-acknowledged local write. Uploads retry after reopening or returning to the app.
+acknowledged local write. Large JSON archives use immutable, bounded storage
+segments and a small commit pointer, avoiding Android’s single-row cursor limit.
+Reads and writes serialize through pointer replacement; failed segment writes
+keep the previous archive, and an uncertain commit preserves both generations. Uploads retry after reopening or returning to the app.
 The server accepts changes only against an expected revision; retries reuse a
 mutation UUID. Conflicting versions remain on the device for explicit review in
 Notebook or Account. Choosing the device version queues it against the reviewed
@@ -62,6 +65,9 @@ Sync works at record granularity; it does not combine two edits to one reflectio
 or average competing reading positions. It preserves versions for a reader's
 choice. Tombstones persist until account deletion, and original EPUBs travel by
 portable copy rather than cloud storage. Safety copies are private, unencrypted
-ZIP files with a 48 MB limit. Unknown/unreadable archive versions block writes
+ZIP files with a 48 MB limit. A device JSON archive is limited to 16 million
+UTF-16 code units, with the Dev native database capped at 64 MB; exceeding capacity
+rejects the new save and keeps the confirmed version. Old segments from an
+uncertain commit can remain for recovery. Unknown/unreadable archive versions block writes
 and keep existing bytes; no automatic repair discards them. Older unjournaled
 orphan files remain preserved rather than being deleted speculatively.

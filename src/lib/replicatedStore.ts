@@ -104,7 +104,7 @@ export function createReplicatedStore<T extends BaseStorage>(base: T, token: () 
         if (canonical(old.pending.payload) === canonical(row.payload)) states.set(row.id, { id: row.id, server: row });
         else states.set(row.id, { ...old, server: row, ...(row.revision !== old.pending.baseRevision ? { conflict: row } : {}) });
       } else {
-        const local = recordsFor(kind, value).get(row.id);
+        const local = kind === 'book' ? recordsFor(kind, value).get(row.id) : undefined;
         // Removing an unchanged downloaded original on another device still deserves review.
         const ownedBook = kind === 'book' && row.payload === null && local && (value as any)?.books?.find((b: Payload) => b.id === row.id)?.fileLocation;
         if (ownedBook) states.set(row.id, { ...old, server: row, pending: { token: token(), baseRevision: old.server?.revision ?? 0, payload: local! }, conflict: row });
@@ -124,18 +124,24 @@ export function createReplicatedStore<T extends BaseStorage>(base: T, token: () 
     }
     return result;
   };
-  const acknowledge = (kind: SyncKind, id: string, sent: NonNullable<RecordState['pending']>, response: RemoteRecord, accepted: boolean) => mutateReplica(kind, async current => {
-    const row = validateRemote(kind, response);
-    if (row.id !== id) throw Error('Account acknowledgement did not match the saved record.');
-    const states = current.states.map(state => {
-      if (state.id !== id || (state.server?.revision ?? 0) > row.revision) return state;
-      if (!accepted) return state.pending ? { ...state, server: row, conflict: row } : { ...state, server: row };
-      if (state.pending?.token === sent.token) return { id, server: row };
-      if (state.pending && row.mutationId === sent.token) return { ...state, server: row, conflict: undefined, pending: { ...state.pending, baseRevision: row.revision } };
-      return { ...state, server: row };
-    });
-    return { replica: { ...current, states }, result: undefined };
-  });
+  const acknowledgeMany = async (responses: { kind: SyncKind; id: string; sent: NonNullable<RecordState['pending']>; response: RemoteRecord; accepted: boolean }[]) => {
+    for (const kind of Object.keys(SYNC_KEYS) as SyncKind[]) {
+      const matching = responses.filter(item => item.kind === kind); if (!matching.length) continue;
+      await mutateReplica(kind, async current => {
+        const states = new Map(current.states.map(state => [state.id,state]));
+        for (const { id, sent, response, accepted } of matching) {
+          const row = validateRemote(kind,response); if (row.id !== id) throw Error('Account acknowledgement did not match the saved record.');
+          const state = states.get(id); if (!state || (state.server?.revision ?? 0) > row.revision) continue;
+          if (!accepted) states.set(id,state.pending ? { ...state, server: row, conflict: row } : { ...state, server: row });
+          else if (state.pending?.token === sent.token) states.set(id,{ id,server:row });
+          else if (state.pending && row.mutationId === sent.token) states.set(id,{ ...state, server:row, conflict:undefined, pending:{ ...state.pending,baseRevision:row.revision } });
+          else states.set(id,{ ...state,server:row });
+        }
+        return { replica:{ ...current,states:[...states.values()] },result:undefined };
+      });
+    }
+  };
+  const acknowledge = (kind: SyncKind, id: string, sent: NonNullable<RecordState['pending']>, response: RemoteRecord, accepted: boolean) => acknowledgeMany([{kind,id,sent,response,accepted}]);
   const status = async () => {
     const conflicts: { kind: SyncKind; id: string; token: string; device: Payload | null; account: RemoteRecord }[] = []; let count = 0;
     if (enabled) for (const kind of Object.keys(SYNC_KEYS) as SyncKind[]) {
@@ -159,6 +165,6 @@ export function createReplicatedStore<T extends BaseStorage>(base: T, token: () 
     saveJSON: async (key: string, value: unknown) => { try { await saveJSONStrict(key,value); } catch { console.warn('A local save could not be confirmed:', key); } },
     subscribeArchive: (key: string, callback: () => void) => listen(base.storageKey(key), callback),
     subscribeSync: (callback: () => void) => listen(base.storageKey('@sync'), callback),
-    replication: { enabled, pull, pending, acknowledge, status, resolve, cursor: async (kind: SyncKind) => (await read(SYNC_KEYS[kind])).cursor ?? 0 },
+    replication: { enabled, pull, pending, acknowledge, acknowledgeMany, status, resolve, cursor: async (kind: SyncKind) => (await read(SYNC_KEYS[kind])).cursor ?? 0 },
   };
 }
