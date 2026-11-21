@@ -1,9 +1,10 @@
 import { File } from 'expo-file-system';
+import { CryptoDigestAlgorithm, digest, randomUUID } from 'expo-crypto';
 import { XMLParser } from 'fast-xml-parser';
 import JSZip from 'jszip';
 import { HTMLElement as HtmlNode, Node as HtmlTreeNode, NodeType, parse as parseHtml } from 'node-html-parser';
 import { Book, BookContentPage } from '../types';
-import { ImportStorageError } from './bookImport';
+import { ImportStorageError, ImportCollisionError } from './bookImport';
 import { coversDir as defaultCoversDir, persistBookFile as defaultPersistBookFile, removeBookFiles as defaultRemoveBookFiles } from './localStore';
 import type { LocalStore } from './localStore';
 
@@ -68,16 +69,19 @@ const TEXT_BLOCKS = new Set([
 ]);
 const NON_READING_ELEMENTS = new Set(['HEAD', 'SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT']);
 
-function extractReadingBlocks(root: HtmlNode): string[] {
-  const blocks: string[] = [];
+function extractReadingBlocks(root: HtmlNode): { text: string; path: string }[] {
+  const blocks: { text: string; path: string }[] = [];
   let buffer = '';
+  let firstPath = '';
   const flush = () => {
     const text = cleanText(buffer);
-    if (text) blocks.push(text);
+    if (text) blocks.push({ text, path: firstPath });
     buffer = '';
+    firstPath = '';
   };
-  const visit = (node: HtmlTreeNode) => {
+  const visit = (node: HtmlTreeNode, path: string) => {
     if (node.nodeType === NodeType.TEXT_NODE) {
+      if (!firstPath && cleanText(node.text)) firstPath = path;
       buffer += node.text;
       return;
     }
@@ -90,10 +94,10 @@ function extractReadingBlocks(root: HtmlNode): string[] {
     }
     const isBlock = TEXT_BLOCKS.has(tag);
     if (isBlock) flush();
-    node.childNodes.forEach(visit);
+    node.childNodes.forEach((child, index) => visit(child, `${path}/${index}`));
     if (isBlock) flush();
   };
-  visit(root);
+  visit(root, 'body');
   flush();
   return blocks;
 }
@@ -101,6 +105,7 @@ function extractReadingBlocks(root: HtmlNode): string[] {
 export async function parseEpubFile(fileUri: string, fileName: string, storage?: Pick<LocalStore, 'coversDir' | 'persistBookFile' | 'removeBookFiles'>): Promise<ParsedEpub> {
   const { coversDir, persistBookFile, removeBookFiles } = storage ?? { coversDir: defaultCoversDir, persistBookFile: defaultPersistBookFile, removeBookFiles: defaultRemoveBookFiles };
   const bytes = await new File(fileUri).bytes();
+  const documentFingerprint = Array.from(new Uint8Array(await digest(CryptoDigestAlgorithm.SHA256, bytes)), byte => byte.toString(16).padStart(2, '0')).join('');
   const zip = await JSZip.loadAsync(bytes);
 
   // 1. container.xml → root OPF
@@ -146,11 +151,11 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
     }
   });
 
-  const bookId = `epub-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const bookId = `epub-${randomUUID()}`;
 
   // Validate readable content before writing any imported files.
   // Spine → chapters
-  const rawChapters: { title: string; textParagraphs: string[] }[] = [];
+  const rawChapters: { title: string; href: string; textParagraphs: { text: string; path: string }[] }[] = [];
 
   for (const itemref of asArray<any>(opf.spine?.itemref)) {
     const idref = itemref['@_idref'];
@@ -175,7 +180,7 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
     const paragraphs = extractReadingBlocks(body);
 
     if (paragraphs.length > 0) {
-      rawChapters.push({ title: heading, textParagraphs: paragraphs });
+      rawChapters.push({ title: heading, href: resolvePath(basePath, href), textParagraphs: paragraphs });
     }
   }
 
@@ -193,8 +198,8 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
 
   rawChapters.forEach((ch, chIdx) => {
     for (let pIdx = 0; pIdx < ch.textParagraphs.length; pIdx += 2) {
-      const p1 = ch.textParagraphs[pIdx] || '';
-      const p2 = ch.textParagraphs[pIdx + 1] ?? ''; // (the web version duplicated p1 here)
+      const p1 = ch.textParagraphs[pIdx]?.text || '';
+      const p2 = ch.textParagraphs[pIdx + 1]?.text ?? '';
 
       const dropCap = Array.from(p1)[0] || '';
       const p1Rest = p1.slice(dropCap.length);
@@ -209,6 +214,7 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
       }
 
       pages.push({
+        source: { version: 1, edition: documentFingerprint, href: ch.href, paths: ch.textParagraphs.slice(pIdx, pIdx + 2).map(block => block.path) },
         chapterTitle: ch.title.toUpperCase(),
         chapterNumber: `CHAPTER ${chIdx + 1}`,
         folioNumber: `Folio ${globalPageNum}`,
@@ -269,6 +275,7 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
         const coverBytes = await coverZipFile.async('uint8array');
         const ext = (coverHref.split('.').pop() || 'jpg').toLowerCase().slice(0, 4);
         const dest = new File(coversDir(), `${bookId}.${ext}`);
+        if (dest.exists) throw new ImportCollisionError('A saved cover already uses this identifier. Its files have been kept. Import the EPUB again.');
         partialCover = dest;
         if (!dest.exists) dest.create();
         dest.write(coverBytes);
@@ -276,6 +283,7 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
       }
     }
   } catch (err) {
+    if (err instanceof ImportCollisionError) throw err;
     console.warn('EPUB cover extraction failed:', err);
     if (partialCover) {
       try { if (partialCover.exists) partialCover.delete(); } catch { console.warn('Could not remove an incomplete cover.'); }
@@ -286,6 +294,7 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
   try {
     fileLocation = persistBookFile(fileUri, bookId);
   } catch (error) {
+    if (error instanceof ImportCollisionError) throw error;
     let cleaned = false;
     try { cleaned = removeBookFiles(bookId, coverUrl); } catch { /* Keep the storage failure as the main error. */ }
     const reason = error instanceof Error ? error.message : 'Could not save this EPUB file. Try again.';
@@ -311,6 +320,7 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
     annotation,
     documentLanguage,
     documentIdentifier,
+    documentFingerprint,
     fileFormat: 'EPUB',
     fileSizeBytes: fileSizeBytes ?? undefined,
     fileLocation,

@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, SectionList, StyleSheet, Text, TextInput, View } from 'react-native';
 import { type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
-import { Book, HighlightEntry, LexiconEntry } from '../types';
+import { Book, HighlightEntry, LexiconEntry, SourceAnchor } from '../types';
 import { canOpenSavedPassage, searchArchive, type ArchiveSearchFilter, type ArchiveSearchResult, type ArchiveSearchSection, type SearchBookPages, type SearchLoadStatus } from '../lib/archiveSearch';
 import { libraryBookStatus } from '../lib/libraryBrowser';
 import { BookCover } from './BookCover';
@@ -24,7 +24,7 @@ interface SearchModalProps {
   onShowLibrary: () => void;
   onClose: () => void;
   onSelectBook: (bookId: string) => void;
-  onSelectHighlight: (bookId: string, page: number) => void;
+  onSelectHighlight: (bookId: string, page: number, anchor?: SourceAnchor) => void;
   onSelectVocabulary: (entry: LexiconEntry) => void;
 }
 
@@ -67,14 +67,14 @@ export const SearchModal: React.FC<SearchModalProps> = ({
     }
     if (item.kind === 'quote') {
       const quote = item.quote;
-      const canJump = libraryStatus === 'ready' && canOpenSavedPassage(books, bookPages, quote.bookId, quote.page);
+      const canJump = libraryStatus === 'ready' && canOpenSavedPassage(books, bookPages, quote.bookId, quote.page, quote.anchor);
       const destination = canJump ? `Open passage ${quote.page}` : libraryStatus === 'loading' ? 'Checking saved reading text…'
         : libraryStatus === 'error' ? 'Saved library unavailable' : 'Passage unavailable on this device';
       return <View style={styles.card}>
         <Text style={styles.quote} numberOfLines={3} accessibilityLabel={quote.text}>{quote.text}</Text>
         {quote.note?.trim() ? <Text style={styles.note} numberOfLines={2} accessibilityLabel={`Note: ${quote.note}`}>Note: {quote.note}</Text> : null}
         <Text style={styles.meta}>{quote.bookTitle} · {quote.chapter} · Passage {quote.page}</Text>
-        <Pressable onPress={() => { if (canJump) { onClose(); onSelectHighlight(quote.bookId, quote.page); } }}
+        <Pressable onPress={() => { if (canJump) { onClose(); if (quote.anchor) onSelectHighlight(quote.bookId, quote.page, quote.anchor); else onSelectHighlight(quote.bookId, quote.page); } }}
           accessibilityRole="button" accessibilityLabel={`Open saved quote from ${quote.bookTitle} at passage ${quote.page}`}
           disabled={!canJump} accessibilityState={{ disabled: !canJump }} style={styles.action}>
           <Text style={[styles.actionText, { color: canJump ? colors.primary : colors.muted }]}>{destination}</Text>

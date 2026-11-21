@@ -1,6 +1,18 @@
 import type { Book, BookContentPage, ReadingPosition } from '../types';
+import { resolveSourceAnchor, sourceAnchorForPosition } from './sourceAnchors';
 
 export function savedReadingPosition(book: Book | undefined, pages: BookContentPage[]) {
+  const anchor = book?.readingPosition?.anchor;
+  if (anchor) {
+    const target = resolveSourceAnchor(anchor, pages);
+    if (!target) return { index: 0, position: { pageNumber: pages[0]?.pageNumber ?? 1 } as ReadingPosition, anchorUnresolved: true };
+    const matched = pages[target.index];
+    const samePassage = book?.readingPosition?.pageNumber === matched.pageNumber;
+    const scroll = samePassage ? book?.readingPosition?.scroll : undefined;
+    const validScroll = scroll && typeof scroll.layout === 'string' && Number.isFinite(scroll.offset) && scroll.offset >= 0 &&
+      Array.isArray(scroll.sourcePaths) && JSON.stringify(scroll.sourcePaths) === JSON.stringify(matched.source?.paths);
+    return { index: target.index, position: { pageNumber: matched.pageNumber, wordOffset: target.wordOffset, anchor, ...(validScroll ? { scroll: { ...scroll } } : {}) } as ReadingPosition };
+  }
   const number = typeof book?.currentPage === 'number' && Number.isFinite(book.currentPage) ? Math.floor(book.currentPage) : 1;
   let index = pages.findIndex(page => page.pageNumber === number);
   if (index < 0) index = Math.max(0, Math.min(pages.length - 1, number - 1));
@@ -25,8 +37,10 @@ export function scrollPositionAtOffset(rows: Iterable<ScrollRow>, offset: number
 }
 
 export function applyReadingPosition(book: Book, page: BookContentPage, total: number, position: ReadingPosition, at: string): Book {
+  const anchor = sourceAnchorForPosition(page, position);
   return { ...book, currentPage: page.pageNumber, currentChapter: page.chapterNumber, currentLoc: page.locNumber,
-    progressPercent: Math.round((page.pageNumber / Math.max(1, total)) * 100), lastOpened: at, readingPosition: position };
+    progressPercent: Math.round((page.pageNumber / Math.max(1, total)) * 100), lastOpened: at, readingPosition: { ...position,
+      ...(anchor ? { anchor, ...(position.scroll ? { scroll: { ...position.scroll, sourcePaths: [...page.source!.paths] } } : {}) } : {}) } };
 }
 
 /** A cloud snapshot cannot rewind a book already being read on this device. */

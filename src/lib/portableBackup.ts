@@ -5,6 +5,7 @@ import { validHighlight } from './highlightArchive';
 import { validLexiconEntry } from './lexiconArchive';
 import { readBookmarks } from './bookmarks';
 import { normalizeReaderSettings } from './readerPreferences';
+import { validSourceAnchor, validPageSource } from './sourceAnchors';
 
 // This in-memory implementation deliberately bounds both compressed and expanded data.
 export const BACKUP_LIMIT = 48 * 1024 * 1024;
@@ -41,7 +42,7 @@ export function portableBook(value: unknown): Book {
     (b.genres !== undefined && (!Array.isArray(b.genres) || !b.genres.every(s => typeof s === 'string')))) return fail();
   const result: Book = { id: b.id, title: b.title, author: b.author, coverUrl: '', currentPage: b.currentPage, totalPages: b.totalPages,
     progressPercent: b.progressPercent, minutesLeft: b.minutesLeft, currentChapter: b.currentChapter, lastOpened: b.lastOpened, coverAlt: b.coverAlt };
-  for (const key of ['annotation', 'documentLanguage', 'documentIdentifier', 'fileFormat'] as const) {
+  for (const key of ['annotation', 'documentLanguage', 'documentIdentifier', 'documentFingerprint', 'fileFormat'] as const) {
     if (b[key] !== undefined) { if (typeof b[key] !== 'string') return fail(); result[key] = b[key]; }
   }
   for (const key of ['isFinished', 'isWantToRead'] as const) {
@@ -58,6 +59,7 @@ export function portableBook(value: unknown): Book {
     if (!Number.isSafeInteger(p.pageNumber) || p.pageNumber < 1 || (p.wordOffset !== undefined && (!Number.isSafeInteger(p.wordOffset) || p.wordOffset < 0))) return fail();
     // Device-specific pixel offsets do not travel between screens.
     result.readingPosition = { pageNumber: p.pageNumber, ...(p.wordOffset !== undefined ? { wordOffset: p.wordOffset } : {}) };
+    if (p.anchor !== undefined) { if (!validSourceAnchor(p.anchor)) return fail(); result.readingPosition.anchor = { ...p.anchor }; }
   }
   return result;
 }
@@ -66,7 +68,8 @@ export function validateBackupPages(value: unknown): BookContentPage[] {
   const strings = ['chapterTitle', 'chapterNumber', 'folioNumber', 'dropCap', 'paragraph1', 'paragraph2Lead', 'highlightedText', 'paragraph2Rest'];
   const numbers = ['pageNumber', 'totalBookPages', 'locNumber', 'totalLoc', 'minutesLeftInChapter'];
   if (!Array.isArray(value) || value.length === 0 || value.length > 30000 || !value.every(p => isRecord(p) && strings.every(k => typeof p[k] === 'string') &&
-    numbers.every(k => typeof p[k] === 'number' && Number.isFinite(p[k]) && p[k] >= 0) && Number.isSafeInteger(p.pageNumber) && p.pageNumber >= 1) ||
+    numbers.every(k => typeof p[k] === 'number' && Number.isFinite(p[k]) && p[k] >= 0) && Number.isSafeInteger(p.pageNumber) && p.pageNumber >= 1 &&
+    (p.source === undefined || validPageSource(p.source))) ||
     new Set(value.map(p => p.pageNumber)).size !== value.length) return fail();
   return value as BookContentPage[];
 }

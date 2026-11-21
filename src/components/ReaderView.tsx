@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { paginateContent, displayPageForPosition } from '../lib/readerPagination';
 import { savedReadingPosition, scrollPositionAtOffset } from '../lib/readingPosition';
+import { sourceAnchorForQuote } from '../lib/sourceAnchors';
 import { readerTextMetrics, type ReaderSettingsChange } from '../lib/readerPreferences';
 import { HIGHLIGHT_COLORS, highlightTextStyle } from '../lib/highlights';
 import { findBookmarkPage } from '../lib/bookmarks';
@@ -44,6 +45,7 @@ export interface JumpTarget {
   bookId: string;
   page: number;
   nonce: number;
+  wordOffset?: number;
 }
 
 interface ReaderViewProps {
@@ -303,8 +305,9 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     () => customPages ?? (currentBook ? BOOK_PAGES[currentBook.id] : undefined) ?? [],
     [customPages, currentBook?.id]
   );
-  const getSavedPageIndex = () => savedReadingPosition(currentBook, pages).index;
-  const resumePosition = useRef(savedReadingPosition(currentBook, pages).position);
+  const savedLocation = useMemo(() => savedReadingPosition(currentBook, pages), [currentBook, pages]);
+  const getSavedPageIndex = () => savedLocation.index;
+  const resumePosition = useRef(savedLocation.position);
 
   const flowMode: ReadingFlowMode = settings.readingFlowMode || 'continuous';
   const paper = readerPaper[settings.theme];
@@ -678,7 +681,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   useEffect(() => {
     if (!jumpTarget || jumpTarget.bookId !== bookId || pages.length === 0) return;
     const idx = Math.max(0, pages.findIndex((p) => p.pageNumber === jumpTarget.page));
-    goToSource(idx);
+    goToSource(idx, jumpTarget.wordOffset ?? 0);
     onJumpHandled?.(jumpTarget.nonce);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jumpTarget?.nonce, bookId, pages]);
@@ -697,7 +700,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   const closeSheet = () => setSheet(null);
 
-  const baseHl = (p: BookContentPage) => ({
+  const baseHl = (p: BookContentPage, quote: string) => ({
+    anchor: sourceAnchorForQuote(pages.find(source => source.pageNumber === p.pageNumber) ?? p, quote),
     bookId: currentBook!.id,
     bookTitle: currentBook!.title,
     chapter: p.chapterTitle,
@@ -707,7 +711,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   const handleHighlight = async (selected: string, color: (typeof HIGHLIGHT_COLORS)[number]) => {
     if (!sheet || !currentBook) return false;
-    const saved = await onAddHighlight({ ...baseHl(sheet.page), colorName: color.name, colorHex: color.hex, text: selected });
+    const saved = await onAddHighlight({ ...baseHl(sheet.page, selected), colorName: color.name, colorHex: color.hex, text: selected });
     if (saved) { showToast('Highlight saved on this device'); closeSheet(); }
     return saved;
   };
@@ -719,7 +723,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
       saved = await onAddReflectionNote(sheet.existing.id, note);
     } else {
       saved = await onAddHighlight({
-        ...baseHl(sheet.page),
+        ...baseHl(sheet.page, selected),
         colorName: color.name,
         colorHex: color.hex,
         text: selected,
@@ -828,7 +832,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     );
   }
 
-  const isBookmarked = bookBookmarks.some(item => item.pageNumber === page.pageNumber && item.locNumber === page.locNumber);
+  const isBookmarked = bookBookmarks.some(item => findBookmarkPage(item, pages) === pageIndex);
 
   const paginatedPercent = Math.round(((pageIndex + 1) / pages.length) * 100);
   const percent = Math.max(
@@ -916,6 +920,9 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
               <Text style={{ color: colors.primary }}>Open Settings</Text>
             </Pressable>
           )}
+          {savedLocation.anchorUnresolved && <View style={styles.drawer}>
+            <Text accessibilityRole="alert" style={{ color: colors.onSurface }}>Your saved position could not be matched to this book file. Open Contents to choose a passage.</Text>
+          </View>}
           <View style={styles.flowRow}>
             {flowOptions.map((o) => {
               const active = flowMode === o.id;

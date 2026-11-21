@@ -194,3 +194,53 @@ test('failed receipt storage retries an idempotent server deletion; cancellation
   await retryRecordedDeletions(other.storage, { ...cloud, async deleteBookFromSupabase() { cancelled = true; return true; } }, () => cancelled);
   assert.equal(other.data.has('deletionReceipts'), false); assert.equal(f.get('deletionReceipts').books[0], 'a');
 });
+
+const { beginOriginalImport, recoverOriginalImport, hasPendingOriginalImport } = load('importRecovery');
+const { createImportCommitter, waitForImportCommits } = load('bookImport');
+function journaledImport(f, extra = {}) {
+  const events = [];
+  return { events, commit: createImportCommitter({ commitKey: f.storage.storageKey('importJournal'), savePages: () => events.push('pages'), removeFiles: () => { events.push('cleanup'); return true; },
+    beginImport: value => beginOriginalImport(f.storage, value), clearImport: () => f.storage.saveJSONStrict('importJournal', null), saveLibraryEntry: value => createLibraryStore(f.storage).add(value), ...extra }) };
+}
+
+test('original import keeps staged files after an uncertain journal acknowledgement, then recovers idempotently', async () => {
+  const f = store(), write = f.storage.saveJSONStrict;
+  f.storage.saveJSONStrict = async (key, value) => { await write(key, value); if (key === 'importJournal' && value !== null) throw Error('Lost acknowledgement'); };
+  const importer = journaledImport(f);
+  await assert.rejects(importer.commit(book(), [page]), /files have been kept/); assert.deepEqual(importer.events, ['pages']);
+  assert.equal(await hasPendingOriginalImport(f.storage), true); assert.equal((await createLibraryStore(f.storage).load()).books.length, 0);
+  f.storage.saveJSONStrict = write;
+  await recoverOriginalImport(f.storage, async () => true); await recoverOriginalImport(f.storage, async () => { throw Error('Should not verify a completed import'); });
+  assert.equal((await createLibraryStore(f.storage).load()).books.length, 1); assert.equal(await hasPendingOriginalImport(f.storage), false);
+});
+
+test('original import resumes a failed library write and does not report failure after only intent clearing fails', async () => {
+  const f = store(); f.fail('libraryArchive'); const importer = journaledImport(f);
+  await assert.rejects(importer.commit(book(), [page]), /finish recovery/); assert.deepEqual(importer.events, ['pages']);
+  await recoverOriginalImport(f.storage, async () => true); assert.equal((await createLibraryStore(f.storage).load()).books[0].id, 'a');
+  const other = store(), write = other.storage.saveJSONStrict;
+  other.storage.saveJSONStrict = async (key, value) => { if (key === 'importJournal' && value === null) throw Error('Failed clear'); return write(key, value); };
+  await journaledImport(other).commit(book(), [page]); assert.equal((await createLibraryStore(other.storage).load()).books.length, 1); assert.equal(await hasPendingOriginalImport(other.storage), true);
+  other.storage.saveJSONStrict = write;
+  await recoverOriginalImport(other.storage, async () => false); assert.equal(await hasPendingOriginalImport(other.storage), false);
+});
+
+test('import recovery rejects damaged or conflicting intents, verifies missing files and respects prior removal', async () => {
+  const f = store(); await beginOriginalImport(f.storage, book());
+  await assert.rejects(recoverOriginalImport(f.storage, async () => false), /unavailable/); assert.equal((await createLibraryStore(f.storage).load()).books.length, 0);
+  await createLibraryStore(f.storage).add({ ...book(), title: 'Another book' }); await assert.rejects(recoverOriginalImport(f.storage, async () => true), /conflicts/);
+  assert.equal((await createLibraryStore(f.storage).load()).books[0].title, 'Another book');
+  await createLibraryStore(f.storage).remove('a'); await recoverOriginalImport(f.storage, async () => { throw Error('Removed records must not be recovered'); });
+  assert.equal(await hasPendingOriginalImport(f.storage), false); assert.equal((await createLibraryStore(f.storage).load()).books.length, 0);
+  f.set('importJournal', { version: 99, book: book() }); await assert.rejects(recoverOriginalImport(f.storage, async () => true)); assert.equal(f.get('importJournal').version, 99);
+});
+
+test('portable jobs can wait for prior import commits, and pre-intent readiness failures roll back only the new files', async () => {
+  const f = store(); let release; const gate = new Promise(done => { release = done; });
+  const importer = journaledImport(f, { saveLibraryEntry: async value => { await gate; await createLibraryStore(f.storage).add(value); } });
+  const pending = importer.commit(book(), [page]); await new Promise(done => setImmediate(done));
+  let drained = false; const waiting = waitForImportCommits(f.storage.storageKey('importJournal')).then(() => { drained = true; });
+  await new Promise(done => setImmediate(done)); assert.equal(drained, false); release(); await pending; await waiting; assert.equal(drained, true);
+  const blocked = journaledImport(f, { assertReady: async () => { throw Error('Space changed'); } });
+  await assert.rejects(blocked.commit(book('new'), [page])); assert.deepEqual(blocked.events, ['cleanup']); assert.equal((await createLibraryStore(f.storage).load()).books[0].id, 'a');
+});

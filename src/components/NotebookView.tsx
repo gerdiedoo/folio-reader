@@ -7,7 +7,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 import type { createAccountRepository } from '../lib/cloudAccount';
 import { colors, F, NAV_SPACE, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
-import { Book, HighlightEntry, LexiconEntry } from '../types';
+import { Book, HighlightEntry, LexiconEntry, SourceAnchor } from '../types';
 import { HIGHLIGHT_COLORS, highlightTextStyle } from '../lib/highlights';
 import { browseNotebook, type NotebookFilter } from '../lib/notebookBrowser';
 import { Chip } from './ui/Chip';
@@ -28,7 +28,7 @@ interface NotebookViewProps {
   books: Book[];
   highlights: HighlightEntry[];
   lexicon: LexiconEntry[];
-  onJumpToReader: (bookId: string, pageNumber: number) => void;
+  onJumpToReader: (bookId: string, pageNumber: number, anchor?: SourceAnchor) => void;
   onAddReflectionNote: (highlightId: string, noteText: string) => Promise<boolean>;
   onDeleteHighlight: (id: string) => Promise<boolean>;
   onAddHighlight: (hl: Omit<HighlightEntry, 'id' | 'dateAdded'>) => Promise<boolean>;
@@ -444,7 +444,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
               }} disabled={notesUnavailable} accessibilityRole="button" accessibilityState={{ disabled: notesUnavailable }} hitSlop={6} accessibilityLabel="Delete highlight">
                 <Icon name="delete_outline" size={19} color={colors.muted} />
               </Pressable>
-              <Pressable onPress={() => onJumpToReader(hl.bookId, hl.page)} style={styles.jump}>
+              <Pressable onPress={() => hl.anchor ? onJumpToReader(hl.bookId, hl.page, hl.anchor) : onJumpToReader(hl.bookId, hl.page)} accessibilityRole="button" accessibilityLabel={`Open saved passage from ${hl.bookTitle}`} style={styles.jump}>
                 <Text style={styles.jumpText}>Jump to Reader</Text>
                 <Icon name="open_in_new" size={14} color={colors.primary} />
               </Pressable>

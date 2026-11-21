@@ -1,8 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Directory, File, Paths } from 'expo-file-system';
-import { BookContentPage } from '../types';
+import { Book, BookContentPage } from '../types';
 import { CoverSaveError } from './bookCover';
-import { ImportStorageError } from './bookImport';
+import { ImportStorageError, ImportCollisionError } from './bookImport';
 
 /**
  * Local-first persistence. The web app kept imported EPUB text only in memory,
@@ -74,9 +74,11 @@ export function createLocalStore(scope?: string) {
     try {
       const dir = ensureDir('pages');
       const file = new File(dir, `${fileKey(bookId)}.json`);
+      if (file.exists) throw new ImportCollisionError('A saved reading copy already uses this identifier. Its files have been kept. Import the EPUB again.');
       if (!file.exists) file.create();
       file.write(JSON.stringify(pages));
     } catch (err) {
+      if (err instanceof ImportCollisionError) throw err;
       console.warn('Failed to save book pages:', err);
       throw new ImportStorageError('Could not save the reading text. Check available storage and try importing again.');
     }
@@ -90,9 +92,13 @@ export function createLocalStore(scope?: string) {
     try {
       const dir = ensureDir('books');
       const destination = new File(dir, `${fileKey(bookId)}.epub`);
-      new File(sourceUri).copy(destination);
+      if (destination.exists) throw new ImportCollisionError('A saved original already uses this identifier. Its files have been kept. Import the EPUB again.');
+      const source = new File(sourceUri);
+      source.copy(destination);
+      if (!destination.exists || !destination.size || destination.size !== source.size) throw new Error('Incomplete EPUB copy');
       return destination.uri;
     } catch (err) {
+      if (err instanceof ImportCollisionError) throw err;
       console.warn(`Failed to persist EPUB file for book ${bookId}:`, err);
       throw new ImportStorageError('Could not save the EPUB file. Check available storage and try importing again.');
     }
@@ -137,6 +143,15 @@ export function createLocalStore(scope?: string) {
     } catch {
       return null;
     }
+  }
+
+  async function verifyImportedBook(book: Book): Promise<boolean> {
+    const original = new File(ROOT, 'books', `${fileKey(book.id)}.epub`);
+    if (book.fileLocation !== original.uri || !original.exists || !original.size || (book.fileSizeBytes !== undefined && original.size !== book.fileSizeBytes)) return false;
+    const pages = await loadPages(book.id);
+    return Array.isArray(pages) && pages.length > 0 && pages.length === book.totalPages && new Set(pages.map(page => page?.pageNumber)).size === pages.length &&
+      pages.every(page => page && ['chapterTitle', 'chapterNumber', 'folioNumber', 'dropCap', 'paragraph1', 'paragraph2Lead', 'highlightedText', 'paragraph2Rest'].every(key => typeof page[key as keyof BookContentPage] === 'string') &&
+        ['pageNumber', 'totalBookPages', 'locNumber', 'totalLoc', 'minutesLeftInChapter'].every(key => { const value = page[key as keyof BookContentPage]; return typeof value === 'number' && Number.isFinite(value) && value >= 0; }) && Number.isSafeInteger(page.pageNumber) && page.pageNumber > 0);
   }
 
   /** Delete only owned custom-cover filenames; imported/original/other-account files stay intact. */
@@ -207,7 +222,7 @@ export function createLocalStore(scope?: string) {
     }
   }
 
-  return { storageKey, loadJSON, loadJSONStrict, loadJSONEntryStrict, saveJSON, saveJSONStrict, coversDir, savePages, getBookPagesLocation, persistBookFile, removeBookFiles, removeCustomCover, loadPages, persistCoverImage, readBackupAsset, writeRecoveryAsset };
+  return { storageKey, loadJSON, loadJSONStrict, loadJSONEntryStrict, saveJSON, saveJSONStrict, coversDir, savePages, getBookPagesLocation, persistBookFile, removeBookFiles, removeCustomCover, loadPages, persistCoverImage, readBackupAsset, writeRecoveryAsset, verifyImportedBook };
 }
 
 export type LocalStore = ReturnType<typeof createLocalStore>;

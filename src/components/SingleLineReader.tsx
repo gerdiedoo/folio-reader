@@ -4,6 +4,7 @@ import { AppPalette, useAppTheme } from '../AppTheme';
 import { F, readerFontFamily, readerPaper, type } from '../theme';
 import { Book, BookContentPage, HighlightEntry, ReadingSettings } from '../types';
 import { createLineChapter, firstLineWord, linePassage, lineQuote, lineSpeed } from '../lib/lineReader';
+import { sourceAnchorForQuote } from '../lib/sourceAnchors';
 import { Icon } from './ui/Icon';
 import { SeekBar } from './ui/SeekBar';
 
@@ -127,6 +128,7 @@ export const SingleLineReader: React.FC<SingleLineReaderProps> = ({
     savePending.current = true; setSaving(true);
     try {
       const saved = await onAddHighlight({
+        anchor: sourceAnchorForQuote(quote.page, quote.text),
         bookId: book.id,
         bookTitle: book.title,
         chapter: quote.page.chapterTitle,

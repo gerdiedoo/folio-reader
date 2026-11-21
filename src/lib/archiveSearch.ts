@@ -1,10 +1,11 @@
-import type { Book, BookContentPage, HighlightEntry, LexiconEntry } from '../types';
+import type { Book, BookContentPage, HighlightEntry, LexiconEntry, SourceAnchor } from '../types';
+import { resolveSourceAnchor } from './sourceAnchors';
 import { browseLibrary } from './libraryBrowser';
 import { browseNotebook } from './notebookBrowser';
 
 export type ArchiveSearchFilter = 'all' | 'books' | 'quotes' | 'vocabulary';
 export type SearchLoadStatus = 'loading' | 'ready' | 'error';
-export type SearchBookPages = Readonly<Record<string, readonly Pick<BookContentPage, 'pageNumber'>[]>>;
+export type SearchBookPages = Readonly<Record<string, readonly (Pick<BookContentPage, 'pageNumber'> & Partial<BookContentPage>)[]>>;
 export type ArchiveSearchResult =
   | { kind: 'book'; id: string; book: Book }
   | { kind: 'quote'; id: string; quote: HighlightEntry }
@@ -30,8 +31,8 @@ export function searchArchive(books: Book[], highlights: HighlightEntry[], lexic
 }
 
 /** A stored reference must point to a real loaded passage in an existing book. */
-export function canOpenSavedPassage(books: Pick<Book, 'id'>[], pages: SearchBookPages, bookId: string, page: number): boolean {
+export function canOpenSavedPassage(books: Pick<Book, 'id'>[], pages: SearchBookPages, bookId: string, page: number, anchor?: SourceAnchor): boolean {
   const bookPages = Object.prototype.hasOwnProperty.call(pages, bookId) ? pages[bookId] : undefined;
   return Number.isSafeInteger(page) && page > 0 && books.some(book => book.id === bookId) &&
-    Array.isArray(bookPages) && bookPages.some(passage => passage.pageNumber === page);
+    Array.isArray(bookPages) && (anchor ? resolveSourceAnchor(anchor, bookPages as BookContentPage[]) !== null : bookPages.some(passage => passage.pageNumber === page));
 }

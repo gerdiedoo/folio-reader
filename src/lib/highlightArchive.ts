@@ -1,4 +1,5 @@
 import type { HighlightEntry } from '../types';
+import { validSourceAnchor } from './sourceAnchors';
 
 interface ArchiveStorage {
   storageKey(key: string): string;
@@ -22,6 +23,7 @@ export function validHighlight(value: unknown): value is HighlightEntry {
     ['bookTitle', 'chapter', 'text', 'colorName', 'colorHex', 'dateAdded'].every(key => typeof value[key] === 'string') &&
     Boolean((value.text as string).trim()) && Number.isInteger(value.page) && (value.page as number) >= 1 &&
     (value.note == null || typeof value.note === 'string') &&
+    (value.anchor === undefined || validSourceAnchor(value.anchor)) &&
     (value.loc == null || (typeof value.loc === 'number' && Number.isFinite(value.loc) && value.loc >= 0));
 }
 

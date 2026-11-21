@@ -41,6 +41,7 @@ function parser(bytes, { copyFails = false, cleanupFails = false, coverWrites = 
     Error,
     console,
     require(name) {
+      if (name === 'expo-crypto') return { randomUUID: () => require('node:crypto').randomUUID(), CryptoDigestAlgorithm: { SHA256: 'sha256' }, digest: async (_, value) => Uint8Array.from(require('node:crypto').createHash('sha256').update(value).digest()).buffer };
       if (name === './bookImport') return importHelpers;
       if (name === 'expo-file-system') return { File };
       if (name === './localStore') return {
@@ -200,4 +201,17 @@ test('EPUB 3 SVG cover wrappers save embedded raster artwork instead of an unsup
   assert.equal(coverWrites.length, 1); assert.match(coverWrites[0].uri, /\.jpg$/);
   assert.deepEqual(coverWrites[0].bytes, [255, 216, 255, 224, 10, 20, 30, 40]);
   assert.equal(result.book.coverUrl, coverWrites[0].uri); assert.equal(result.book.coverStyle, 'image');
+});
+
+test('new imports fingerprint the actual EPUB bytes and preserve unique source text-node paths', async () => {
+  const bytes = await fixture('<h1>First</h1><p><em>One</em> two three.</p><p>Four<br/>Five.</p>');
+  const first = await parser(bytes).parse(), again = await parser(bytes).parse();
+  const expected = require('node:crypto').createHash('sha256').update(bytes).digest('hex');
+  assert.equal(first.book.documentFingerprint, expected); assert.equal(again.book.documentFingerprint, expected);
+  const paths = first.pages.flatMap(page => Array.from(page.source.paths));
+  assert.equal(new Set(paths).size, paths.length); assert.equal(paths.length, 4);
+  for (const page of first.pages) { assert.equal(page.source.edition, expected); assert.equal(page.source.href, 'EPUB/text/chapter.xhtml'); assert.equal(page.source.version, 1); }
+  assert.deepEqual(Array.from(again.pages, page => Array.from(page.source.paths)), Array.from(first.pages, page => Array.from(page.source.paths)));
+  const changed = await parser(await fixture('<h1>First</h1><p>Different text.</p>')).parse();
+  assert.notEqual(changed.book.documentFingerprint, expected);
 });

@@ -343,3 +343,14 @@ test('book removal also rejects custom-cover paths owned by IDs with matching pr
     assert.equal(d.files.get(uri), 'another book');
   }
 });
+
+test('original and parsed-file identifier collisions preserve the existing book and never overwrite its files', async () => {
+  const d = device(); d.files.set('file:///picked.epub', 'new original');
+  d.files.set('file:///docs/folio/books/same.epub', 'existing original'); d.files.set('file:///docs/folio/pages/same.json', 'existing reading text');
+  assert.throws(() => d.store.persistBookFile('file:///picked.epub', 'same'), error => error instanceof helper.ImportCollisionError);
+  assert.throws(() => d.store.savePages('same', pages), error => error instanceof helper.ImportCollisionError);
+  assert.equal(d.files.get('file:///docs/folio/books/same.epub'), 'existing original'); assert.equal(d.files.get('file:///docs/folio/pages/same.json'), 'existing reading text');
+  let cleanup = 0;
+  const commit = createImportCommitter({ savePages: () => { throw new helper.ImportCollisionError('Existing file'); }, saveLibraryEntry: async () => {}, removeFiles: () => { cleanup++; return true; } });
+  await assert.rejects(commit(book('same'), pages), error => error instanceof helper.ImportCollisionError); assert.equal(cleanup, 0);
+});

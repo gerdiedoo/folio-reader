@@ -174,10 +174,10 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
               <Text style={{ ...type.bodySm, color: colors.muted }}>
                 Signing in opens a separate reading space. Guest books and notes stay in Guest on this device.
               </Text>
-              <Pressable onPress={() => setShowSetupGuide(!showSetupGuide)} accessibilityRole="button" accessibilityLabel="Account setup help" accessibilityState={{ expanded: showSetupGuide }} style={styles.helpRow}>
+              <Pressable onPress={() => setShowSetupGuide(!showSetupGuide)} accessibilityRole="button" accessibilityLabel="Account help" accessibilityState={{ expanded: showSetupGuide }} style={styles.helpRow}>
                 <Icon name="help" size={14} color={colors.primary} />
                 <Text style={styles.helpText}>
-                  {showSetupGuide ? 'Hide setup help' : 'Sign-in setup help'}
+                  {showSetupGuide ? 'Hide account help' : 'How reading spaces work'}
                 </Text>
               </Pressable>
             </View>
@@ -342,9 +342,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
         </View>
 
       <View style={styles.footer}>
-        <Pressable onPress={() => setShowSetupGuide(!showSetupGuide)} accessibilityRole="button" accessibilityLabel="Account setup help" accessibilityState={{ expanded: showSetupGuide }} style={styles.helpRow}>
+        <Pressable onPress={() => setShowSetupGuide(!showSetupGuide)} accessibilityRole="button" accessibilityLabel="Account help" accessibilityState={{ expanded: showSetupGuide }} style={styles.helpRow}>
           <Icon name="info" size={16} color={colors.muted} />
-          <Text style={[styles.helpText, { color: colors.muted }]}>Setup guide</Text>
+          <Text style={[styles.helpText, { color: colors.muted }]}>Account help</Text>
         </Pressable>
         <Pressable onPress={close} disabled={busy} accessibilityRole="button" accessibilityLabel="Done with account" accessibilityState={{ disabled: busy }} style={styles.doneBtn}>
           <Text style={styles.doneText}>Done</Text>
@@ -429,7 +429,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   restoreProgressLabels: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   restoreProgressText: { ...type.bodySm, flexShrink: 1 },
   restoreResult: { width: '100%', gap: 8, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 10, marginTop: 2 },
-  restoreResultTitle: { ...type.labelMd },
+  restoreResultTitle: { ...type.labelMd, color: colors.onSurface },
   restoreFailure: { flexDirection: 'row', alignItems: 'flex-start', gap: 7 },
   restoreFailureText: { flex: 1, gap: 2 },
   restoreFailureTitle: { ...type.bodyMd },
@@ -445,9 +445,10 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     gap: 6,
     paddingHorizontal: 8,
     borderWidth: 1,
+    borderColor: colors.borderMid,
     borderRadius: 8,
   },
-  backupButtonText: { ...type.labelMd, flexShrink: 1, textAlign: 'center' },
+  backupButtonText: { ...type.labelMd, color: colors.onSurface, flexShrink: 1, textAlign: 'center' },
   googleBtn: {
     flexDirection: 'row',
     alignItems: 'center',

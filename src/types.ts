@@ -29,11 +29,20 @@ export interface ReadingSettings {
 }
 
 /** Device-local resume information, anchored to imported source text. */
+export interface SourceAnchor {
+  version: 1;
+  edition: string;
+  href: string;
+  /** Path to the first source text node in a reading block. No filesystem access. */
+  path: string;
+  wordOffset?: number;
+}
 export interface ReadingPosition {
   pageNumber: number;
   /** Zero-based word ordinal within this source passage, independent of display pages. */
   wordOffset?: number;
-  scroll?: { offset: number; layout: string };
+  scroll?: { offset: number; layout: string; sourcePaths?: string[] };
+  anchor?: SourceAnchor;
 }
 
 export interface Book {
@@ -60,6 +69,7 @@ export interface Book {
   annotation?: string;
   documentLanguage?: string;
   documentIdentifier?: string;
+  documentFingerprint?: string;
   fileFormat?: string;
   fileSizeBytes?: number;
   fileLocation?: string;
@@ -77,6 +87,7 @@ export interface HighlightEntry {
   text: string;
   note?: string;
   dateAdded: string;
+  anchor?: SourceAnchor;
 }
 
 export interface LexiconEntry {
@@ -100,6 +111,7 @@ export interface ReadingGoal {
 }
 
 export interface BookContentPage {
+  source?: { version: 1; edition: string; href: string; paths: string[] };
   chapterTitle: string;
   chapterNumber: string;
   folioNumber: string;
@@ -131,4 +143,5 @@ export interface Bookmark {
   chapterTitle: string;
   excerpt: string;
   createdAt: string;
+  anchor?: SourceAnchor;
 }

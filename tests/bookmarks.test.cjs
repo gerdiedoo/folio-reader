@@ -6,6 +6,7 @@ const { test } = require('node:test');
 const ts = require('typescript');
 const filename = path.resolve(__dirname, '../src/lib/bookmarks.ts');
 const loaded = new Module(filename, module);
+loaded.require = name => require('./loadTypeScript.cjs').loadTypeScript(path.resolve(path.dirname(filename), name + '.ts'));
 loaded.filename = filename;
 loaded.paths = module.paths;
 loaded._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {

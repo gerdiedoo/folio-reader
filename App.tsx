@@ -38,10 +38,11 @@ import { hasPendingRestore, recoverPortableRestore, removeBookWithRecovery } fro
 import { choosePortableBackup, exportPortableBackup, importPortableBackup } from './src/lib/portableBackupNative';
 import type { PreparedBackup } from './src/lib/portableBackup';
 import { useReaderSettings } from './src/lib/useReaderSettings';
-import { createBookmark, createBookmarkStore } from './src/lib/bookmarks';
+import { createBookmark, createBookmarkStore, findBookmarkPage } from './src/lib/bookmarks';
 import { watchAccountSession } from './src/lib/accountSession';
 import { createLocalStore } from './src/lib/localStore';
-import { createImportCommitter, ImportStorageError } from './src/lib/bookImport';
+import { createImportCommitter, ImportStorageError, waitForImportCommits } from './src/lib/bookImport';
+import { beginOriginalImport, recoverOriginalImport, hasPendingOriginalImport, IMPORT_JOURNAL } from './src/lib/importRecovery';
 import { parseEpubFile as parseEpubForStore } from './src/lib/epubParser';
 import {
   CatalogBook,
@@ -65,6 +66,7 @@ import { useFeedbackMessage } from './src/lib/useFeedbackMessage';
 import { useHighlightArchive } from './src/lib/useHighlightArchive';
 import { useLexiconArchive } from './src/lib/useLexiconArchive';
 import { useDeletionRetries } from './src/lib/useDeletionRetries';
+import { resolveSourceAnchor } from './src/lib/sourceAnchors';
 import {
   Book,
   BookContentPage,
@@ -76,6 +78,7 @@ import {
   ReadingPosition,
   TabType,
   UserProfile,
+  SourceAnchor,
 } from './src/types';
 
 function getLocalDateKey(): string {
@@ -146,8 +149,15 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
   const importCommitterRef = useRef<ReturnType<typeof createImportCommitter> | null>(null);
   if (!importCommitterRef.current) {
     importCommitterRef.current = createImportCommitter({
+      commitKey: storage.storageKey(IMPORT_JOURNAL),
+      assertReady: async () => {
+        if (!spaceActive.current || libraryLoadState.current !== 'ready') throw new ImportStorageError('This reading space is not ready for import. Reopen it and try again.');
+        if (await hasPendingOriginalImport(storage)) throw new ImportStorageError('An earlier import needs recovery. Reopen this reading space before importing another book.');
+      },
       savePages,
       removeFiles: removeBookFiles,
+      beginImport: book => beginOriginalImport(storage, book),
+      clearImport: () => storage.saveJSONStrict(IMPORT_JOURNAL, null),
       saveLibraryEntry: async (book) => {
         if (!spaceActive.current) throw new ImportStorageError('Import stopped after the reading space changed. Retry in the original space.');
         if (libraryLoadState.current !== 'ready') {
@@ -659,13 +669,15 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
     [saveReadingProgress]
   );
 
-  const handleJumpToReader = (bookId: string, pageNumber: number) => {
-    if (libraryLoadState.current !== 'ready' || !canOpenSavedPassage(booksRef.current, customPagesMap, bookId, pageNumber)) {
+  const handleJumpToReader = (bookId: string, pageNumber: number, anchor?: SourceAnchor) => {
+    if (libraryLoadState.current !== 'ready' || !canOpenSavedPassage(booksRef.current, customPagesMap, bookId, pageNumber, anchor)) {
       showToast('This saved passage is unavailable on this device. Check the book in Library and import its EPUB if needed.');
       return;
     }
+    const target = anchor ? resolveSourceAnchor(anchor, customPagesMap[bookId]) : null;
+    if (target) pageNumber = customPagesMap[bookId][target.index].pageNumber;
     setCurrentBookId(bookId);
-    setJumpTarget({ bookId, page: pageNumber, nonce: Date.now() });
+    setJumpTarget({ bookId, page: pageNumber, nonce: Date.now(), ...(target ? { wordOffset: target.wordOffset } : {}) });
     setActiveTab('reading');
     showToast(`Opened passage ${pageNumber}`);
   };
@@ -686,6 +698,8 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
     }
   };
   const handleToggleBookmark = (bookId: string, page: BookContentPage) => {
+    const existing = bookmarks.find(item => item.bookId === bookId && findBookmarkPage(item, [page]) === 0);
+    if (existing) { void writeBookmarks(() => bookmarkStore.remove(existing.id), () => 'Bookmark removed'); return; }
     const bookmark = createBookmark(bookId, page);
     void writeBookmarks(() => bookmarkStore.toggle(bookmark), saved =>
       saved.some(item => item.id === bookmark.id) ? 'Bookmark saved on this device' : 'Bookmark removed');
@@ -1007,15 +1021,19 @@ function ReadingSpace(props: ReadingSpaceProps) {
   const [phase, setPhase] = useState<'working' | 'ready' | 'done' | 'error'>('working');
   const [message, setMessage] = useState('');
   const [canOpen, setCanOpen] = useState(false);
+  const [incompleteImport, setIncompleteImport] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const running = useRef(false);
+  const mounted = useRef(true);
   const removalReply = useRef<((result: BookRemovalResult) => void) | null>(null);
-  useEffect(() => () => { removalReply.current?.({ removed: false, message: 'The reading space changed. Reopen the original space to check removal.' }); }, []);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; removalReply.current?.({ removed: false, message: 'The reading space changed. Reopen the original space to check removal.' }); }; }, []);
   useEffect(() => {
     let active = true;
     setPhase('working');
     void (async () => {
       try {
+        await waitForImportCommits(storage.storageKey(IMPORT_JOURNAL));
+        await recoverOriginalImport(storage, storage.verifyImportedBook);
         await recoverPortableRestore(storage);
         // File cleanup is idempotent and stays queued if native deletion fails.
         try { await createLibraryStore(storage).cleanupFiles(storage.removeBookFiles); } catch { /* The persisted cleanup list remains. */ }
@@ -1035,12 +1053,12 @@ function ReadingSpace(props: ReadingSpaceProps) {
           if (active) { setMessage(result.message); setPhase('done'); }
         } else setPhase('ready');
       } catch (error) {
-        let pending = true;
-        try { pending = await hasPendingRestore(storage); } catch { /* Unknown state stays closed. */ }
+        let pending = true, importPending = false;
+        try { [pending, importPending] = await Promise.all([hasPendingRestore(storage), hasPendingOriginalImport(storage)]); } catch { /* Unknown state stays closed. */ }
         removalReply.current?.({ removed: false, message: 'Removal could not be completed. Reopen this reading space to finish recovery.' }); removalReply.current = null;
         if (active) {
           setMessage(error instanceof Error ? error.message : 'This recovery action could not be completed.');
-          setCanOpen(!pending); setPhase('error');
+          setCanOpen(!pending && !importPending); setIncompleteImport(!pending && importPending); setPhase('error');
         }
       } finally { running.current = false; }
     })();
@@ -1062,6 +1080,14 @@ function ReadingSpace(props: ReadingSpaceProps) {
     </> : <>
       <Text accessibilityRole={phase === 'error' ? 'alert' : undefined}>{message}</Text>
       {phase === 'error' && <Pressable accessibilityRole="button" style={{ padding: 16 }} onPress={() => { setPhase('working'); setJob(null); setAttempt(value => value + 1); }}><Text>Retry recovery</Text></Pressable>}
+      {phase === 'error' && incompleteImport && <>
+        <Text>You can set this incomplete import aside and open your existing library. Its remaining files will be kept on this device.</Text>
+        <Pressable accessibilityRole="button" style={{ padding: 16 }} onPress={() => {
+          if (running.current) return;
+          running.current = true; setPhase('working');
+          void storage.saveJSONStrict(IMPORT_JOURNAL, null).then(() => { if (mounted.current) { setJob(null); setAttempt(value => value + 1); } }, () => { running.current = false; if (mounted.current) setPhase('error'); });
+        }}><Text>Set incomplete import aside</Text></Pressable>
+      </>}
       {(phase === 'done' || canOpen) && <Pressable accessibilityRole="button" style={{ padding: 16 }} onPress={() => { setJob(null); setPhase('working'); setAttempt(value => value + 1); }}><Text>Open Library</Text></Pressable>}
     </>}
   </View>;

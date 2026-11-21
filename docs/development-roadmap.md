@@ -41,6 +41,21 @@ Completed in this development batch:
   status/retry action. These receipts acknowledge the current server deletion;
   they are not server tombstones and cannot stop another stale device re-uploading
   records. Local tombstones continue suppressing those records on this device.
+- Original imports now write an intent after saving parsed text and before adding
+  the library entry. An uncertain journal/library acknowledgement retains files;
+  startup verifies and completes the import idempotently. Portable/removal jobs
+  wait for active import commits. A damaged incomplete import can be set aside
+  explicitly without deleting its remaining files or existing library records.
+- New EPUB imports carry a SHA-256 file fingerprint and source-node paths. New
+  reading positions, bookmarks and reader highlights carry file-specific anchors.
+  Path resolution takes precedence over synthetic passage numbers; unresolved
+  anchors report a mismatch rather than opening an unrelated numbered passage.
+  Legacy imports/bookmarks retain their prior location behavior. Pixel offsets
+  only survive when source grouping and the existing layout key both match.
+  Backups preserve these anchors but exclude device-specific scroll pixels.
+  New import IDs use cryptographic UUIDs; collisions cannot overwrite or roll back
+  existing originals, reading text or covers. Existing cloud adapters still use
+  their earlier, more limited location fields.
 
 Still required as this roadmap proceeds:
 
@@ -48,8 +63,8 @@ Still required as this roadmap proceeds:
   handling. The library archive is not a server synchronization protocol.
 - Structured EPUB rendering and edition-stable annotation/reading anchors, with
   migration safeguards for existing paragraph-based imports.
-- Recoverable journals for original EPUB import and orphan-file cleanup before
-  a journal exists. Backup restore and book removal are now journaled.
+- Orphan-file cleanup before a journal exists. Import, backup restore and book
+  removal are now journaled; old pre-journal orphan files are not deleted blindly.
 - Actual Android reading, offline restart, TalkBack, OAuth and two-account checks;
   performance measurements and later iOS/iPad validation. No adb/emulator or phone
   control is available in the current workspace.

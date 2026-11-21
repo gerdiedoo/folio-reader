@@ -979,3 +979,43 @@ step. Only confirmed storage acknowledgement can report a successful rating.
    earlier restore. Already started backend/file operations are not rolled back.
    Native browser sign-in return, back handling, focus and layout still need
    phone checks. Regression tests and bundle exports do not prove these behaviors.
+# Reliability batch after step 27
+
+Use a disposable book in **Folio Dev**. Keep the main Folio app installed.
+
+1. Open a book's details. Check that **Remove book from Library** has its own
+   confirmation and that cover editing contains no removal action. Expand/collapse
+   **Technical book details**. Cancel removal and check the book is still readable.
+2. Open Notebook and Account. Confirm normal reading work contains no SQL/database
+   setup or OAuth provisioning instructions. Account help explains reading spaces.
+3. Add a highlight with a reflection, vocabulary with a mastery rating, and bookmarks.
+   Account → **Portable safety copy** → **Export copy**. Save the ZIP to Files and
+   confirm it appears there; Android sharing-sheet dismissal alone proves no save.
+4. **Choose a copy**, review counts, and cancel. Choose it again and **Restore copies**.
+   Check that originals remain and restored notes/cards/bookmarks link to separate
+   restored books. Reading settings stay unchanged unless their checkbox is selected.
+5. Repeat with original EPUBs excluded. Verify the preview reports fewer originals
+   while available reading text, saved work and covers remain. A missing file must
+   not be counted as present. Test Guest independently from your signed-in space.
+6. Use a corrupt ZIP and a non-Folio ZIP. They must fail before library changes.
+   Use available device storage below the copy's size and check recovery failure is
+   explicit, with existing records kept. Never clear app data to simulate a failure.
+7. During restore or book removal, force-stop **Folio Dev**, then reopen. The reading
+   space should finish its saved recovery before opening. Repeat at several timings;
+   this timing-based phone exercise cannot guarantee hitting every storage write.
+   Automated injected failures exercise each metadata stage separately.
+8. Remove a disposable book offline. Check its local notes, cards and bookmarks are
+   gone after reopening. Sign in/reconnect, open Notebook, and check pending account
+   removal status and Retry removals. Device deletions must survive connection errors.
+9. Import a fresh copy of the numbered resume fixture. New imports use file-specific
+   source anchors. In Scroll, Pages and Line, save progress/highlights/bookmarks and
+   reopen. Check the visible numbered text. Also test the same layout, changed text
+   size, rotation, and large system font. Older imports retain legacy locations.
+10. Complete the new controls with TalkBack. Verify focus after picker/sharing-sheet
+    return and after recovery remounts; inspect small-phone wrapping and keyboard
+    behavior. Check memory and responsiveness with a copy near the supported limit.
+
+These device checks have **not** been run in this workspace. Android/iOS JavaScript
+bundle exports do not establish native file sharing, process recovery, source-anchor
+scroll accuracy, screen-reader usability or memory behavior. Multi-device revision
+conflict handling and full publisher-layout EPUB rendering remain unimplemented.

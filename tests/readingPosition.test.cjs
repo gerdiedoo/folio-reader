@@ -6,6 +6,7 @@ const { test } = require('node:test');
 const ts = require('typescript');
 const filename = path.resolve(__dirname, '../src/lib/readingPosition.ts');
 const loaded = new Module(filename, module);
+loaded.require = name => require('./loadTypeScript.cjs').loadTypeScript(path.resolve(path.dirname(filename), name + '.ts'));
 loaded._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, filename);
 const { savedReadingPosition, scrollPositionAtOffset, applyReadingPosition, mergeCloudBookForDevice, createReadingProgressWriter } = loaded.exports;
 const page = n => ({ pageNumber: n, chapterNumber: '3', locNumber: n * 100 });

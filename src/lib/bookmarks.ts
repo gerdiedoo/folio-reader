@@ -1,4 +1,5 @@
 import type { BookContentPage, Bookmark } from '../types';
+import { resolveSourceAnchor, sourceAnchorForPosition, validSourceAnchor } from './sourceAnchors';
 
 const STORAGE_KEY = 'folio.v1.bookmarks';
 interface BookmarkStorage {
@@ -7,7 +8,9 @@ interface BookmarkStorage {
 }
 
 export function createBookmark(bookId: string, page: BookContentPage): Bookmark {
+  const anchor = sourceAnchorForPosition(page);
   return {
+    ...(anchor ? { anchor } : {}),
     id: `${bookId}:${page.pageNumber}`,
     bookId,
     pageNumber: page.pageNumber,
@@ -20,6 +23,7 @@ export function createBookmark(bookId: string, page: BookContentPage): Bookmark 
 }
 
 export function findBookmarkPage(bookmark: Bookmark, pages: BookContentPage[]): number {
+  if (bookmark.anchor) return resolveSourceAnchor(bookmark.anchor, pages)?.index ?? -1;
   return pages.findIndex(page => page.pageNumber === bookmark.pageNumber && page.locNumber === bookmark.locNumber);
 }
 
@@ -34,7 +38,8 @@ export function readBookmarks(raw: string | null): Bookmark[] {
         !Number.isFinite(record.locNumber) || record.locNumber < 0 ||
         record.id !== `${record.bookId}:${record.pageNumber}` || ids.has(record.id) ||
         typeof record.chapterTitle !== 'string' || typeof record.excerpt !== 'string' ||
-        typeof record.createdAt !== 'string' || !Number.isFinite(Date.parse(record.createdAt))) {
+        typeof record.createdAt !== 'string' || !Number.isFinite(Date.parse(record.createdAt)) ||
+        (record.anchor !== undefined && !validSourceAnchor(record.anchor))) {
       throw new Error('Invalid bookmark storage');
     }
     ids.add(record.id);
