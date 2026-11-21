@@ -879,3 +879,30 @@ APK, check Settings both as a tab and as a sheet over an open book:
 All 352 regression tests and TypeScript pass locally. Native scrolling, focus,
 text measurement and mode handoff still need the phone checks when an APK is
 requested. No visual or device validation is claimed by component event tests.
+
+## Global archive search (step 25, awaiting an APK)
+
+See [search behavior and limits](archive-search.md). Changes remain local; no
+APK is built for this step. When a later APK includes it:
+
+1. Open global Search. Try title/author terms, a quote/reflection, and vocabulary
+   definition/context/chapter terms. Check case/accent-insensitive multi-term
+   matching and literal punctuation. Blank/whitespace queries should prompt for
+   input. This is saved metadata/annotation search; Find in book searches reading
+   text. Search should stay scoped to the current Guest/account reading space.
+2. Switch All, Books, Quotes & notes and Vocabulary. Clear should keep the category;
+   the empty-state reset should clear search and category. Confirm category/result
+   counts and that any loading or error notice prevents a false no-matches claim.
+   Use archive Retry when available; do not corrupt files to force failures.
+3. Open a book result and confirm its details and saved cover style. Open a
+   vocabulary result and confirm the expected word/card, with search closed.
+   Existing rating save/loading/error behavior should remain intact.
+4. Open a quote with a loaded book/passage. It should navigate to that source
+   passage. If the text/passage or book is unavailable, search should retain the
+   quote, disable its jump and offer Library. Notebook jumps have the same App
+   guard. No exact word jump or automatic missing-file repair is promised.
+5. Check compact excerpt cards and long titles at large system text, Charcoal,
+   narrow widths and landscape. Check scrolling while the keyboard is visible,
+   large result sets, TalkBack result/action names, loading/count announcements
+   and focus when Search closes into Library, Reading or a flashcard. Unit tests
+   do not validate native focus, keyboard behavior or scrolling performance.

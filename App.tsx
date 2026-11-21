@@ -26,6 +26,7 @@ import { NotebookView } from './src/components/NotebookView';
 import { ProfileModal } from './src/components/ProfileModal';
 import { JumpTarget, ReaderView } from './src/components/ReaderView';
 import { SearchModal } from './src/components/SearchModal';
+import { canOpenSavedPassage } from './src/lib/archiveSearch';
 import { SettingsSheet } from './src/components/SettingsSheet';
 import { Toast } from './src/components/ui/Toast';
 import { INITIAL_BOOKS, INITIAL_GOAL } from './src/data/initialData';
@@ -652,10 +653,14 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   );
 
   const handleJumpToReader = (bookId: string, pageNumber: number) => {
+    if (libraryLoadState.current !== 'ready' || !canOpenSavedPassage(booksRef.current, customPagesMap, bookId, pageNumber)) {
+      showToast('This saved passage is unavailable on this device. Check the book in Library and import its EPUB if needed.');
+      return;
+    }
     setCurrentBookId(bookId);
     setJumpTarget({ bookId, page: pageNumber, nonce: Date.now() });
     setActiveTab('reading');
-    showToast(`Jumped to Page ${pageNumber}`);
+    showToast(`Opened passage ${pageNumber}`);
   };
 
   const writeBookmarks = async (operation: () => Promise<Bookmark[]>, message: (items: Bookmark[]) => string) => {
@@ -935,6 +940,15 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
       {isSearchOpen && (
         <SearchModal
           books={books}
+          bookPages={customPagesMap}
+          globalCoverStyle={settings.defaultCoverStyle ?? 'image'}
+          libraryStatus={libraryStatus}
+          highlightStatus={highlightArchive.status}
+          vocabularyStatus={lexiconArchive.status}
+          onRetryHighlights={highlightArchive.retry}
+          onRetryVocabulary={lexiconArchive.retry}
+          onShowLibrary={() => { setActiveTab('library'); setBookDetailsId(null); }}
+          onSelectVocabulary={entry => setFlashcardItem(entry)}
           highlights={highlights}
           lexicon={lexicon}
           onClose={() => setIsSearchOpen(false)}

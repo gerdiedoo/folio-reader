@@ -64,7 +64,7 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
     View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView: 'ScrollView', Switch: 'Switch', Image: 'Image',
     useWindowDimensions: () => ({ width: 400, height: 800, fontScale: 1 }),
     PanResponder: { create: handlers => ({ panHandlers: handlers }) },
-    FlatList: 'FlatList', TextInput: 'TextInput', ActivityIndicator: 'ActivityIndicator',
+    FlatList: 'FlatList', SectionList: 'SectionList', TextInput: 'TextInput', ActivityIndicator: 'ActivityIndicator',
     Modal: 'Modal', KeyboardAvoidingView: 'KeyboardAvoidingView', Platform: { OS: 'android' },
     StyleSheet: { create: styles => styles, hairlineWidth: 1 },
     Easing: { linear: x => x },
@@ -2232,4 +2232,78 @@ test('Settings tab selection retains theme drafts and shows the typography previ
   labelled(root, 'Reading Info').onPress(); root = h.render(SettingsSheet, props); assert.doesNotMatch(renderedText(root), /LIVE TYPOGRAPHY PREVIEW/);
   labelled(root, 'Themes').onPress(); root = h.render(SettingsSheet, props); assert.equal(labelled(root, 'Charcoal page theme').accessibilityState.selected, true);
   assert.match(renderedText(root), /LIVE TYPOGRAPHY PREVIEW/); await labelled(root, 'Keep Changes').onPress(); assert.deepEqual(saved, { theme: 'charcoal' }); h.unmount();
+});
+
+function archiveSearchHarness(overrides = {}) {
+  const h = harness({ moduleMocks: { './BookCover': { BookCover: 'BookCover' }, './ui/Chip': { Chip: 'Chip' } } });
+  const { SearchModal } = h.load('../src/components/SearchModal.tsx');
+  const events = [], retries = [];
+  const props = { books: [{ id: 'book', title: 'Café Garden', author: 'Zoë', progressPercent: 1, currentPage: 1, lastOpened: 'Not yet read' }],
+    bookPages: { book: [{ pageNumber: 1 }] }, globalCoverStyle: 'typographic',
+    highlights: [savedHighlight('one', { bookTitle: 'Café Garden', text: 'Morning in the café garden', note: 'A reflection' })],
+    lexicon: [vocabularyCard('word', { word: 'Café', definition: 'A coffee shop' })],
+    libraryStatus: 'ready', highlightStatus: 'ready', vocabularyStatus: 'ready',
+    onRetryHighlights: () => retries.push('quotes'), onRetryVocabulary: () => retries.push('vocabulary'),
+    onShowLibrary: () => events.push('library'), onClose: () => events.push('close'),
+    onSelectBook: id => events.push(['book', id]), onSelectHighlight: (id, page) => events.push(['quote', id, page]), onSelectVocabulary: entry => events.push(['vocabulary', entry]), ...overrides };
+  return { h, props, events, retries, render: () => h.render(SearchModal, props) };
+}
+const archiveList = root => elements(root).find(node => node.type === 'SectionList').props;
+const archiveInput = root => labelled(root, 'Search saved books, quotes, notes and vocabulary');
+function archiveRow(root, kind) {
+  const list = archiveList(root), item = list.sections.flatMap(section => section.data).find(item => item.kind === kind);
+  assert.ok(item, `Missing ${kind} result`); return list.renderItem({ item });
+}
+const archiveFilter = (root, label) => elements(root).find(node => node.type === 'Chip' && node.props.label === label).props.onPress();
+
+test('global search ignores whitespace, filters categories, and distinguishes clearing text from resetting category', () => {
+  const f = archiveSearchHarness(); let root = f.render();
+  archiveInput(root).onChangeText('   '); root = f.render(); assert.equal(archiveList(root).sections.length, 0); assert.match(renderedText(archiveList(root).ListEmptyComponent), /Search saved titles/);
+  archiveInput(root).onChangeText('CAFE'); root = f.render(); assert.deepEqual(archiveList(root).sections.map(section => section.key), ['books', 'quotes', 'vocabulary']);
+  archiveFilter(root, 'Vocabulary'); root = f.render(); assert.deepEqual(archiveList(root).sections.map(section => section.key), ['vocabulary']);
+  labelled(root, 'Clear archive search').onPress(); root = f.render(); assert.equal(archiveInput(root).value, '');
+  assert.equal(elements(root).find(node => node.type === 'Chip' && node.props.label === 'Vocabulary').props.active, true);
+  archiveInput(root).onChangeText('absent'); root = f.render(); assert.match(renderedText(archiveList(root).ListEmptyComponent), /No matches/);
+  labelled(archiveList(root).ListEmptyComponent, 'Reset archive search and category').onPress(); root = f.render();
+  assert.equal(archiveInput(root).value, ''); assert.equal(elements(root).find(node => node.type === 'Chip' && node.props.label === 'All').props.active, true);
+});
+
+test('global book results open details and honor the saved/default cover style instead of blank thumbnails', () => {
+  const f = archiveSearchHarness(); let root = f.render(); archiveInput(root).onChangeText('cafe'); root = f.render();
+  const row = archiveRow(root, 'book');
+  assert.equal(labelled(row, 'Open book details for Café Garden by Zoë').accessibilityRole, 'button');
+  assert.equal(elements(row).find(node => node.type === 'BookCover').props.style, 'typographic');
+  labelled(row, 'Open book details for Café Garden by Zoë').onPress(); assert.deepEqual(f.events, ['close', ['book', 'book']]);
+});
+
+test('quote results jump only to an exact available passage and expose reflection text', () => {
+  const f = archiveSearchHarness(); let root = f.render(); archiveInput(root).onChangeText('reflection'); root = f.render();
+  const row = archiveRow(root, 'quote'), open = labelled(row, 'Open saved quote from Café Garden at passage 1');
+  assert.equal(open.disabled, false); assert.match(renderedText(row), /A reflection/); open.onPress(); assert.deepEqual(f.events, ['close', ['quote', 'book', 1]]);
+});
+
+test('missing or unchecked quote text cannot jump and offers Library without dismissing on a disabled action', () => {
+  for (const overrides of [{ bookPages: {} }, { books: [] }, { bookPages: { book: [{ pageNumber: 2 }] } }, { libraryStatus: 'loading' }]) {
+    const f = archiveSearchHarness(overrides); let root = f.render(); archiveInput(root).onChangeText('reflection'); root = f.render();
+    const row = archiveRow(root, 'quote'), open = labelled(row, 'Open saved quote from Café Garden at passage 1');
+    assert.deepEqual(open.accessibilityState, { disabled: true }); open.onPress(); assert.deepEqual(f.events, []);
+    if (f.props.libraryStatus === 'ready') { labelled(row, 'Find EPUB for Café Garden in Library').onPress(); assert.deepEqual(f.events, ['close', 'library']); }
+  }
+});
+
+test('global vocabulary results open the exact flashcard and block review when its archive is unavailable', () => {
+  const f = archiveSearchHarness(); let root = f.render(); archiveInput(root).onChangeText('coffee'); root = f.render();
+  const row = archiveRow(root, 'vocabulary'); labelled(row, 'Review vocabulary card for Café').onPress(); assert.deepEqual(f.events, ['close', ['vocabulary', f.props.lexicon[0]]]);
+  f.events.length = 0; f.props.vocabularyStatus = 'error'; root = f.render();
+  const blocked = labelled(archiveRow(root, 'vocabulary'), 'Review vocabulary card for Café'); assert.equal(blocked.disabled, true); blocked.onPress(); assert.deepEqual(f.events, []);
+});
+
+test('global search reports partial loading/errors with archive retry instead of a false no-matches state', () => {
+  const f = archiveSearchHarness({ highlights: [], lexicon: [], highlightStatus: 'error', vocabularyStatus: 'loading' });
+  let root = f.render(); archiveInput(root).onChangeText('absent'); root = f.render();
+  assert.match(renderedText(archiveList(root).ListHeaderComponent), /Quotes and notes could not be loaded/); assert.match(renderedText(archiveList(root).ListHeaderComponent), /Loading vocabulary/);
+  assert.doesNotMatch(renderedText(archiveList(root).ListEmptyComponent), /No matches/);
+  labelled(root, 'Retry loading quotes and notes for search').onPress(); assert.deepEqual(f.retries, ['quotes']);
+  archiveFilter(root, 'Books'); root = f.render(); assert.match(renderedText(archiveList(root).ListEmptyComponent), /No matches/); assert.doesNotMatch(renderedText(archiveList(root).ListHeaderComponent), /Quotes and notes could not be loaded/);
+  labelled(root, 'Close archive search').onPress(); assert.deepEqual(f.events, ['close']);
 });
