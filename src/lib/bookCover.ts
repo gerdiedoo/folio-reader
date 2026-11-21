@@ -31,7 +31,8 @@ interface CoverStorage {
   getBooks(): Book[];
   persistPhoto(uri: string, bookId: string): string;
   removeCustomCover(bookId: string, uri: string): boolean;
-  saveBooks(books: Book[]): Promise<void>;
+  saveBooks?(books: Book[]): Promise<void>;
+  savePatch?(bookId: string, patch: CoverPatch): Promise<void>;
   publish(bookId: string, patch: CoverPatch): void;
   upload(book: Book): Promise<unknown>;
 }
@@ -53,7 +54,9 @@ export async function saveBookCover(bookId: string, draft: BookCoverDraft, stora
     patch = { coverStyle: draft.style, coverUrl: uri, coverTint: normalizeCoverTint(draft.tint) };
     const next = storage.getBooks().map(book => book.id === bookId ? { ...book, ...patch } : book);
     if (!next.some(book => book.id === bookId)) throw new CoverSaveError('This book is no longer available in this Library.');
-    await storage.saveBooks(next);
+    if (storage.savePatch) await storage.savePatch(bookId, patch);
+    else if (storage.saveBooks) await storage.saveBooks(next);
+    else throw new CoverSaveError('Cover storage is unavailable.');
   } catch (error) {
     let cleaned = true;
     if (created) { try { cleaned = storage.removeCustomCover(bookId, created); } catch { cleaned = false; } }

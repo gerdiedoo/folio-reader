@@ -127,7 +127,7 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
     const originalRequire = loaded.require.bind(loaded);
     loaded.require = name => {
       if (Object.hasOwn(dependencies, name)) return dependencies[name];
-      if (name.startsWith('.')) return load(path.relative(__dirname, path.resolve(path.dirname(filename), name)) + '.ts');
+      if (name.startsWith('.')) { const target = path.resolve(path.dirname(filename), name); return load(path.relative(__dirname, target) + (fs.existsSync(target + '.ts') ? '.ts' : '.tsx')); }
       return originalRequire(name);
     };
     const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
@@ -1710,10 +1710,9 @@ function removalEditor(onRemove, onClose = () => {}) {
     './BookCover': { BookCover: 'BookCover', CLOTH: { parchment: { bg: '#fff' } } },
     './ui/Chip': { Chip: 'Chip' }, './ui/ProgressBar': { ProgressBar: 'ProgressBar' },
   } });
-  const { CoverEditor } = h.load('../src/components/LibraryView.tsx');
-  const props = { storage: {}, book: { id: 'book', title: 'A book', coverUrl: '' }, globalStyle: 'image', onSave() {}, onRemove, onClose };
-  const render = () => h.render(CoverEditor, props);
-  const root = render(); labelled(root, 'Remove book').onPress();
+  const { BookRemovalDialog } = h.load('../src/components/BookRemovalDialog.tsx');
+  const props = { title: 'A book', onRemove, onClose };
+  const render = () => h.render(BookRemovalDialog, props);
   return { h, render, root: render() };
 }
 
@@ -1727,7 +1726,7 @@ test('book removal waits for confirmation, blocks duplicate/cancel/dismiss actio
   assert.equal(calls, 1); assert.equal(closed, 0);
   assert.deepEqual(labelled(root, label).accessibilityState, { disabled: true, busy: true });
   assert.equal(labelled(root, 'Keep this book').disabled, true);
-  labelled(root, 'Keep this book').onPress(); labelled(root, 'Close book editor').onPress(); root.props.onClose();
+  labelled(root, 'Keep this book').onPress(); root.props.onClose();
   assert.equal(closed, 0);
   resolve({ removed: false, message: 'Book kept because the library could not be saved. Notes were already removed.' });
   await pending; root = f.render();
@@ -1748,10 +1747,11 @@ test('a rejected book-removal callback retains the dialog without claiming that 
   f.h.unmount();
 });
 
-test('cancel before removal returns to editing and late completion cannot close a different screen', async () => {
-  const cancel = removalEditor(async () => assert.fail('Unexpected remove'));
+test('cancel before removal dismisses confirmation and late completion cannot close a different screen', async () => {
+  let dismissed = 0;
+  const cancel = removalEditor(async () => assert.fail('Unexpected remove'), () => dismissed++);
   labelled(cancel.root, 'Keep this book').onPress();
-  assert.ok(labelled(cancel.render(), 'Remove book')); cancel.h.unmount();
+  assert.equal(dismissed, 1); cancel.h.unmount();
   let resolve, closed = false;
   const f = removalEditor(() => new Promise(done => { resolve = done; }), () => { closed = true; });
   const pending = labelled(f.root, 'Remove A book from Library').onPress();
@@ -1783,7 +1783,7 @@ test('Apply cover waits for confirmation, saves selected cloth color, and retain
   labelled(f.root(), 'Apply book cover').onPress(); let root = f.render();
   assert.deepEqual(draft, { style: 'typographic', tint: 'slate', image: { kind: 'keep' } }); assert.equal(calls, 1);
   assert.deepEqual(labelled(root, 'Apply book cover').accessibilityState, { disabled: true, busy: true });
-  assert.equal(labelled(root, 'Remove book').disabled, true); assert.equal(labelled(root, 'Close book editor').disabled, true);
+  assert.equal(elements(root).some(node => node.props?.accessibilityLabel === 'Remove book'), false); assert.equal(labelled(root, 'Close book editor').disabled, true);
   root.props.onClose(); labelled(root, 'Close book editor').onPress(); assert.equal(closed, 0);
   resolve({ saved: false, message: 'Cover could not be saved. Your draft is still here.' }); await pending; root = f.render();
   assert.equal(closed, 0); assert.equal(labelled(root, 'slate cover color').accessibilityState.selected, true);
@@ -2445,4 +2445,21 @@ test('empty library cannot replace an account backup while restore remains avail
   await labelled(root, 'Back up library').onPress(); assert.deepEqual(f.events, []);
   assert.equal(labelled(root, 'Restore library').disabled, false);
   assert.match(renderedText(root), /empty library will not replace your account backup/); f.h.unmount();
+});
+
+test('Notebook keeps infrastructure setup out of the reading workspace and recovers a rejected manual upload', async () => {
+  const f = notebookHarness({ cloud: { upsertBookToSupabase: async () => { throw Error('offline'); }, upsertHighlightToSupabase: async () => true, upsertLexiconToSupabase: async () => true } });
+  let root = f.h.render(f.NotebookView, f.props); assert.doesNotMatch(renderedText(root), /Supabase|SQL|Database Setup/);
+  await labelled(root, 'Upload current records').onPress(); root = f.h.render(f.NotebookView, f.props);
+  assert.equal(labelled(root, 'Upload current records').disabled, false); assert.match(f.messages.at(-1), /Device copies are kept/); f.h.unmount();
+});
+
+test('book details collapse diagnostic identifiers and expose removal independently of cover editing', async () => {
+  const f = libraryHarness({ selectedBookId: 'Amber' }); f.props.books[0] = { ...f.props.books[0], fileLocation: 'file:///private/book.epub', documentIdentifier: 'private-isbn' };
+  let root = f.render(); assert.doesNotMatch(renderedText(root), /private-isbn|file:\/\/\/private/);
+  labelled(root, 'Technical book details').onPress(); root = f.render(); assert.match(renderedText(root), /private-isbn/);
+  labelled(root, 'Manage removal of Amber').onPress(); root = f.render();
+  const dialog = elements(root).find(node => typeof node.type === 'function' && node.props?.title === 'Amber'); assert.ok(dialog);
+  assert.equal(elements(root).some(node => node.type === f.CoverEditor), false);
+  await dialog.props.onRemove(); assert.equal(f.selected.at(-1), null); f.h.unmount();
 });

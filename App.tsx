@@ -26,6 +26,7 @@ import { NotebookView } from './src/components/NotebookView';
 import { ProfileModal } from './src/components/ProfileModal';
 import { JumpTarget, ReaderView } from './src/components/ReaderView';
 import { SearchModal } from './src/components/SearchModal';
+import { createLibraryStore, readingFields } from './src/lib/libraryStore';
 import { canOpenSavedPassage } from './src/lib/archiveSearch';
 import { SettingsSheet } from './src/components/SettingsSheet';
 import { Toast } from './src/components/ui/Toast';
@@ -106,7 +107,8 @@ function applySavedReadingProgress(book: Book, entry: LibraryBackupEntry): Book 
 
 function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; scope: string; hasLegacyData: boolean }) {
   const storage = useMemo(() => createLocalStore(scope), [scope]);
-  const { loadJSON, loadJSONEntryStrict, loadPages, removeBookFiles, saveJSON, saveJSONStrict, savePages } = storage;
+  const { loadJSON, loadPages, removeBookFiles, saveJSON, savePages } = storage;
+  const libraryStore = useMemo(() => createLibraryStore(storage), [storage]);
   const cloud = useMemo(() => createAccountRepository(supabase, user?.id ?? null), [user?.id]);
   const { deleteBookFromSupabase, fetchBooksFromSupabase, fetchReadingGoalFromSupabase, fetchLibraryBackup, saveLibraryBackup, upsertBookToSupabase, upsertReadingGoalToSupabase } = cloud;
   const { message: toastMessage, showMessage: showToast } = useFeedbackMessage();
@@ -129,10 +131,11 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   const spaceActive = useRef(true);
   useEffect(() => { spaceActive.current = true; return () => { spaceActive.current = false; }; }, []);
   const saveReadingProgress = useMemo(() => createReadingProgressWriter(
-    updatedBooks => saveJSONStrict('books', updatedBooks), upsertBookToSupabase,
+    async (_books, changed) => { if (!changed) throw new Error('Missing reading position'); await libraryStore.patch(changed.id, readingFields(changed)); }, upsertBookToSupabase,
     () => { if (spaceActive.current) showToast('Couldn’t save your reading position on this device. Keep the book open and try again.'); },
-  ), [saveJSONStrict, upsertBookToSupabase, showToast]);
+  ), [libraryStore, upsertBookToSupabase, showToast]);
   const libraryLoadState = useRef<'loading' | 'ready' | 'error'>('loading');
+  const removedLibraryIds = useRef(new Set<string>());
   const [libraryStatus, setLibraryStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const importCommitterRef = useRef<ReturnType<typeof createImportCommitter> | null>(null);
   if (!importCommitterRef.current) {
@@ -146,8 +149,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
             ? 'Your library is still loading. Try importing again in a moment.'
             : 'Your saved library could not be loaded. Restart the app before importing more books.');
         }
-        const next = [book, ...booksRef.current.filter(item => item.id !== book.id)];
-        await saveJSONStrict('books', next);
+        await libraryStore.add(book);
         // Update the ref immediately so consecutive imports cannot use an old render.
         booksRef.current = [book, ...booksRef.current.filter(item => item.id !== book.id)];
         setBooks(previous => [book, ...previous.filter(item => item.id !== book.id)]);
@@ -232,11 +234,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
 
     (async () => {
       const [lBooks, lGoal, lReadingDay, lRecoveryBooks] = await Promise.all([
-        loadJSONEntryStrict('books').then(entry => {
-          if (!entry.present) return null;
-          if (!Array.isArray(entry.value)) throw new Error('Invalid library index');
-          return entry.value as Book[];
-        }).catch(error => {
+        libraryStore.load().then(snapshot => { if (!cancelled) removedLibraryIds.current = new Set(snapshot.removedBookIds); return snapshot.books; }).catch(error => {
           libraryLoadState.current = 'error';
           if (!cancelled) setLibraryStatus('error');
           console.warn('Could not load the library index:', error);
@@ -275,17 +273,16 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
         ]);
         if (cancelled) return;
 
-        if (sbBooks?.length) {
-          setBooks((prev) => {
-            const map = new Map<string, Book>();
-            prev.forEach((b) => map.set(b.id, b));
-            sbBooks.forEach((b) => {
-              // Existing device entries retain their progress and local file metadata.
-              const local = map.get(b.id);
-              map.set(b.id, mergeCloudBookForDevice(local, b));
-            });
-            return Array.from(map.values());
+        if (sbBooks?.length && libraryLoadState.current === 'ready') {
+          const snapshot = await libraryStore.mergeRemote(sbBooks);
+          if (cancelled) return;
+          const incoming = snapshot.books;
+          setBooks(previous => {
+            const map = new Map(previous.map(book => [book.id, book]));
+            incoming.forEach(book => { if (!removedLibraryIds.current.has(book.id) && !map.has(book.id)) map.set(book.id, book); });
+            return Array.from(map.values()).filter(book => !removedLibraryIds.current.has(book.id));
           });
+          if (snapshot.skipped) showToast('Some cloud book records could not be read. Device copies have been kept.');
         }
         if (sbGoal) {
           mergedGoal = sbGoal;
@@ -314,9 +311,6 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   }, [showToast]);
 
   // ---- Persist local copies (only after hydration so we never clobber saved data) ----
-  useEffect(() => {
-    if (hydrated && libraryLoadState.current === 'ready') saveJSON('books', books);
-  }, [books, hydrated]);
   useEffect(() => {
     if (hydrated) saveJSON('goal', readingGoal);
   }, [readingGoal, hydrated]);
@@ -502,8 +496,11 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
         const existingBook = books.find((book) => normalizeBookMetadata(book.title) === titleKey);
         if (existingBook && typeof entry.currentPage === 'number') {
           const updatedBook = applySavedReadingProgress(existingBook, entry);
-          setBooks((previous) => previous.map((book) => book.id === updatedBook.id ? updatedBook : book));
-          void upsertBookToSupabase(updatedBook);
+          const patch = readingFields(updatedBook);
+          await libraryStore.patch(updatedBook.id, patch);
+          booksRef.current = booksRef.current.map(book => book.id === updatedBook.id ? { ...book, ...patch } : book);
+          setBooks(previous => previous.map(book => book.id === updatedBook.id ? { ...book, ...patch } : book));
+          void upsertBookToSupabase({ ...existingBook, ...patch });
         }
         alreadyInLibrary++;
         reportBookComplete();
@@ -626,7 +623,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
       const updatedBooks = booksRef.current.map((item) => (item.id === bookId ? updatedBook : item));
       booksRef.current = updatedBooks;
       setBooks(updatedBooks);
-      if (libraryLoadState.current === 'ready') void saveJSON('books', updatedBooks);
+      if (libraryLoadState.current === 'ready') void libraryStore.patch(bookId, { lastOpened: updatedBook.lastOpened }).catch(() => { if (spaceActive.current) showToast('Could not save the last-opened date on this device.'); });
       void upsertBookToSupabase(updatedBook);
     }
     setBookDetailsId(null);
@@ -731,9 +728,9 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
         getBooks: () => booksRef.current,
         persistPhoto: storage.persistCoverImage,
         removeCustomCover: storage.removeCustomCover,
-        saveBooks: async updated => {
+        savePatch: async (id, patch) => {
           if (!spaceActive.current) throw new Error('Reading space changed');
-          await saveJSONStrict('books', updated);
+          await libraryStore.patch(id, patch);
         },
         publish: (id, patch) => {
           booksRef.current = booksRef.current.map(book => book.id === id ? { ...book, ...patch } : book);
@@ -772,7 +769,8 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
         vocabulary: () => lexiconArchive.removeBook(bookId),
         saveLibrary: async () => {
           if (!spaceActive.current) throw new Error('Reading space changed');
-          await saveJSONStrict('books', booksRef.current.filter(item => item.id !== bookId));
+          await libraryStore.remove(bookId);
+          removedLibraryIds.current.add(bookId);
         },
         publishRemoval: () => {
           // Keep imports/other book edits completed while annotation cleanup was pending.

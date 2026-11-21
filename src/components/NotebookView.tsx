@@ -2,9 +2,8 @@ import * as Clipboard from 'expo-clipboard';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as Speech from 'expo-speech';
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { SUPABASE_SQL_SCHEMA } from '../lib/supabase';
 import type { createAccountRepository } from '../lib/cloudAccount';
 import { colors, F, NAV_SPACE, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
@@ -60,7 +59,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   bottomInset,
 }) => {
   const colors = useAppTheme();
-  const { testSupabaseConnection, upsertBookToSupabase, upsertHighlightToSupabase, upsertLexiconToSupabase } = cloud;
+  const { upsertBookToSupabase, upsertHighlightToSupabase, upsertLexiconToSupabase } = cloud;
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [selectedBookId, setSelectedBookId] = useState<string>('all');
   const [isBookPickerOpen, setIsBookPickerOpen] = useState(false);
@@ -88,8 +87,8 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   const [newQuoteNote, setNewQuoteNote] = useState('');
   const [newQuoteColor, setNewQuoteColor] = useState(HIGHLIGHT_COLORS[0]);
 
-  const [isSchemaOpen, setIsSchemaOpen] = useState(false);
-  const [dbStatus, setDbStatus] = useState('Ready to test');
+  const uploadPending = useRef(false), mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   const selectedBook = selectedBookId === 'all' ? undefined : books.find((b) => b.id === selectedBookId);
   const selectedBookLabel = selectedBookId === 'all' ? 'All Books' : selectedBook?.title ?? 'Selected book unavailable';
@@ -177,31 +176,18 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   };
 
   const handleSyncCloud = async () => {
-    if (archivesUnavailable || isSyncing) return;
-    setIsSyncing(true);
-    const conn = await testSupabaseConnection();
-    setDbStatus(conn.message);
-    if (!conn.connected) { setIsSyncing(false); showToast(conn.message); return; }
-    // Push everything local → Supabase (the web version only tested the connection)
-    const results = await Promise.all([
-      ...books.map(upsertBookToSupabase),
-      ...highlights.map(upsertHighlightToSupabase),
-      ...lexicon.map(upsertLexiconToSupabase),
-    ]);
-    setIsSyncing(false);
-    const failed = results.filter((ok) => !ok).length;
-    if (failed === 0) {
-      setLastSyncTime('Just now');
-      showToast('Uploaded this device’s current records to Supabase.');
-    } else {
-      showToast(`${failed} item(s) failed to upload — check Supabase Config`);
-    }
-  };
-
-  const handleTestSupabase = async () => {
-    setDbStatus('Testing connection...');
-    const res = await testSupabaseConnection();
-    setDbStatus(res.message);
+    if (!mounted.current || archivesUnavailable || uploadPending.current) return;
+    uploadPending.current = true; setIsSyncing(true);
+    try {
+      const results = await Promise.all([
+        ...books.map(upsertBookToSupabase), ...highlights.map(upsertHighlightToSupabase), ...lexicon.map(upsertLexiconToSupabase),
+      ]);
+      if (!mounted.current) return;
+      const failed = results.filter(ok => !ok).length;
+      if (!failed) { setLastSyncTime('Just now'); showToast('Uploaded current records to your account.'); }
+      else showToast(`${failed} records could not be uploaded. Check your sign-in and connection, then try again. Device copies are kept.`);
+    } catch { if (mounted.current) showToast('Cloud upload could not be confirmed. Device copies are kept. Check your connection and try again.'); }
+    finally { uploadPending.current = false; if (mounted.current) setIsSyncing(false); }
   };
 
   const playPronunciation = (word: string) => {
@@ -524,9 +510,6 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
           Export highlights and vocabulary for {selectedBookId === 'all' ? 'all books' : selectedBookLabel}. Search and entry filters do not limit the export.
           {'\n'}Cloud upload sends all current records in this reading space. Last upload: {lastSyncTime}. Review changes from other devices before uploading.
         </Text>
-        <Pressable onPress={() => setIsSchemaOpen(true)} style={styles.configBtn}>
-          <Text style={styles.configText}>Supabase Config</Text>
-        </Pressable>
 
         <View style={{ flexDirection: 'row', gap: 10 }}>
           <Pressable onPress={handleExportAll} accessibilityRole="button" accessibilityLabel="Export notes" disabled={archivesUnavailable} accessibilityState={{ disabled: archivesUnavailable }} style={[styles.hubBtn, { backgroundColor: colors.primaryContainer }]}>
@@ -543,7 +526,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
           >
             <Icon name="sync" size={18} color={colors.primary} spin={isSyncing} />
             <Text style={[styles.hubBtnText, { color: colors.onSurface }]}>
-              {isSyncing ? 'Uploading…' : 'Upload to Supabase'}
+              {isSyncing ? 'Uploading…' : 'Upload to account'}
             </Text>
           </Pressable>
         </View>
@@ -615,48 +598,6 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
         </ModalShell>
       )}
 
-      {/* Supabase schema dialog */}
-      {isSchemaOpen && (
-        <ModalShell onClose={() => setIsSchemaOpen(false)} maxWidth={520} cardStyle={{ maxHeight: '90%' }}>
-          <View style={styles.dlgHead}>
-            <Text style={styles.dlgTitle}>Supabase Database Setup</Text>
-            <Pressable onPress={() => setIsSchemaOpen(false)} hitSlop={8}>
-              <Icon name="close" size={20} color={colors.muted} />
-            </Pressable>
-          </View>
-          <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
-            <Text style={styles.hubBody}>
-              Open the Supabase SQL Editor, paste this script, and run it to create the tables Folio syncs to.
-            </Text>
-            <ScrollView style={styles.codeScroll} nestedScrollEnabled>
-              <Text selectable style={styles.code}>
-                {SUPABASE_SQL_SCHEMA}
-              </Text>
-            </ScrollView>
-            <View style={styles.statusRow}>
-              <Text style={styles.statusText}>{dbStatus}</Text>
-              <Pressable onPress={handleTestSupabase}>
-                <Text style={styles.configText}>Test connection</Text>
-              </Pressable>
-            </View>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              <Pressable
-                onPress={async () => {
-                  await Clipboard.setStringAsync(SUPABASE_SQL_SCHEMA);
-                  showToast('SQL script copied to clipboard');
-                }}
-                style={[styles.hubBtn, { backgroundColor: colors.surfaceContainer }]}
-              >
-                <Icon name="content_copy" size={17} color={colors.primary} />
-                <Text style={[styles.hubBtnText, { color: colors.onSurface }]}>Copy SQL</Text>
-              </Pressable>
-              <Pressable onPress={() => setIsSchemaOpen(false)} style={[styles.hubBtn, { backgroundColor: colors.primaryContainer }]}>
-                <Text style={[styles.hubBtnText, { color: '#fff' }]}>Done</Text>
-              </Pressable>
-            </View>
-          </ScrollView>
-        </ModalShell>
-      )}
     </ScrollView>
   );
 };

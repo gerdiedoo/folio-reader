@@ -36,10 +36,10 @@ export function mergeCloudBookForDevice(local: Book | undefined, remote: Book): 
 }
 
 /** Local saves do not wait for the network; cloud progress stays ordered per book. */
-export function createReadingProgressWriter(saveBooks: (books: Book[]) => Promise<void>, uploadBook: (book: Book) => Promise<unknown>, onSaveError: () => void) {
+export function createReadingProgressWriter(saveBooks: (books: Book[], changedBook?: Book) => Promise<void>, uploadBook: (book: Book) => Promise<unknown>, onSaveError: () => void) {
   const uploads = new Map<string, Promise<unknown>>();
   return (books: Book[], book: Book): Promise<boolean> => {
-    const saved = Promise.resolve().then(() => saveBooks(books)).then(() => true, () => { onSaveError(); return false; });
+    const saved = Promise.resolve().then(() => saveBooks(books, book)).then(() => true, () => { onSaveError(); return false; });
     const upload = (uploads.get(book.id) ?? Promise.resolve()).catch(() => undefined).then(async () => {
       if (await saved) await uploadBook(book);
     }).catch(() => undefined);

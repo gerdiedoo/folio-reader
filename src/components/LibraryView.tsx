@@ -21,6 +21,7 @@ import { colors, F, NAV_SPACE, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
 import { Book, BookContentPage, ReadingGoal } from '../types';
 import { LibraryRecoveryBook } from '../lib/catalog';
+import { BookRemovalDialog } from './BookRemovalDialog';
 import { BookCover, CLOTH, ClothTint } from './BookCover';
 import { BrowseBooksScreen } from './BrowseBooksScreen';
 import { Chip } from './ui/Chip';
@@ -116,6 +117,16 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [reimportingId, setReimportingId] = useState<string | null>(null);
   const [browseOpen, setBrowseOpen] = useState(false);
   const [editing, setEditing] = useState<Book | null>(null);
+  const [removingBook, setRemovingBook] = useState<Book | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const libraryMounted = useRef(true);
+  useEffect(() => { libraryMounted.current = true; return () => { libraryMounted.current = false; }; }, []);
+  useEffect(() => { setShowDiagnostics(false); }, [selectedBookId]);
+  const removalDialog = removingBook ? <BookRemovalDialog title={removingBook.title} onClose={() => setRemovingBook(null)} onRemove={async () => {
+    const result = await onRemoveBook(removingBook.id);
+    if (result.removed && libraryMounted.current) { setRemovingBook(null); onSelectBook(null); }
+    return result;
+  }} /> : null;
   const selectedBook = books.find((book) => book.id === selectedBookId) ?? null;
 
   useEffect(() => {
@@ -285,12 +296,6 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               <Text style={styles.detailsLabel}>Reading passages</Text>
               <Text style={styles.detailsValue}>{selectedBook.totalPages}</Text>
             </View>
-            {selectedBook.totalLoc ? (
-              <View style={styles.detailsInfoRow}>
-                <Text style={styles.detailsLabel}>Reading locations</Text>
-                <Text style={styles.detailsValue}>{selectedBook.currentLoc ?? 0} of {selectedBook.totalLoc}</Text>
-              </View>
-            ) : null}
             <View style={styles.detailsInfoRow}>
               <Text style={styles.detailsLabel}>Time remaining</Text>
               <Text style={styles.detailsValue}>{selectedBook.minutesLeft} min</Text>
@@ -311,6 +316,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               <Text style={styles.detailsLabel}>File size</Text>
               <Text style={styles.detailsValue}>{formatFileSize(selectedBook.fileSizeBytes)}</Text>
             </View>
+            <Pressable onPress={() => setShowDiagnostics(value => !value)} accessibilityRole="button" accessibilityLabel="Technical book details" accessibilityState={{ expanded: showDiagnostics }} style={styles.smallAction}>
+              <Text style={styles.reset}>{showDiagnostics ? 'Hide technical details' : 'Technical details'}</Text>
+            </Pressable>
+            {showDiagnostics && <View>
             <View style={styles.detailsInfoRow}>
               <Text style={styles.detailsLabel}>EPUB identifier</Text>
               <Text selectable style={styles.detailsValue}>{selectedBook.documentIdentifier || 'Not provided'}</Text>
@@ -325,6 +334,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 {selectedBook.fileLocation || 'Unavailable'}
               </Text>
             </View>
+            </View>}
           </View>
         </View>
 
@@ -349,6 +359,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           <Icon name="palette" size={18} color={colors.primary} />
           <Text style={styles.detailsCustomizeText}>Customize cover</Text>
         </Pressable>
+        <Pressable onPress={() => { if (libraryStatus === 'ready') setRemovingBook(selectedBook); }} disabled={libraryStatus !== 'ready'} accessibilityRole="button" accessibilityLabel={`Manage removal of ${selectedBook.title}`} style={styles.removeBtn}>
+          <Text style={styles.removeText}>Remove book from Library</Text>
+        </Pressable>
+        {removalDialog}
 
       </ScrollView>
     );
@@ -640,13 +654,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         />
       )}
 
+      {removalDialog}
       {editing && (
         <CoverEditor
           book={editing}
           globalStyle={globalCoverStyle}
           onClose={() => setEditing(null)}
           onSave={draft => onUpdateBookCover(editing.id, draft)}
-          onRemove={() => onRemoveBook(editing.id)}
         />
       )}
 
@@ -662,40 +676,23 @@ export const CoverEditor: React.FC<{
   globalStyle: 'image' | 'typographic';
   onClose: () => void;
   onSave: (draft: BookCoverDraft) => Promise<CoverSaveResult>;
-  onRemove: () => Promise<BookRemovalResult>;
-}> = ({ book, globalStyle, onClose, onSave, onRemove }) => {
+}> = ({ book, globalStyle, onClose, onSave }) => {
   const colors = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [style, setStyle] = useState<'image' | 'typographic'>(book.coverStyle || globalStyle);
   const [url, setUrl] = useState(book.coverUrl?.startsWith('http') ? book.coverUrl : '');
   const [pickedUri, setPickedUri] = useState<string | undefined>(undefined);
   const [tint, setTint] = useState<ClothTint>(() => normalizeCoverTint(book.coverTint));
-  const [confirmingRemove, setConfirmingRemove] = useState(false);
-  const [removing, setRemoving] = useState(false);
-  const [removalError, setRemovalError] = useState<string | null>(null);
-  const removalPending = useRef(false);
   const savePending = useRef(false);
   const photoPending = useRef(false);
   const [saving, setSaving] = useState(false);
   const [choosingPhoto, setChoosingPhoto] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const busy = removing || saving || choosingPhoto;
-  const working = () => removalPending.current || savePending.current || photoPending.current;
+  const busy = saving || choosingPhoto;
+  const working = () => savePending.current || photoPending.current;
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const close = () => { if (!working()) onClose(); };
-  const remove = async () => {
-    if (!mounted.current || working()) return;
-    removalPending.current = true; setRemoving(true); setRemovalError(null);
-    try {
-      const result = await onRemove();
-      if (!mounted.current) return;
-      if (result.removed) onClose();
-      else setRemovalError(result.message);
-    } catch { if (mounted.current) setRemovalError('Removal could not be confirmed. Check this book in Library before trying again.'); }
-    finally { removalPending.current = false; if (mounted.current) setRemoving(false); }
-  };
-
   // URL text is separate from the picked image draft; nothing is copied until Apply.
   const previewUri = pickedUri ?? (/^https?:\/\//i.test(url.trim()) ? url.trim() : book.coverUrl);
   const apply = async () => {
@@ -740,33 +737,12 @@ export const CoverEditor: React.FC<{
   return (
     <ModalShell onClose={close} maxWidth={400} cardStyle={{ maxHeight: '88%' }}>
       <View style={styles.editHead}>
-        <Text accessibilityRole="header" style={styles.editTitle}>{confirmingRemove ? 'Remove book?' : 'Customize Thumbnail'}</Text>
+        <Text accessibilityRole="header" style={styles.editTitle}>Customize cover</Text>
         <Pressable onPress={close} disabled={busy} accessibilityRole="button" accessibilityLabel="Close book editor" accessibilityState={{ disabled: busy }} style={{ minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' }}>
           <Icon name="close" size={20} color={colors.muted} />
         </Pressable>
       </View>
 
-      {confirmingRemove ? (
-        <ScrollView contentContainerStyle={styles.removeConfirm}>
-          <Icon name="delete_outline" size={32} color={colors.danger} />
-          <Text style={styles.removeConfirmText}>
-            Remove “{book.title}” and its saved files, bookmarks, highlights, notes and vocabulary from this Library.
-          </Text>
-          <Text style={styles.removeConfirmText}>
-            Export any notes or cards you want to keep first. If signed in, Folio also attempts cloud cleanup;
-            an unremoved cloud copy may return after reloading.
-          </Text>
-          <View style={styles.removeConfirmActions}>
-            <Pressable onPress={() => { if (!working()) { setConfirmingRemove(false); setRemovalError(null); } }} disabled={busy} accessibilityRole="button" accessibilityLabel="Keep this book" accessibilityState={{ disabled: busy }} style={[styles.cancelRemoveBtn, removing && { opacity: 0.5 }]}>
-              <Text style={styles.cancelRemoveText}>Cancel</Text>
-            </Pressable>
-            <Pressable onPress={remove} disabled={busy} accessibilityRole="button" accessibilityLabel={`Remove ${book.title} from Library`} accessibilityState={{ disabled: busy, busy: removing }} style={styles.confirmRemoveBtn}>
-              <Text style={styles.confirmRemoveText}>{removing ? 'Removing…' : 'Remove'}</Text>
-            </Pressable>
-          </View>
-          {removalError && <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={styles.removeConfirmText}>{removalError}</Text>}
-        </ScrollView>
-      ) : (
         <ScrollView contentContainerStyle={{ padding: 16, gap: 14 }} keyboardShouldPersistTaps="handled">
           <View style={{ alignItems: 'center' }}>
             <BookCover
@@ -846,12 +822,7 @@ export const CoverEditor: React.FC<{
           <Pressable onPress={apply} disabled={busy} accessibilityRole="button" accessibilityLabel="Apply book cover" accessibilityState={{ disabled: busy, busy: saving }} style={styles.saveBtn}>
             <Text style={styles.saveText}>{saving ? 'Saving…' : 'Apply'}</Text>
           </Pressable>
-          <Pressable onPress={() => { if (!working()) { setRemovalError(null); setConfirmingRemove(true); } }} disabled={busy} accessibilityRole="button" accessibilityLabel="Remove book" accessibilityState={{ disabled: busy }} style={styles.removeBtn}>
-            <Icon name="delete_outline" size={18} color={colors.danger} />
-            <Text style={styles.removeText}>Remove Book</Text>
-          </Pressable>
         </ScrollView>
-      )}
     </ModalShell>
   );
 };
