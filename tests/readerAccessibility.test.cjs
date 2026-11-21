@@ -127,6 +127,7 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
     const originalRequire = loaded.require.bind(loaded);
     loaded.require = name => {
       if (Object.hasOwn(dependencies, name)) return dependencies[name];
+      if (name.endsWith('.png')) return { bundledAsset: path.resolve(path.dirname(filename), name) };
       if (name.startsWith('.')) { const target = path.resolve(path.dirname(filename), name); return load(path.relative(__dirname, target) + (fs.existsSync(target + '.ts') ? '.ts' : '.tsx')); }
       return originalRequire(name);
     };
@@ -2499,4 +2500,13 @@ test('account-removal retries back off, pause in background, and cancel late wor
   const late = harness({ runEffects: true, moduleMocks: { './deletionRetries': { retryRecordedDeletions: () => new Promise(done => { resolve = done; }) } } });
   const hook = late.load('../src/lib/useDeletionRetries.ts').useDeletionRetries;
   late.render(() => hook({}, {}, true, '1')); late.unmount(); const writes = late.stateWrites(); resolve({ pending: 1, failed: 1 }); await new Promise(done => setImmediate(done)); assert.equal(late.stateWrites(), writes); assert.equal(late.timers.size, 0);
+});
+
+test('the upper-left Folio mark uses the bundled PNG offline and its Library action remains available', () => {
+  const h = harness(); const { Header } = h.load('../src/components/Header.tsx'); const selected = [];
+  const root = h.render(Header, { activeTab: 'library', onTabChange: value => selected.push(value), onOpenSearch() {}, onOpenProfile() {} });
+  const mark = elements(root).find(node => node.props?.testID === 'folio-header-mark');
+  assert.ok(mark); assert.equal(mark.type, 'Image'); assert.equal(mark.props.source.bundledAsset, path.resolve(__dirname, '../assets/folio-logo.png'));
+  assert.equal(fs.existsSync(mark.props.source.bundledAsset), true); assert.equal(mark.props.source.uri, undefined);
+  assert.equal(mark.props.accessible, false); labelled(root, 'Folio Library').onPress(); assert.deepEqual(selected, ['library']);
 });

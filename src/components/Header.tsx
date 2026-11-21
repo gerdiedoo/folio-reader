@@ -1,7 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { FOLIO_LOGO_URL } from '../data/initialData';
 import { colors, type } from '../theme';
 import { useAppTheme } from '../AppTheme';
 import { useReducedMotion } from '../MotionPreferences';
@@ -9,6 +8,7 @@ import { TabType } from '../types';
 import { Icon } from './ui/Icon';
 
 export const HEADER_HEIGHT = 64;
+const FOLIO_LOGO = require('../../assets/folio-logo.png');
 
 interface HeaderProps {
   activeTab: TabType;
@@ -104,7 +104,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           {!detailsTitle ? (
             <Pressable onPress={() => onTabChange('library')} accessibilityRole="button" accessibilityLabel="Folio Library" style={styles.brand}>
-              <Image source={{ uri: FOLIO_LOGO_URL }} style={styles.logo} resizeMode="contain" />
+              <Image testID="folio-header-mark" source={FOLIO_LOGO} accessible={false} style={styles.logo} resizeMode="contain" />
               <View style={{ flexShrink: 1 }}>
                 <Text style={[styles.brandLabel, { color: palette.muted }]}>FOLIO</Text>
                 <Text style={[styles.title, { color: palette.onSurface }]} numberOfLines={1}>
@@ -167,8 +167,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderRadius: 8,
   },
-  brand: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
-  logo: { height: 32, width: 32 },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minHeight: 48 },
+  logo: { height: 32, width: 32, backgroundColor: '#F7F2E9', borderRadius: 7 },
   brandLabel: { ...type.labelSm, color: colors.muted, lineHeight: 12, letterSpacing: 1.2 },
   title: { ...type.headlineSm, color: colors.onSurface, lineHeight: 24, marginTop: 2 },
   right: { flexDirection: 'row', alignItems: 'center', gap: 4 },
