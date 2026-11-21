@@ -26,7 +26,7 @@ async function fixture(body, { missingFile = false, missingReference = false, em
   return zip.generateAsync({ type: 'uint8array' });
 }
 
-function parser(bytes, { copyFails = false, cleanupFails = false, coverWrites = null } = {}) {
+function parser(bytes, { copyFails = false, cleanupFails = false, coverWrites = null, copyWait = null, onCopyStarted = () => {} } = {}) {
   const writes = [];
   class File {
     constructor(...parts) { this.size = bytes.length; this.uri = parts.join('/'); this.exists = false; }
@@ -48,9 +48,9 @@ function parser(bytes, { copyFails = false, cleanupFails = false, coverWrites = 
       if (name === './localStore') return {
         coversDir() { writes.push('cover'); if (coverWrites) return 'file:///covers'; throw new Error('Unexpected cover access'); },
         persistBookFile() {
-          writes.push('epub');
+          writes.push('epub'); onCopyStarted();
           if (copyFails) throw new importHelpers.ImportStorageError('Could not save the EPUB file. Check available storage.');
-          return 'file:///saved.epub';
+          return copyWait ? copyWait.then(() => 'file:///saved.epub') : 'file:///saved.epub';
         },
         removeBookFiles() {
           writes.push('cleanup');
@@ -225,4 +225,11 @@ test('native journey fixture imports all illustrated passages and its working fr
   assert.ok(blocks.some(block=>block.targets.includes('note')));
   assert.ok(blocks.flatMap(block=>block.runs).some(run=>run.href==='EPUB/body.xhtml#note'));
   assert.ok(blocks.some(block=>block.text==='Yes.'));assert.ok(blocks.some(block=>block.text==='THE END.'));
+});
+
+test('EPUB preparation does not return an unresolved original-file copy as a completed import',async()=>{
+ let release,started;const copyWait=new Promise(done=>release=done),copyStarted=new Promise(done=>started=done),input=parser(await fixture('<p>Keep the original.</p>'),{copyWait,onCopyStarted:started});
+ let completed=false;const preparing=input.parse().then(result=>{completed=true;return result;});
+ await copyStarted;
+ assert.ok(input.writes.includes('epub'));assert.equal(completed,false);release();assert.equal((await preparing).book.fileLocation,'file:///saved.epub');
 });

@@ -120,3 +120,10 @@ large-book memory/energy measurements, and iOS/iPad native journeys. Emulator
 screenshots and Hermes exports cannot establish those outcomes. Streaming large
 archives, a complete publisher-CSS engine, and old orphan-file collection remain
 future work with explicit current limits.
+
+Native execution found an SDK 57 integration race in the original-file and photo
+copy adapters: `File.copy()` now returns a Promise. Both adapters and their callers
+now await completion before verifying files or publishing metadata. Deferred-copy
+regressions model the installed SDK API, rather than a synchronous test double.
+The app must be rebuilt for this fix; workflow-only APK reuse rejects changed
+application files or compiler settings.

@@ -39,7 +39,8 @@ function device({ fixedClock = false } = {}) {
       files.set(this.uri, control.failAt === 'write' ? 'partial' : data);
       if (control.failAt === 'write') throw Error('Disk full');
     }
-    copy(destination) {
+    async copy(destination) {
+      await control.copyGate?.promise;
       files.set(destination.uri, control.failAt === 'copy' ? 'partial' : files.get(this.uri));
       if (control.failAt === 'copy') throw Error('Copy failed');
     }
@@ -69,13 +70,13 @@ function device({ fixedClock = false } = {}) {
       throw Error('Unexpected dependency ' + name);
     },
   });
-  return { ...control, store: exports, asyncStorage, storage, setFailure(value) { control.failAt = value; } };
+  return { ...control, control, store: exports, asyncStorage, storage, setFailure(value) { control.failAt = value; } };
 }
 
 test('filesystem adapter page writes and original EPUB copies return only after storing the data', async () => {
   const d = device();
   d.files.set('file:///picked.epub', 'original EPUB');
-  assert.equal(d.store.persistBookFile('file:///picked.epub', 'new'), 'file:///docs/folio/books/new.epub');
+  assert.equal(await d.store.persistBookFile('file:///picked.epub', 'new'), 'file:///docs/folio/books/new.epub');
   d.store.savePages('new', pages);
   assert.equal(d.files.get('file:///docs/folio/books/new.epub'), 'original EPUB');
   assert.deepEqual(JSON.parse(d.files.get('file:///docs/folio/pages/new.json')), pages);
@@ -93,15 +94,15 @@ test('strict JSON entries distinguish a missing key from a stored null without h
 });
 
 for (const failure of ['mkdir', 'write']) {
-  test(`page ${failure} failure is surfaced instead of swallowed`, () => {
+  test(`page ${failure} failure is surfaced instead of swallowed`, async () => {
     const d = device(); d.setFailure(failure);
     assert.throws(() => d.store.savePages('new', pages), error => error instanceof ImportStorageError && /reading text/.test(error.message));
   });
 }
 
-test('original EPUB copy failure is surfaced instead of returning an absent file location', () => {
+test('original EPUB copy failure is surfaced instead of returning an absent file location', async () => {
   const d = device(); d.setFailure('copy');
-  assert.throws(() => d.store.persistBookFile('file:///picked.epub', 'new'), /Could not save the EPUB file/);
+  await assert.rejects(d.store.persistBookFile('file:///picked.epub', 'new'), /Could not save the EPUB file/);
 });
 
 test('rollback removes partial import data and owned cover, without deleting the chosen source or other books', () => {
@@ -281,20 +282,20 @@ test('returning to A waits for its previous pending metadata write; B does not w
   assert.equal((await reading)[0].title, 'Newest A');
 });
 
-test('picked cover photos are copied to unique scoped files and the source remains intact', () => {
+test('picked cover photos are copied to unique scoped files and the source remains intact', async () => {
   const d = device(), scoped = d.store.createLocalStore('account-A');
   d.files.set('file:///picked/photo.jpeg', 'photo bytes');
-  const first = scoped.persistCoverImage('file:///picked/photo.jpeg', 'book');
-  const second = scoped.persistCoverImage('file:///picked/photo.jpeg', 'book');
+  const first = await scoped.persistCoverImage('file:///picked/photo.jpeg', 'book');
+  const second = await scoped.persistCoverImage('file:///picked/photo.jpeg', 'book');
   assert.notEqual(first, second); assert.ok(first.startsWith('file:///docs/folio/accounts/account-A/covers/custom-book-'));
   assert.equal(d.files.get(first), 'photo bytes'); assert.equal(d.files.get('file:///picked/photo.jpeg'), 'photo bytes');
   assert.equal(scoped.removeCustomCover('book', first), true); assert.ok(!d.files.has(first)); assert.ok(d.files.has(second));
 });
 
 for (const failure of ['mkdir', 'copy']) {
-  test(`a cover ${failure} failure rejects instead of returning a cache URI and cleans any partial copy`, () => {
+  test(`a cover ${failure} failure rejects instead of returning a cache URI and cleans any partial copy`, async () => {
     const d = device(); d.files.set('file:///picked/photo.jpg', 'original'); d.setFailure(failure);
-    assert.throws(() => d.store.persistCoverImage('file:///picked/photo.jpg', 'book'), /Could not save the selected photo/);
+    await assert.rejects(d.store.persistCoverImage('file:///picked/photo.jpg', 'book'), /Could not save the selected photo/);
     assert.equal(d.files.get('file:///picked/photo.jpg'), 'original');
     assert.ok(![...d.files.keys()].some(uri => uri.includes('/covers/custom-')));
   });
@@ -314,27 +315,27 @@ test('custom-cover cleanup never removes original, imported, other-book, other-a
   d.files.set(owned, 'old custom cover'); assert.equal(scoped.removeCustomCover('book', owned), true); assert.ok(!d.files.has(owned));
 });
 
-test('invalid photo sources and empty copies cannot become saved cover paths', () => {
+test('invalid photo sources and empty copies cannot become saved cover paths', async () => {
   for (const uri of ['https://example.com/photo.jpg', 'file:///empty.jpg']) {
     const d = device(); d.files.set('file:///empty.jpg', '');
-    assert.throws(() => d.store.persistCoverImage(uri, 'book'), /Could not save the selected photo/);
+    await assert.rejects(d.store.persistCoverImage(uri, 'book'), /Could not save the selected photo/);
     assert.ok(![...d.files.keys()].some(file => file.includes('/covers/custom-')));
   }
 });
 
-test('a cover filename collision never overwrites or cleans up the pre-existing cover', () => {
+test('a cover filename collision never overwrites or cleans up the pre-existing cover', async () => {
   const d = device({ fixedClock: true });
   const existing = 'file:///docs/folio/covers/custom-book--123-i.jpg';
   d.files.set(existing, 'current cover'); d.files.set('file:///picked/photo.jpg', 'new photo');
-  assert.throws(() => d.store.persistCoverImage('file:///picked/photo.jpg', 'book'), /Could not save/);
+  await assert.rejects(d.store.persistCoverImage('file:///picked/photo.jpg', 'book'), /Could not save/);
   assert.equal(d.files.get(existing), 'current cover'); assert.ok(!d.deleted.includes(existing));
 });
 
-test('a failed partial cover cleanup is reported without deleting the original photo', () => {
+test('a failed partial cover cleanup is reported without deleting the original photo', async () => {
   const d = device({ fixedClock: true });
   d.files.set('file:///picked/photo.jpg', 'original photo');
   d.failingDeletes.add('file:///docs/folio/covers/custom-book--123-i.jpg'); d.setFailure('copy');
-  assert.throws(() => d.store.persistCoverImage('file:///picked/photo.jpg', 'book'), /incomplete cover files could not be removed/);
+  await assert.rejects(d.store.persistCoverImage('file:///picked/photo.jpg', 'book'), /incomplete cover files could not be removed/);
   assert.equal(d.files.get('file:///picked/photo.jpg'), 'original photo');
 });
 
@@ -350,10 +351,19 @@ test('book removal also rejects custom-cover paths owned by IDs with matching pr
 test('original and parsed-file identifier collisions preserve the existing book and never overwrite its files', async () => {
   const d = device(); d.files.set('file:///picked.epub', 'new original');
   d.files.set('file:///docs/folio/books/same.epub', 'existing original'); d.files.set('file:///docs/folio/pages/same.json', 'existing reading text');
-  assert.throws(() => d.store.persistBookFile('file:///picked.epub', 'same'), error => error instanceof helper.ImportCollisionError);
+  await assert.rejects(d.store.persistBookFile('file:///picked.epub', 'same'), error => error instanceof helper.ImportCollisionError);
   assert.throws(() => d.store.savePages('same', pages), error => error instanceof helper.ImportCollisionError);
   assert.equal(d.files.get('file:///docs/folio/books/same.epub'), 'existing original'); assert.equal(d.files.get('file:///docs/folio/pages/same.json'), 'existing reading text');
   let cleanup = 0;
   const commit = createImportCommitter({ savePages: () => { throw new helper.ImportCollisionError('Existing file'); }, saveLibraryEntry: async () => {}, removeFiles: () => { cleanup++; return true; } });
   await assert.rejects(commit(book('same'), pages), error => error instanceof helper.ImportCollisionError); assert.equal(cleanup, 0);
+});
+
+test('SDK 57 copy completion is awaited before EPUB verification or cover publication',async()=>{
+ const d=device(),copyGate=gate();d.control.copyGate=copyGate;d.files.set('file:///picked.epub','Complete source');d.files.set('file:///picked/photo.jpg','Complete photo');
+ let bookDone=false,photoDone=false;
+ const bookCopy=d.store.persistBookFile('file:///picked.epub','waiting').then(uri=>{bookDone=true;return uri;});
+ const photoCopy=d.store.persistCoverImage('file:///picked/photo.jpg','waiting').then(uri=>{photoDone=true;return uri;});
+ await new Promise(done=>setImmediate(done));assert.equal(bookDone,false);assert.equal(photoDone,false);assert.equal(d.files.has('file:///docs/folio/books/waiting.epub'),false);
+ copyGate.resolve();assert.equal(await bookCopy,'file:///docs/folio/books/waiting.epub');assert.equal(d.files.get(await photoCopy),'Complete photo');
 });

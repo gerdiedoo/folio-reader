@@ -84,13 +84,13 @@ export function createLocalStore(scope?: string) {
     return new File(ROOT, 'pages', `${fileKey(bookId)}.json`).uri;
   }
 
-  function persistBookFile(sourceUri: string, bookId: string): string {
+  async function persistBookFile(sourceUri: string, bookId: string): Promise<string> {
     try {
       const dir = ensureDir('books');
       const destination = new File(dir, `${fileKey(bookId)}.epub`);
       if (destination.exists) throw new ImportCollisionError('A saved original already uses this identifier. Its files have been kept. Import the EPUB again.');
       const source = new File(sourceUri);
-      source.copy(destination);
+      await source.copy(destination);
       if (!destination.exists || !destination.size || destination.size !== source.size) throw new Error('Incomplete EPUB copy');
       return destination.uri;
     } catch (err) {
@@ -169,7 +169,7 @@ export function createLocalStore(scope?: string) {
   }
 
   /** Return a durable photo copy or throw; never substitute an ephemeral picker URI. */
-  function persistCoverImage(sourceUri: string, bookId: string): string {
+  async function persistCoverImage(sourceUri: string, bookId: string): Promise<string> {
     let destination: File | undefined;
     let copyStarted = false;
     try {
@@ -182,7 +182,7 @@ export function createLocalStore(scope?: string) {
       destination = new File(coversDir(), name);
       if (destination.exists) throw new Error('Cover destination already exists');
       copyStarted = true;
-      new File(sourceUri).copy(destination);
+      await new File(sourceUri).copy(destination);
       if (!destination.exists || !destination.size) throw new Error('Empty cover copy');
       return destination.uri;
     } catch {

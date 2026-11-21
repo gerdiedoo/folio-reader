@@ -257,7 +257,7 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
 
   let fileLocation: string;
   try {
-    fileLocation = persistBookFile(fileUri, bookId);
+    fileLocation = await persistBookFile(fileUri, bookId);
   } catch (error) {
     if (error instanceof ImportCollisionError) throw error;
     let cleaned = false;

@@ -46,7 +46,7 @@ def launch():
     result=adb('shell','am','start','-W','-n',PACKAGE+'/.MainActivity')
     with (OUT/'launch-timing.txt').open('ab') as f:f.write(result+b'\n')
 
-def library_record():
+def library_record(expected_bookmark=None):
     # The emulator contains only the generated fixture; no account is signed in.
     dbdir=OUT/'synthetic-state';dbdir.mkdir(exist_ok=True)
     for name in ['RKStorage','RKStorage-wal','RKStorage-shm']:
@@ -54,17 +54,22 @@ def library_record():
         if result.returncode and name=='RKStorage': raise AssertionError('Native persisted Guest database not readable')
     c=sqlite3.connect(dbdir/'RKStorage')
     try:
-        for key,value in c.execute('select key,value from catalystLocalStorage'):
+        entries=list(c.execute('select key,value from catalystLocalStorage'))
+        for key,value in entries:
             if key.endswith('.libraryArchive') or key.endswith(':libraryArchive'):
                 archive=json.loads(value)
                 book=next((b for b in archive.get('books',[]) if b['title']=='Folio device journey'),None)
-                if book:return book
+                if book:
+                    if expected_bookmark:
+                        saved=[item for k,v in entries if k.endswith('.bookmarks') for item in json.loads(v)]
+                        assert any(item.get('bookId')==expected_bookmark for item in saved), 'Saved bookmark did not survive process restart'
+                    return book
     finally:c.close()
     raise AssertionError('Imported book is absent from acknowledged native storage')
 
-def pause_snapshot():
+def pause_snapshot(expected_bookmark=None):
     adb('shell','input','keyevent','KEYCODE_HOME');time.sleep(1.5)
-    return library_record()
+    return library_record(expected_bookmark)
 
 def run():
     adb('root');adb('wait-for-device')
@@ -84,7 +89,7 @@ def run():
     screenshot('02-imported-library')
     tap('Folio device journey by Folio test fixture.',contains=True)
     tap('Read Folio device journey')
-    find('Scroll reading mode');screenshot('03-rich-reader')
+    find('Scroll reading mode');find('Circle on warm paper');screenshot('03-rich-reader')
     tap('Save bookmark for this passage')
     find('Remove bookmark from this passage')
     # A real native list scroll produces a source word anchor plus same-layout pixels.
@@ -96,7 +101,7 @@ def run():
     assert before['readingPosition']==reopened['readingPosition'], 'Closing and reopening rewound the saved source position'
     adb('shell','am','force-stop',PACKAGE);launch();find('Folio Library')
     tap('Resume Folio device journey by Folio test fixture');find('Scroll reading mode');screenshot('05-process-restart')
-    restarted=pause_snapshot();assert reopened['readingPosition']==restarted['readingPosition'], 'Restart changed the saved source position'
+    restarted=pause_snapshot(before['id']);assert reopened['readingPosition']==restarted['readingPosition'], 'Restart changed the saved source position'
     launch();tap('Back to Library');tap('Notebook');tap('New quote');tap('Quote text')
     adb('shell','input','text','A%ssynthetic%sreflection');tap('Quote reflection');adb('shell','input','text','Return%sto%sthe%ssource')
     adb('shell','input','keyevent','KEYCODE_BACK');tap('Save new highlight')
@@ -104,7 +109,9 @@ def run():
     adb('shell','settings','put','system','font_scale','1.5');time.sleep(1)
     screenshot('07-large-text-notebook')
     adb('shell','settings','put','system','font_scale','1.0')
-    (OUT/'result.json').write_text(json.dumps({'passed':True,'checks':['native import','rich reader render','bookmark persistence control','scroll close/reopen position','process restart position','reflection creation','large text rendering capture'],'talkback':'requires phone testing','book':before['id']},indent=2))
+    adb('shell','am','force-stop',PACKAGE);launch();find('Folio Library');tap('Notebook');find('A synthetic reflection',contains=True)
+    screenshot('08-reflection-after-restart')
+    (OUT/'result.json').write_text(json.dumps({'passed':True,'checks':['native import','rich reader render','bookmark persistence control','scroll close/reopen position','process restart position','reflection creation and restart','large text rendering capture'],'talkback':'requires phone testing','book':before['id']},indent=2))
 try:run()
 except Exception as error:
     try:

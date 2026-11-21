@@ -106,3 +106,10 @@ test('a missing book is never recreated by a stale cover editor', async () => {
   const result = await saveBookCover('book', photo, f.storage);
   assert.equal(result.saved, false); assert.equal(f.books().length, 1); assert.deepEqual(f.events, []);
 });
+
+test('a photo copy still in progress cannot publish cover metadata or remove the current cover',async()=>{
+ const f=fixture(),copy=f.storage.persistPhoto;let release;
+ const copying=new Promise(done=>release=done);f.storage.persistPhoto=async(...args)=>{await copying;return copy(...args);};
+ const saving=saveBookCover('book',photo,f.storage);await flush();assert.equal(f.books()[0].coverUrl,original().coverUrl);assert.deepEqual(f.events,[]);assert.equal(f.removed.length,0);
+ release();assert.equal((await saving).saved,true);assert.deepEqual(f.events,['copy','save','publish']);
+});

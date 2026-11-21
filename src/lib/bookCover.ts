@@ -29,7 +29,7 @@ export function coverImageUrl(value: string): string {
 type CoverPatch = Pick<Book, 'coverStyle' | 'coverUrl' | 'coverTint'>;
 interface CoverStorage {
   getBooks(): Book[];
-  persistPhoto(uri: string, bookId: string): string;
+  persistPhoto(uri: string, bookId: string): string | Promise<string>;
   removeCustomCover(bookId: string, uri: string): boolean;
   saveBooks?(books: Book[]): Promise<void>;
   savePatch?(bookId: string, patch: CoverPatch): Promise<void>;
@@ -48,7 +48,7 @@ export async function saveBookCover(bookId: string, draft: BookCoverDraft, stora
     let uri = original.coverUrl;
     if (draft.style === 'image' && draft.image.kind === 'url') uri = coverImageUrl(draft.image.url);
     if (draft.style === 'image' && draft.image.kind === 'photo') {
-      created = storage.persistPhoto(draft.image.uri, bookId);
+      created = await storage.persistPhoto(draft.image.uri, bookId);
       uri = created;
     }
     patch = { coverStyle: draft.style, coverUrl: uri, coverTint: normalizeCoverTint(draft.tint) };
