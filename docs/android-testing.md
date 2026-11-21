@@ -6,6 +6,14 @@ The default/production configuration remains Folio (`com.folio.reader`). Android
 keeps each package's local books, settings, and sign-in storage separate. Uninstalling
 Folio Dev deletes its local data; you do not need to uninstall the main app.
 
+## Step 27 APK batch
+
+This APK includes steps 22–27, including the previously local-only UI, Notebook,
+Settings, search and flashcard changes. Earlier sections marked “awaiting an APK”
+are now included in this batch; their native phone checks still need completing.
+Install over Folio Dev without uninstalling or clearing data. No new SQL is needed
+for steps 22–27.
+
 ## Separate Supabase project
 
 1. Open the new **Folio Dev** Supabase project. In SQL Editor, run
@@ -944,3 +952,30 @@ later APK, open a vocabulary card from Notebook and from global Search:
 
 No vocabulary storage format, cloud merge policy or rating values change in this
 step. Only confirmed storage acknowledgement can report a successful rating.
+
+
+## Account actions and library backup (step 27)
+
+1. Open Account and check the smaller heading, rectangular actions, readable
+   labels and scrolling in Charcoal, landscape and large system text. Setup help
+   stays optional; an ordinary sign-in failure should show an inline error rather
+   than automatically expanding technical instructions.
+2. In a disposable signed-in test account, back up a nonempty Library. Repeated
+   taps must start only one operation. While an account action is pending, other
+   account/library actions, Close, Done, backdrop and Android back must wait.
+   Success should leave a persistent acknowledgement; failure should remain
+   visible and allow retry. Guest/account reading spaces remain separate.
+3. An unchecked/failed local Library must block backup and restore. An empty
+   Library must block backup so it cannot replace a saved account list with an
+   empty one; Restore should remain available once loading is complete. Tests
+   inject read failures; do not corrupt app storage to force this state.
+4. Restore a disposable backup. Progress, per-book failures and the final added/
+   already-present counts should stay understandable. An empty backup must not
+   claim that books were restored. EPUB files are not uploaded by backup; automatic
+   restore still uses matching Gutenberg editions, not an exact source-edition
+   restore for every book. Manually import unavailable originals when needed.
+5. App/account unmounting must suppress late progress, completion and errors from
+   updating another Account screen. Tests cover this and late callbacks from an
+   earlier restore. Already started backend/file operations are not rolled back.
+   Native browser sign-in return, back handling, focus and layout still need
+   phone checks. Regression tests and bundle exports do not prove these behaviors.

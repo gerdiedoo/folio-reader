@@ -417,8 +417,11 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
 
   const handleBackupLibrary = async (): Promise<number> => {
     if (!user) throw new Error('Sign in to back up your library.');
+    if (!spaceActive.current || libraryLoadState.current !== 'ready') throw new Error('Wait for the saved library to load before backing it up.');
     const catalogBooks = await loadAdded();
-    const backup: LibraryBackupEntry[] = books.map((book) => {
+    if (!spaceActive.current) throw new Error('Backup stopped after the reading space changed.');
+    if (!booksRef.current.length) throw new Error('Add or restore a book before backing up an empty library.');
+    const backup: LibraryBackupEntry[] = booksRef.current.map((book) => {
       const catalogId = Object.entries(catalogBooks).find(([, bookId]) => bookId === book.id)?.[0];
       const gutenbergId = catalogId?.match(/^gutenberg-(\d+)$/)?.[1];
       return {
@@ -460,6 +463,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
     onProgress: (progress: LibraryRestoreProgress) => void
   ): Promise<LibraryRestoreResult | null> => {
     if (!user) throw new Error('Sign in to restore your library.');
+    if (!spaceActive.current || libraryLoadState.current !== 'ready') throw new Error('Wait for the saved library to load before restoring.');
     onProgress({ current: 0, total: 0, percent: 0, title: 'Loading your backup…', phase: 'loading' });
     const backup = await fetchLibraryBackup(user.id);
     if (!backup) return null;
@@ -960,6 +964,8 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
       {isProfileOpen && (
         <ProfileModal
           goal={readingGoal}
+          libraryStatus={libraryStatus}
+          bookCount={books.length}
           user={user}
           onClose={() => setIsProfileOpen(false)}
           onGoogleSignIn={handleGoogleSignIn}

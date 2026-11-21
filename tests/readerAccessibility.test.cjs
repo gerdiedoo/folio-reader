@@ -2376,3 +2376,73 @@ test('a removed flashcard remains readable but cannot be rated; unrelated archiv
   const other = flashcardReview({ saveBusy: true }); root = other.render();
   assert.equal(labelled(root, 'Close vocabulary card').disabled, false); labelled(root, 'Close vocabulary card').onPress(); assert.deepEqual(other.events, ['close']); other.h.unmount();
 });
+
+function accountHarness(overrides = {}) {
+  const h = harness({ runEffects: true, moduleMocks: {
+    '../lib/supabase': { SUPABASE_URL: 'https://test.supabase.co', getAuthRedirectUrl: () => 'folio-dev://auth/callback' },
+    './ui/ProgressBar': { ProgressBar: 'ProgressBar' },
+  } });
+  const { ProfileModal } = h.load('../src/components/ProfileModal.tsx');
+  const events = [], messages = [];
+  const props = { goal: { streakDays: 0, booksFinishedYear: 0, yearTargetBooks: 12 }, libraryStatus: 'ready', bookCount: 2, user: { id: 'user', fullName: 'Test Reader', email: 'reader@example.test' },
+    onClose: () => events.push('close'), onGoogleSignIn: async () => events.push('signin'), onSignOut: async () => events.push('signout'),
+    onBackupLibrary: async () => { events.push('backup'); return 2; },
+    onRestoreLibrary: async () => ({ restored: 0, alreadyInLibrary: 0, skipped: 0, lookupFailed: 0, failures: [] }),
+    showToast: value => messages.push(value), ...overrides };
+  return { h, props, events, messages, render: () => h.render(ProfileModal, props) };
+}
+
+test('account backup blocks duplicate/overlapping actions and dismissal until acknowledgement', async () => {
+  let resolve, calls = 0;
+  const f = accountHarness({ onBackupLibrary: () => { calls++; return new Promise(done => { resolve = done; }); } });
+  let root = f.render(); const backup = labelled(root, 'Back up library');
+  const pending = backup.onPress(); backup.onPress(); root = f.render();
+  labelled(root, 'Restore library').onPress(); labelled(root, 'Sign out of Folio').onPress(); labelled(root, 'Close account').onPress(); labelled(root, 'Done with account').onPress(); root.props.onClose();
+  assert.equal(calls, 1); assert.deepEqual(f.events, []); assert.equal(labelled(root, 'Back up library').accessibilityState.busy, true);
+  resolve(2); await pending; root = f.render(); assert.equal(labelled(root, 'Back up library').disabled, false); assert.match(renderedText(root), /Backed up 2 books/); f.h.unmount();
+});
+
+test('account library actions cannot overwrite/restore an unchecked local library', async () => {
+  for (const libraryStatus of ['loading', 'error']) {
+    const f = accountHarness({ libraryStatus }); const root = f.render();
+    for (const label of ['Back up library', 'Restore library']) { const button = labelled(root, label); assert.equal(button.disabled, true); await button.onPress(); }
+    assert.deepEqual(f.events, []); assert.equal(labelled(root, 'Close account').disabled, false); f.h.unmount();
+  }
+});
+
+test('account failures stay visible and permit retry; authentication errors do not automatically open setup instructions', async () => {
+  const f = accountHarness({ onBackupLibrary: async () => { throw Error('Backup service unavailable'); } });
+  let root = f.render(); await labelled(root, 'Back up library').onPress(); root = f.render();
+  assert.ok(elements(root).some(node => node.props?.accessibilityRole === 'alert' && node.props.children === 'Backup service unavailable'));
+  assert.equal(labelled(root, 'Back up library').disabled, false); f.h.unmount();
+  const other = accountHarness({ user: null, onGoogleSignIn: async () => { throw Error('Connection interrupted'); } }); root = other.render();
+  await labelled(root, 'Sign in with Google').onPress(); root = other.render();
+  assert.match(renderedText(root), /Connection interrupted/); assert.doesNotMatch(renderedText(root), /Authorized redirect URI/); assert.equal(labelled(root, 'Sign in with Google').disabled, false); other.h.unmount();
+});
+
+test('account restore progress/results ignore late callbacks from an earlier operation', async () => {
+  let progress, finishBackup;
+  const f = accountHarness({ onRestoreLibrary: async callback => { progress = callback; return { restored: 0, alreadyInLibrary: 0, skipped: 0, lookupFailed: 0, failures: [] }; }, onBackupLibrary: () => new Promise(done => { finishBackup = done; }) });
+  let root = f.render(); await labelled(root, 'Restore library').onPress(); root = f.render();
+  assert.match(renderedText(root), /Restore complete:.*0.*added/);
+  const pending = labelled(root, 'Back up library').onPress(); f.render(); const writes = f.h.stateWrites();
+  progress({ current: 1, total: 2, percent: 50, title: 'Late book', phase: 'downloading' }); assert.equal(f.h.stateWrites(), writes);
+  finishBackup(1); await pending; f.h.unmount();
+});
+
+test('account completion/progress after unmount cannot update a different account screen', async () => {
+  let complete, progress;
+  const f = accountHarness({ onRestoreLibrary: callback => { progress = callback; return new Promise(done => { complete = done; }); } });
+  const pending = labelled(f.render(), 'Restore library').onPress(); f.h.unmount(); const writes = f.h.stateWrites();
+  progress({ current: 1, total: 1, percent: 100, title: 'Late', phase: 'complete' }); complete(null); await pending;
+  assert.equal(f.h.stateWrites(), writes); assert.deepEqual(f.messages, []);
+});
+
+
+test('empty library cannot replace an account backup while restore remains available', async () => {
+  const f = accountHarness({ bookCount: 0 }); const root = f.render();
+  assert.equal(labelled(root, 'Back up library').disabled, true);
+  await labelled(root, 'Back up library').onPress(); assert.deepEqual(f.events, []);
+  assert.equal(labelled(root, 'Restore library').disabled, false);
+  assert.match(renderedText(root), /empty library will not replace your account backup/); f.h.unmount();
+});

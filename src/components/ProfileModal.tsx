@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { getAuthRedirectUrl, SUPABASE_URL } from '../lib/supabase';
@@ -12,6 +12,8 @@ import { ProgressBar } from './ui/ProgressBar';
 
 interface ProfileModalProps {
   goal: ReadingGoal;
+  libraryStatus: 'loading' | 'ready' | 'error';
+  bookCount: number;
   user: UserProfile | null;
   onClose: () => void;
   onGoogleSignIn: () => Promise<void>;
@@ -44,6 +46,8 @@ const GoogleG: React.FC = () => (
 
 export const ProfileModal: React.FC<ProfileModalProps> = ({
   goal,
+  libraryStatus,
+  bookCount,
   user,
   onClose,
   onGoogleSignIn,
@@ -54,85 +58,73 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 }) => {
   const colors = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const [isSigningIn, setIsSigningIn] = useState(false);
-  const [libraryAction, setLibraryAction] = useState<'backup' | 'restore' | null>(null);
+  const [action, setAction] = useState<'signin' | 'signout' | 'backup' | 'restore' | null>(null);
+  const pending = useRef(false);
+  const operationId = useRef(0);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [restoreProgress, setRestoreProgress] = useState<LibraryRestoreProgress | null>(null);
   const [restoreResult, setRestoreResult] = useState<LibraryRestoreResult | null>(null);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
-
+  const isSigningIn = action === 'signin';
+  const libraryAction = action === 'backup' || action === 'restore' ? action : null;
+  const busy = action !== null;
+  const libraryUnavailable = libraryStatus !== 'ready' || busy;
+  const close = () => { if (!pending.current) onClose(); };
   const projectHost = SUPABASE_URL.replace(/^https?:\/\//, '');
   const projectRef = projectHost.split('.')[0];
 
-  const handleSignIn = async () => {
-    setIsSigningIn(true);
+  const runAction = async (kind: NonNullable<typeof action>, operation: (token: number) => Promise<string>) => {
+    if (!mounted.current || pending.current) return;
+    if ((kind === 'backup' || kind === 'restore') && (!user || libraryStatus !== 'ready')) return;
+    const token = ++operationId.current;
+    if (kind === 'backup' && bookCount === 0) return;
+    pending.current = true; setAction(kind); setActionError(null); setActionMessage(null);
     try {
-      await onGoogleSignIn();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      showToast(msg || 'Google sign in failed');
-      setShowSetupGuide(true);
+      const message = await operation(token);
+      if (mounted.current && message) { setActionMessage(message); showToast(message); }
+    } catch (error) {
+      if (mounted.current) setActionError(error instanceof Error ? error.message : 'This account action could not be completed. Try again.');
     } finally {
-      setIsSigningIn(false);
+      pending.current = false;
+      if (mounted.current) setAction(null);
     }
   };
-
-  const handleSignOut = async () => {
-    try {
-      await onSignOut();
-      showToast('Signed out of Folio');
-    } catch {
-      showToast('Sign out failed');
-    }
-  };
-
-  const handleBackupLibrary = async () => {
-    setLibraryAction('backup');
-    setRestoreProgress(null);
-    try {
-      const count = await onBackupLibrary();
-      showToast(`Backed up ${count} ${count === 1 ? 'book' : 'books'} to your account`);
-    } catch (err: unknown) {
-      showToast(err instanceof Error ? err.message : 'Library backup failed');
-    } finally {
-      setLibraryAction(null);
-    }
-  };
-
-  const handleRestoreLibrary = async () => {
-    setLibraryAction('restore');
+  const handleSignIn = () => runAction('signin', async () => { await onGoogleSignIn(); return ''; });
+  const handleSignOut = () => runAction('signout', async () => { await onSignOut(); return 'Signed out of Folio'; });
+  const handleBackupLibrary = () => runAction('backup', async () => {
+    setRestoreProgress(null); setRestoreResult(null);
+    const count = await onBackupLibrary();
+    return `Backed up ${count} ${count === 1 ? 'book' : 'books'} to your account`;
+  });
+  const handleRestoreLibrary = () => runAction('restore', async token => {
     setRestoreResult(null);
     setRestoreProgress({ current: 0, total: 0, percent: 0, title: 'Loading your backup…', phase: 'loading' });
-    try {
-      const result = await onRestoreLibrary(setRestoreProgress);
-      if (!result) {
-        setRestoreProgress(null);
-        showToast('No library backup found for this account');
-      } else {
-        setRestoreResult(result);
-        showToast(
-          `Restored ${result.restored}; skipped ${result.skipped} unavailable; ${result.lookupFailed} catalog lookup(s) timed out; ${result.alreadyInLibrary} already in library`
-        );
-      }
-    } catch (err: unknown) {
-      showToast(err instanceof Error ? err.message : 'Library restore failed');
-    } finally {
-      setLibraryAction(null);
-    }
-  };
+    const result = await onRestoreLibrary(progress => { if (mounted.current && pending.current && operationId.current === token) setRestoreProgress(progress); });
+    if (!mounted.current) return '';
+    if (!result) { setRestoreProgress(null); return 'No library backup found for this account'; }
+    setRestoreResult(result);
+    setRestoreProgress(null);
+    return `Restored ${result.restored}; ${result.alreadyInLibrary} already in Library; ${result.failures.length} need attention.`;
+  });
 
   return (
-    <ModalShell onClose={onClose} maxWidth={384} cardStyle={{ maxHeight: '90%' }}>
+    <ModalShell onClose={close} maxWidth={384} cardStyle={{ maxHeight: '90%' }}>
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Icon name="account_circle" size={22} color={colors.primary} />
-          <Text style={styles.headerTitle}>READER PROFILE &amp; ACCOUNT</Text>
+          <Text accessibilityRole="header" style={styles.headerTitle}>Account</Text>
         </View>
-        <Pressable onPress={onClose} style={styles.closeBtn} hitSlop={8}>
+        <Pressable onPress={close} disabled={busy} accessibilityRole="button" accessibilityLabel="Close account" accessibilityState={{ disabled: busy }} style={styles.closeBtn}>
           <Icon name="close" size={20} color={colors.muted} />
         </Pressable>
       </View>
 
-      <ScrollView>
+      <ScrollView style={{ flexShrink: 1, minHeight: 0 }} keyboardShouldPersistTaps="handled">
+        {actionError && <Text accessibilityRole="alert" style={styles.feedback}>{actionError}</Text>}
+        {actionMessage && <Text accessibilityLiveRegion="polite" style={styles.feedback}>{actionMessage}</Text>}
         <View style={styles.userCard}>
           <View style={{ marginBottom: 12 }}>
             {user?.avatarUrl ? (
@@ -156,25 +148,25 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                 <View style={styles.authDot} />
                 <Text style={styles.authBadgeText}>Signed in</Text>
               </View>
-              <Pressable onPress={handleSignOut} hitSlop={8} disabled={!!libraryAction}>
-                <Text style={styles.signOut}>Sign Out</Text>
+              <Pressable onPress={handleSignOut} disabled={busy} accessibilityRole="button" accessibilityLabel="Sign out of Folio" accessibilityState={{ disabled: busy, busy: action === 'signout' }} style={styles.smallAction}>
+                <Text style={styles.signOut}>{action === 'signout' ? 'Signing out…' : 'Sign Out'}</Text>
               </Pressable>
             </View>
           ) : (
             <View style={{ width: '100%', marginTop: 12, gap: 8 }}>
-              <Pressable onPress={handleSignIn} disabled={isSigningIn} style={[styles.googleBtn, isSigningIn && { opacity: 0.6 }]}>
+              <Pressable onPress={handleSignIn} disabled={busy} accessibilityRole="button" accessibilityLabel="Sign in with Google" accessibilityState={{ disabled: busy, busy: isSigningIn }} style={[styles.googleBtn, busy && { opacity: 0.6 }]}>
                 <GoogleG />
                 <Text style={styles.googleText}>
-                  {isSigningIn ? 'Connecting to Google...' : 'Sign in with Google / Gmail'}
+                  {isSigningIn ? 'Connecting to Google...' : 'Sign in with Google'}
                 </Text>
               </Pressable>
               <Text style={{ ...type.bodySm, color: colors.muted }}>
                 Signing in opens a separate reading space. Guest books and notes stay in Guest on this device.
               </Text>
-              <Pressable onPress={() => setShowSetupGuide(!showSetupGuide)} style={styles.helpRow}>
+              <Pressable onPress={() => setShowSetupGuide(!showSetupGuide)} accessibilityRole="button" accessibilityLabel="Account setup help" accessibilityState={{ expanded: showSetupGuide }} style={styles.helpRow}>
                 <Icon name="help" size={14} color={colors.primary} />
                 <Text style={styles.helpText}>
-                  {showSetupGuide ? 'Hide Supabase setup guide' : 'What do I need to set up in Supabase?'}
+                  {showSetupGuide ? 'Hide setup help' : 'Sign-in setup help'}
                 </Text>
               </Pressable>
             </View>
@@ -186,10 +178,12 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                 <Text style={[styles.backupTitle, { color: colors.onSurface }]}>Library backup</Text>
               </View>
               <Text style={[styles.backupDescription, { color: colors.muted }]}>
-                Save your book list to this account. Restore downloads available Project Gutenberg books again;
-                EPUB files stay on your device.
+                Back up your book list and reading progress. EPUB files stay on this device.
+                Restore re-downloads matching Gutenberg editions; other editions may need their original EPUB.
               </Text>
-              {libraryAction === 'restore' || restoreProgress?.phase === 'complete' ? (
+              {libraryStatus === 'ready' && bookCount === 0 && <Text style={styles.backupDescription}>Add or restore a book before backing up. An empty library will not replace your account backup.</Text>}
+              {libraryStatus !== 'ready' && <Text accessibilityLiveRegion="polite" style={styles.backupDescription}>{libraryStatus === 'loading' ? 'Loading your saved library before backup or restore…' : 'Your saved library could not be loaded. Restart Folio before backup or restore.'}</Text>}
+              {libraryAction === 'restore' && restoreProgress ? (
                 <View style={styles.restoreProgress}>
                   <View style={styles.restoreProgressLabels}>
                     <Text style={[styles.restoreProgressText, { color: colors.onSurfaceVariant }]} numberOfLines={1}>
@@ -212,7 +206,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                 <View style={[styles.restoreResult, { borderTopColor: colors.borderSoft }]}>
                   <Text style={[styles.restoreResultTitle, { color: colors.onSurface }]}>
                     {restoreResult.failures.length === 0
-                      ? 'All available books were restored'
+                      ? `Restore complete: ${restoreResult.restored} added; ${restoreResult.alreadyInLibrary} already in Library`
                       : `Could not restore ${restoreResult.failures.length} ${restoreResult.failures.length === 1 ? 'book' : 'books'}`}
                   </Text>
                   {restoreResult.failures.map((failure, index) => (
@@ -233,21 +227,23 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
               <View style={styles.backupActions}>
                 <Pressable
                   onPress={handleBackupLibrary}
-                  disabled={!!libraryAction}
+                  accessibilityRole="button" accessibilityLabel="Back up library" accessibilityState={{ disabled: libraryUnavailable || bookCount === 0, busy: action === 'backup' }}
+                  disabled={libraryUnavailable || bookCount === 0}
                   style={[
                     styles.backupButton,
                     { backgroundColor: colors.primaryContainer },
                     libraryAction && { opacity: 0.6 },
                   ]}
                 >
-                  <Icon name={libraryAction === 'backup' ? 'sync' : 'cloud_upload'} size={17} color={colors.white} spin={libraryAction === 'backup'} />
-                  <Text style={[styles.backupButtonText, { color: colors.white }]}>
+                  <Icon name={libraryAction === 'backup' ? 'sync' : 'cloud_upload'} size={17} color={colors.onPrimaryContainer} spin={libraryAction === 'backup'} />
+                  <Text style={[styles.backupButtonText, { color: colors.onPrimaryContainer }]}>
                     {libraryAction === 'backup' ? 'Backing up…' : 'Back up'}
                   </Text>
                 </Pressable>
                 <Pressable
                   onPress={handleRestoreLibrary}
-                  disabled={!!libraryAction}
+                  accessibilityRole="button" accessibilityLabel="Restore library" accessibilityState={{ disabled: libraryUnavailable, busy: action === 'restore' }}
+                  disabled={libraryUnavailable}
                   style={[
                     styles.backupButton,
                     { borderColor: colors.primary },
@@ -327,24 +323,24 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           </View>
         </View>
 
-      </ScrollView>
-
       <View style={styles.footer}>
-        <Pressable onPress={() => setShowSetupGuide(!showSetupGuide)} style={styles.helpRow}>
+        <Pressable onPress={() => setShowSetupGuide(!showSetupGuide)} accessibilityRole="button" accessibilityLabel="Account setup help" accessibilityState={{ expanded: showSetupGuide }} style={styles.helpRow}>
           <Icon name="info" size={16} color={colors.muted} />
           <Text style={[styles.helpText, { color: colors.muted }]}>Setup guide</Text>
         </Pressable>
-        <Pressable onPress={onClose} style={styles.doneBtn}>
+        <Pressable onPress={close} disabled={busy} accessibilityRole="button" accessibilityLabel="Done with account" accessibilityState={{ disabled: busy }} style={styles.doneBtn}>
           <Text style={styles.doneText}>Done</Text>
         </Pressable>
       </View>
+      </ScrollView>
     </ModalShell>
   );
 };
 
 const createStyles = (colors: AppPalette) => StyleSheet.create({
   header: {
-    padding: 16,
+    paddingLeft: 16,
+    paddingRight: 8,
     backgroundColor: colors.surfaceLow,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.borderMid,
@@ -352,11 +348,11 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  headerTitle: { ...type.labelSm, color: colors.muted, letterSpacing: 1 },
-  closeBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  headerLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerTitle: { ...type.bodyMd, color: colors.onSurface, flexShrink: 1 },
+  closeBtn: { width: 48, height: 48, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   userCard: {
-    padding: 20,
+    padding: 16,
     alignItems: 'center',
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.borderSoft,
@@ -385,7 +381,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   statusText: { color: '#fff', fontSize: 9, lineHeight: 11 },
   name: { fontFamily: F.serifSemi, fontSize: 20, lineHeight: 26, color: colors.onSurface },
   email: { fontFamily: F.sans, fontSize: 12, color: colors.muted },
-  authRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  authRow: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: 8 },
   authBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -395,7 +391,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     borderColor: colors.border,
     paddingHorizontal: 10,
     paddingVertical: 2,
-    borderRadius: 999,
+    borderRadius: 8,
   },
   authDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.emerald },
   authBadgeText: { fontFamily: F.sansSemi, fontSize: 11, color: colors.emerald },
@@ -419,19 +415,21 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   restoreFailure: { flexDirection: 'row', alignItems: 'flex-start', gap: 7 },
   restoreFailureText: { flex: 1, gap: 2 },
   restoreFailureTitle: { ...type.bodyMd },
-  backupActions: { flexDirection: 'row', gap: 8, marginTop: 3 },
+  backupActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 3 },
   backupButton: {
-    flex: 1,
-    minHeight: 40,
+    flexGrow: 1,
+    flexBasis: 112,
+    minWidth: 112,
+    minHeight: 48,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     gap: 6,
     paddingHorizontal: 8,
     borderWidth: 1,
-    borderRadius: 999,
+    borderRadius: 8,
   },
-  backupButtonText: { ...type.labelMd },
+  backupButtonText: { ...type.labelMd, flexShrink: 1, textAlign: 'center' },
   googleBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -440,12 +438,15 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     backgroundColor: colors.surface,
     paddingVertical: 10,
     paddingHorizontal: 16,
-    borderRadius: 12,
+    minHeight: 48,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: 'rgba(28,28,24,0.15)',
   },
-  googleText: { fontFamily: F.sansSemi, fontSize: 12, color: colors.onSurface },
-  helpRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  googleText: { ...type.labelMd, color: colors.onSurface, flexShrink: 1 },
+  feedback: { ...type.bodySm, color: colors.onSurface, padding: 16 },
+  smallAction: { minHeight: 48, minWidth: 48, justifyContent: 'center' },
+  helpRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
   helpText: { fontFamily: F.sansMedium, fontSize: 11, color: colors.primary },
   guide: {
     padding: 16,
@@ -469,9 +470,11 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     borderColor: colors.border,
     color: colors.onSurface,
   },
-  stats: { padding: 16, flexDirection: 'row', gap: 12, backgroundColor: colors.surfaceLow },
+  stats: { padding: 16, flexDirection: 'row', flexWrap: 'wrap', gap: 8, backgroundColor: colors.surfaceLow },
   statCard: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: 128,
+    minWidth: 128,
     padding: 12,
     borderRadius: 12,
     backgroundColor: colors.surface,
@@ -491,6 +494,6 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  doneBtn: { backgroundColor: colors.primaryContainer, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 12 },
+  doneBtn: { minHeight: 48, justifyContent: 'center', backgroundColor: colors.primaryContainer, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 12 },
   doneText: { fontFamily: F.sansSemi, fontSize: 12, color: '#fff' },
 });
