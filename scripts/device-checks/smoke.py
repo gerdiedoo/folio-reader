@@ -18,8 +18,8 @@ def adb(*args,check=True):
     return subprocess.run(['adb',*args],check=check,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=40).stdout
 
 def nodes():
-    adb('shell','uiautomator','dump','/sdcard/folio-window.xml')
-    raw=adb('exec-out','cat','/sdcard/folio-window.xml')
+    adb('shell','uiautomator','dump','/data/local/tmp/folio-window.xml')
+    raw=adb('exec-out','cat','/data/local/tmp/folio-window.xml')
     (OUT/'last-window.xml').write_bytes(raw)
     return list(ET.fromstring(raw).iter('node'))
 
@@ -70,13 +70,16 @@ def run():
     adb('root');adb('wait-for-device')
     launch();find('Folio Library',timeout=60);screenshot('01-empty-library')
     tap('Import EPUB')
-    # DocumentsUI differs by system image; use its actual navigation affordance.
-    try:tap('Show roots',timeout=3)
+    # Recent files often already contains the pushed EPUB. Only navigate roots
+    # if it is not visible; Android DocumentsUI varies across system images.
+    try:tap('folio-device-journey.epub',contains=True,timeout=4)
     except AssertionError:
-        try:tap('Show navigation drawer',timeout=3)
-        except AssertionError:pass
-    tap('Downloads',contains=True)
-    tap('folio-device-journey.epub',contains=True)
+        try:tap('Show roots',timeout=3)
+        except AssertionError:
+            try:tap('Show navigation drawer',timeout=3)
+            except AssertionError:pass
+        tap('Downloads',contains=True)
+        tap('folio-device-journey.epub',contains=True)
     find('Folio device journey by Folio test fixture.',contains=True,timeout=45)
     screenshot('02-imported-library')
     tap('Folio device journey by Folio test fixture.',contains=True)
