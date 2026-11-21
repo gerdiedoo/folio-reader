@@ -159,7 +159,7 @@ export function createAccountRepository(supabase: SupabaseClient, ownerId: strin
       if (!logIfError('book lexicon delete', lexiconError)) return false;
 
       const { error: bookError } = await supabase.from('folio_books').delete().eq('user_id', ownerId!).eq('id', bookId);
-      return logIfError('book delete', bookError);
+      return logIfError('book delete', bookError) && await ownsSession();
     } catch (err) {
       console.warn('Supabase book delete failed:', err);
       return false;
@@ -221,7 +221,7 @@ export function createAccountRepository(supabase: SupabaseClient, ownerId: strin
     if (!await ownsSession()) { return false; }
     try {
       const { error } = await supabase.from('folio_highlights').delete().eq('user_id', ownerId!).eq('id', id);
-      return logIfError('highlight delete', error);
+      return logIfError('highlight delete', error) && await ownsSession();
     } catch (err) {
       console.warn('Supabase highlight delete failed:', err);
       return false;

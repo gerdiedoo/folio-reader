@@ -23,7 +23,7 @@ export function findBookmarkPage(bookmark: Bookmark, pages: BookContentPage[]): 
   return pages.findIndex(page => page.pageNumber === bookmark.pageNumber && page.locNumber === bookmark.locNumber);
 }
 
-function readBookmarks(raw: string | null): Bookmark[] {
+export function readBookmarks(raw: string | null): Bookmark[] {
   if (raw === null) return [];
   const records: unknown = JSON.parse(raw);
   if (!Array.isArray(records)) throw new Error('Invalid bookmark storage');

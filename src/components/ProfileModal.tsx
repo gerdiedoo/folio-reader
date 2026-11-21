@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
-import { getAuthRedirectUrl, SUPABASE_URL } from '../lib/supabase';
+import type { PreparedBackup } from '../lib/portableBackup';
 import { colors, F, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
 import { ReadingGoal, UserProfile } from '../types';
@@ -20,6 +20,9 @@ interface ProfileModalProps {
   onSignOut: () => Promise<void>;
   onBackupLibrary: () => Promise<number>;
   onRestoreLibrary: (onProgress: (progress: LibraryRestoreProgress) => void) => Promise<LibraryRestoreResult | null>;
+  onChooseSafetyCopy?: () => Promise<PreparedBackup | null>;
+  onExportSafetyCopy?: (includeOriginals: boolean) => void;
+  onRestoreSafetyCopy?: (copy: PreparedBackup, preferences: boolean) => void;
   showToast: (msg: string) => void;
 }
 
@@ -54,11 +57,12 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   onSignOut,
   onBackupLibrary,
   onRestoreLibrary,
+  onChooseSafetyCopy, onExportSafetyCopy, onRestoreSafetyCopy,
   showToast,
 }) => {
   const colors = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const [action, setAction] = useState<'signin' | 'signout' | 'backup' | 'restore' | null>(null);
+  const [action, setAction] = useState<'signin' | 'signout' | 'backup' | 'restore' | 'choose-copy' | null>(null);
   const pending = useRef(false);
   const operationId = useRef(0);
   const mounted = useRef(true);
@@ -68,13 +72,14 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   const [restoreProgress, setRestoreProgress] = useState<LibraryRestoreProgress | null>(null);
   const [restoreResult, setRestoreResult] = useState<LibraryRestoreResult | null>(null);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
+  const [safetyCopy, setSafetyCopy] = useState<PreparedBackup | null>(null);
+  const [includeOriginals, setIncludeOriginals] = useState(true);
+  const [restorePreferences, setRestorePreferences] = useState(false);
   const isSigningIn = action === 'signin';
   const libraryAction = action === 'backup' || action === 'restore' ? action : null;
   const busy = action !== null;
   const libraryUnavailable = libraryStatus !== 'ready' || busy;
   const close = () => { if (!pending.current) onClose(); };
-  const projectHost = SUPABASE_URL.replace(/^https?:\/\//, '');
-  const projectRef = projectHost.split('.')[0];
 
   const runAction = async (kind: NonNullable<typeof action>, operation: (token: number) => Promise<string>) => {
     if (!mounted.current || pending.current) return;
@@ -108,6 +113,12 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     setRestoreResult(result);
     setRestoreProgress(null);
     return `Restored ${result.restored}; ${result.alreadyInLibrary} already in Library; ${result.failures.length} need attention.`;
+  });
+  const chooseSafetyCopy = () => runAction('choose-copy', async () => {
+    setSafetyCopy(null);
+    const copy = await onChooseSafetyCopy?.();
+    if (mounted.current && copy) { setSafetyCopy(copy); setRestorePreferences(false); }
+    return '';
   });
 
   return (
@@ -260,42 +271,49 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           ) : null}
         </View>
 
+        {onChooseSafetyCopy && onExportSafetyCopy && onRestoreSafetyCopy && <View style={styles.guide}>
+          <Text accessibilityRole="header" style={styles.guideTitle}>Portable safety copy</Text>
+          <Text style={styles.guideIntro}>Save notes, vocabulary, bookmarks, reading settings, and available book text and covers in a ZIP file. Keep the file somewhere you trust; it contains your private reading work.</Text>
+          <Pressable accessibilityRole="checkbox" accessibilityLabel="Include original EPUB files" accessibilityState={{ checked: includeOriginals, disabled: busy }} disabled={busy} onPress={() => setIncludeOriginals(value => !value)} style={styles.helpRow}>
+            <Text style={styles.helpText}>{includeOriginals ? '☑' : '☐'} Include original EPUB files</Text>
+          </Pressable>
+          <View style={styles.backupActions}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Export safety copy" disabled={libraryUnavailable} accessibilityState={{ disabled: libraryUnavailable }} style={styles.backupButton} onPress={() => { if (!pending.current && libraryStatus === 'ready') onExportSafetyCopy(includeOriginals); }}><Text style={styles.backupButtonText}>Export copy</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Choose safety copy" disabled={libraryUnavailable} accessibilityState={{ disabled: libraryUnavailable, busy: action === 'choose-copy' }} style={styles.backupButton} onPress={chooseSafetyCopy}><Text style={styles.backupButtonText}>{action === 'choose-copy' ? 'Checking…' : 'Choose a copy'}</Text></Pressable>
+          </View>
+          <Text style={styles.guideIntro}>Up to 48 MB per ZIP file. Export closes the reader while preparing a consistent copy. A sharing destination must save the file before you leave its save flow.</Text>
+          {safetyCopy && <View style={styles.restoreProgress}>
+            <Text accessibilityRole="header" style={styles.restoreResultTitle}>Review this safety copy</Text>
+            <Text style={styles.guideIntro}>{safetyCopy.summary.books} books · {safetyCopy.summary.originals} original EPUBs · {safetyCopy.summary.readable} with reading text{ '\n' }{safetyCopy.summary.highlights} notes/highlights · {safetyCopy.summary.vocabulary} vocabulary cards · {safetyCopy.summary.bookmarks} bookmarks</Text>
+            <Text style={styles.guideIntro}>Restore adds separate copies to this reading space. Existing books and saved work stay in place. Repeating restore creates additional copies. Books without reading text need their original EPUB.</Text>
+            <Pressable accessibilityRole="checkbox" accessibilityLabel="Use reading settings from safety copy" accessibilityState={{ checked: restorePreferences, disabled: busy }} disabled={busy} onPress={() => setRestorePreferences(value => !value)} style={styles.helpRow}><Text style={styles.helpText}>{restorePreferences ? '☑' : '☐'} Use its reading settings</Text></Pressable>
+            <View style={styles.backupActions}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Restore safety copy as separate books" disabled={libraryUnavailable} accessibilityState={{ disabled: libraryUnavailable }} style={styles.backupButton} onPress={() => { if (!pending.current && libraryStatus === 'ready') onRestoreSafetyCopy(safetyCopy, restorePreferences); }}><Text style={styles.backupButtonText}>Restore copies</Text></Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel="Cancel safety copy restore" disabled={busy} style={styles.backupButton} onPress={() => setSafetyCopy(null)}><Text style={styles.backupButtonText}>Cancel</Text></Pressable>
+            </View>
+          </View>}
+        </View>}
+
         {showSetupGuide && (
           <View style={styles.guide}>
             <View style={styles.guideHead}>
               <Icon name="tune" size={16} color={colors.primary} />
-              <Text style={styles.guideTitle}>Supabase Google Auth Setup Checklist</Text>
+              <Text style={styles.guideTitle}>Your reading space</Text>
             </View>
             <Text style={styles.guideIntro}>
-              To enable Google / Gmail login with your Supabase project ({projectRef || 'your project'}):
+              Guest and signed-in reading spaces keep separate books and notes on this device. Signing out returns to Guest. Sign in again to reopen your account’s local space.
             </Text>
 
-            <Text style={styles.step}>1. Google Cloud Console</Text>
+            <Text style={styles.step}>Account backup</Text>
             <Text style={styles.stepBody}>
-              APIs &amp; Services › Credentials › Create Credentials › OAuth client ID (Web application).
+              Account library backup saves the book list and basic reading progress. It does not contain your original EPUB files or a complete copy of your saved work. Keep a portable safety copy for those.
             </Text>
 
-            <Text style={styles.step}>2. Authorized redirect URI</Text>
-            <Text selectable style={styles.code}>
-              {`https://${projectHost}/auth/v1/callback`}
+            <Text style={styles.step}>Sign-in trouble</Text>
+            <Text style={styles.stepBody}>
+              Check your connection and try again. Your existing local reading space is kept when sign-in fails.
             </Text>
 
-            <Text style={styles.step}>3. Supabase Dashboard</Text>
-            <Text style={styles.stepBody}>
-              Authentication › Providers › Google: enable it, paste the Client ID and Client Secret, Save.
-            </Text>
-
-            <Text style={styles.step}>4. Allow the app redirect</Text>
-            <Text style={styles.stepBody}>
-              Authentication › URL Configuration › Redirect URLs, add:
-            </Text>
-            <Text selectable style={styles.code}>
-              {getAuthRedirectUrl()}
-            </Text>
-            <Text style={styles.stepBody}>
-              (In Expo Go this is an exp:// address that changes with your network. An installed
-              build uses the redirect shown above.)
-            </Text>
           </View>
         )}
 

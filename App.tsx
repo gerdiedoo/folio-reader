@@ -32,8 +32,11 @@ import { SettingsSheet } from './src/components/SettingsSheet';
 import { Toast } from './src/components/ui/Toast';
 import { INITIAL_BOOKS, INITIAL_GOAL } from './src/data/initialData';
 import { saveBookCover, type BookCoverDraft, type CoverSaveResult } from './src/lib/bookCover';
-import { removeBookLocally, type BookRemovalResult } from './src/lib/bookRemoval';
-import { applyReadingPosition, createReadingProgressWriter, mergeCloudBookForDevice } from './src/lib/readingPosition';
+import { type BookRemovalResult } from './src/lib/bookRemoval';
+import { applyReadingPosition, createReadingProgressWriter } from './src/lib/readingPosition';
+import { hasPendingRestore, recoverPortableRestore, removeBookWithRecovery } from './src/lib/backupRecovery';
+import { choosePortableBackup, exportPortableBackup, importPortableBackup } from './src/lib/portableBackupNative';
+import type { PreparedBackup } from './src/lib/portableBackup';
 import { useReaderSettings } from './src/lib/useReaderSettings';
 import { createBookmark, createBookmarkStore } from './src/lib/bookmarks';
 import { watchAccountSession } from './src/lib/accountSession';
@@ -61,6 +64,7 @@ import { MotionPreferencesProvider } from './src/MotionPreferences';
 import { useFeedbackMessage } from './src/lib/useFeedbackMessage';
 import { useHighlightArchive } from './src/lib/useHighlightArchive';
 import { useLexiconArchive } from './src/lib/useLexiconArchive';
+import { useDeletionRetries } from './src/lib/useDeletionRetries';
 import {
   Book,
   BookContentPage,
@@ -105,12 +109,14 @@ function applySavedReadingProgress(book: Book, entry: LibraryBackupEntry): Book 
   };
 }
 
-function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; scope: string; hasLegacyData: boolean }) {
+type PortableJob = { kind: 'export'; includeOriginals: boolean } | { kind: 'restore'; backup: PreparedBackup; preferences: boolean } | { kind: 'remove'; bookId: string };
+interface ReadingSpaceProps { user: UserProfile | null; scope: string; hasLegacyData: boolean }
+function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: ReadingSpaceProps & { onPortableJob: (job: PortableJob) => void; onRemovalJob: (bookId: string) => Promise<BookRemovalResult> }) {
   const storage = useMemo(() => createLocalStore(scope), [scope]);
   const { loadJSON, loadPages, removeBookFiles, saveJSON, savePages } = storage;
   const libraryStore = useMemo(() => createLibraryStore(storage), [storage]);
   const cloud = useMemo(() => createAccountRepository(supabase, user?.id ?? null), [user?.id]);
-  const { deleteBookFromSupabase, fetchBooksFromSupabase, fetchReadingGoalFromSupabase, fetchLibraryBackup, saveLibraryBackup, upsertBookToSupabase, upsertReadingGoalToSupabase } = cloud;
+  const { fetchBooksFromSupabase, fetchReadingGoalFromSupabase, fetchLibraryBackup, saveLibraryBackup, upsertBookToSupabase, upsertReadingGoalToSupabase } = cloud;
   const { message: toastMessage, showMessage: showToast } = useFeedbackMessage();
   const highlightArchive = useHighlightArchive(storage, cloud, showToast);
   const highlights = highlightArchive.items;
@@ -763,34 +769,7 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
     }
     removingBook.current = true;
     try {
-      const result = await removeBookLocally(book.title, {
-        bookmarks: async () => { setBookmarks(await bookmarkStore.removeBook(bookId)); },
-        highlights: () => highlightArchive.removeBook(bookId),
-        vocabulary: () => lexiconArchive.removeBook(bookId),
-        saveLibrary: async () => {
-          if (!spaceActive.current) throw new Error('Reading space changed');
-          await libraryStore.remove(bookId);
-          removedLibraryIds.current.add(bookId);
-        },
-        publishRemoval: () => {
-          // Keep imports/other book edits completed while annotation cleanup was pending.
-          booksRef.current = booksRef.current.filter(item => item.id !== bookId);
-          setBooks(current => current.filter(item => item.id !== bookId));
-          setCustomPagesMap(previous => {
-            const remaining = { ...previous }; delete remaining[bookId]; return remaining;
-          });
-          setCurrentBookId(current => current === bookId ? booksRef.current[0]?.id ?? '' : current);
-        },
-        removeFiles: () => removeBookFiles(bookId, book.coverUrl),
-        removeCloud: () => user ? deleteBookFromSupabase(bookId) : Promise.resolve(true),
-        reportCloudFailure: filesRemoved => {
-          if (spaceActive.current) showToast(filesRemoved
-            ? `“${book.title}” was removed on this device, but cloud cleanup could not be confirmed. Its cloud copy may return after reloading.`
-            : `“${book.title}” left Library, but some local files remain and cloud cleanup could not be confirmed.`);
-        },
-      });
-      if (result.removed && spaceActive.current) showToast(result.message);
-      return result;
+      return await onRemovalJob(bookId);
     } finally { removingBook.current = false; }
   };
 
@@ -799,6 +778,8 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
     if (saved) showToast('Reading preferences saved on this device');
     return saved;
   };
+
+  const deletionRetries = useDeletionRetries(storage, cloud, Boolean(user) && hydrated && highlightArchive.status === 'ready', `${books.length}:${highlights.length}`);
 
   // ---- Layout ----
   const reading = activeTab === 'reading';
@@ -891,6 +872,8 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
         {activeTab === 'notebook' && (
           <NotebookView
             cloud={cloud}
+            deletionNotice={deletionRetries.notice}
+            onRetryDeletions={deletionRetries.retry}
             highlightStatus={highlightArchive.status}
             highlightNotice={highlightArchive.notice}
             highlightBusy={highlightArchive.busy}
@@ -970,6 +953,9 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
           onSignOut={handleSignOut}
           onBackupLibrary={handleBackupLibrary}
           onRestoreLibrary={handleRestoreLibrary}
+          onChooseSafetyCopy={choosePortableBackup}
+          onExportSafetyCopy={includeOriginals => onPortableJob({ kind: 'export', includeOriginals })}
+          onRestoreSafetyCopy={(backup, preferences) => onPortableJob({ kind: 'restore', backup, preferences })}
           showToast={showToast}
         />
       )}
@@ -1014,6 +1000,73 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
   );
 }
 
+/** Recovery runs before archive hooks mount. Portable jobs unmount them first. */
+function ReadingSpace(props: ReadingSpaceProps) {
+  const storage = useMemo(() => createLocalStore(props.scope), [props.scope]);
+  const [job, setJob] = useState<PortableJob | null>(null);
+  const [phase, setPhase] = useState<'working' | 'ready' | 'done' | 'error'>('working');
+  const [message, setMessage] = useState('');
+  const [canOpen, setCanOpen] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const running = useRef(false);
+  const removalReply = useRef<((result: BookRemovalResult) => void) | null>(null);
+  useEffect(() => () => { removalReply.current?.({ removed: false, message: 'The reading space changed. Reopen the original space to check removal.' }); }, []);
+  useEffect(() => {
+    let active = true;
+    setPhase('working');
+    void (async () => {
+      try {
+        await recoverPortableRestore(storage);
+        // File cleanup is idempotent and stays queued if native deletion fails.
+        try { await createLibraryStore(storage).cleanupFiles(storage.removeBookFiles); } catch { /* The persisted cleanup list remains. */ }
+        if (!active) return;
+        if (job?.kind === 'export') {
+          await exportPortableBackup(storage, job.includeOriginals);
+          if (active) { setMessage('Safety copy prepared. Check that your chosen destination saved the ZIP file.'); setPhase('done'); }
+        } else if (job?.kind === 'restore') {
+          await importPortableBackup(storage, job.backup, job.preferences);
+          if (active) { setMessage('Safety copy restored as separate books and saved work.'); setPhase('done'); }
+        } else if (job?.kind === 'remove') {
+          const title = await removeBookWithRecovery(storage, job.bookId);
+          let filesRemain = true;
+          try { filesRemain = (await createLibraryStore(storage).cleanupFiles(storage.removeBookFiles)).pendingFileRemovals.length > 0; } catch { /* Retry on reopening. */ }
+          const result = { removed: true, message: `“${title}” removed on this device.${filesRemain ? ' Some local files still need cleanup.' : ''}` };
+          removalReply.current?.(result); removalReply.current = null;
+          if (active) { setMessage(result.message); setPhase('done'); }
+        } else setPhase('ready');
+      } catch (error) {
+        let pending = true;
+        try { pending = await hasPendingRestore(storage); } catch { /* Unknown state stays closed. */ }
+        removalReply.current?.({ removed: false, message: 'Removal could not be completed. Reopen this reading space to finish recovery.' }); removalReply.current = null;
+        if (active) {
+          setMessage(error instanceof Error ? error.message : 'This recovery action could not be completed.');
+          setCanOpen(!pending); setPhase('error');
+        }
+      } finally { running.current = false; }
+    })();
+    return () => { active = false; };
+  }, [storage, job, attempt]);
+  const requestJob = (next: PortableJob) => {
+    if (running.current) return;
+    running.current = true; setPhase('working'); setJob(next);
+  };
+  const requestRemoval = (bookId: string): Promise<BookRemovalResult> => {
+    if (running.current) return Promise.resolve({ removed: false, message: 'Another library operation is still in progress.' });
+    return new Promise(resolve => { removalReply.current = resolve; requestJob({ kind: 'remove', bookId }); });
+  };
+  if (phase === 'ready') return <FolioApp {...props} onPortableJob={requestJob} onRemovalJob={requestRemoval} />;
+  return <View style={[styles.app, styles.center, { padding: 24, gap: 16 }]}>
+    {phase === 'working' ? <>
+      <ActivityIndicator accessibilityLabel={job?.kind === 'export' ? 'Preparing safety copy' : 'Opening and recovering your reading space'} />
+      <Text accessibilityLiveRegion="polite">{job?.kind === 'export' ? 'Preparing your safety copy…' : 'Checking and saving your reading space…'}</Text>
+    </> : <>
+      <Text accessibilityRole={phase === 'error' ? 'alert' : undefined}>{message}</Text>
+      {phase === 'error' && <Pressable accessibilityRole="button" style={{ padding: 16 }} onPress={() => { setPhase('working'); setJob(null); setAttempt(value => value + 1); }}><Text>Retry recovery</Text></Pressable>}
+      {(phase === 'done' || canOpen) && <Pressable accessibilityRole="button" style={{ padding: 16 }} onPress={() => { setJob(null); setPhase('working'); setAttempt(value => value + 1); }}><Text>Open Library</Text></Pressable>}
+    </>}
+  </View>;
+}
+
 // The key unmounts old screens/state; each asynchronous operation retains its old
 // storage and cloud repository rather than acquiring the next account's scope.
 function AccountBoundary() {
@@ -1043,7 +1096,7 @@ function AccountBoundary() {
     </View>
   );
   const scope = `${new URL(SUPABASE_URL || 'https://unconfigured.invalid').hostname}:${identity.user?.id ?? 'guest'}`;
-  return <FolioApp key={scope} scope={scope} user={identity.user} hasLegacyData={hasLegacyData} />;
+  return <ReadingSpace key={scope} scope={scope} user={identity.user} hasLegacyData={hasLegacyData} />;
 }
 
 export default function App() {

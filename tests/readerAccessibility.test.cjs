@@ -2463,3 +2463,40 @@ test('book details collapse diagnostic identifiers and expose removal independen
   assert.equal(elements(root).some(node => node.type === f.CoverEditor), false);
   await dialog.props.onRemove(); assert.equal(f.selected.at(-1), null); f.h.unmount();
 });
+
+test('safety-copy selection is guarded while checking; restore needs a reviewed copy and preserves settings by default', async () => {
+  let choose, copies = [], exported = [];
+  const copy = { summary: { books: 2, originals: 1, readable: 2, highlights: 4, vocabulary: 3, bookmarks: 2 } };
+  const f = accountHarness({ onChooseSafetyCopy: () => new Promise(done => { choose = done; }), onExportSafetyCopy: originals => exported.push(originals), onRestoreSafetyCopy: (value, preferences) => copies.push([value, preferences]) });
+  let root = f.render(); const pending = labelled(root, 'Choose safety copy').onPress(); root = f.render();
+  assert.equal(labelled(root, 'Close account').disabled, true); labelled(root, 'Export safety copy').onPress(); assert.deepEqual(exported, []);
+  choose(copy); await pending; root = f.render();
+  assert.match(renderedText(root), /Review this safety copy/); assert.match(renderedText(root), /Restore adds separate copies/); assert.deepEqual(copies, []);
+  labelled(root, 'Restore safety copy as separate books').onPress(); assert.deepEqual(copies, [[copy, false]]);
+  labelled(root, 'Use reading settings from safety copy').onPress(); root = f.render(); labelled(root, 'Restore safety copy as separate books').onPress(); assert.deepEqual(copies[1], [copy, true]);
+  labelled(root, 'Cancel safety copy restore').onPress(); root = f.render(); assert.doesNotMatch(renderedText(root), /Review this safety copy/); f.h.unmount();
+});
+
+test('safety-copy export respects original-file choice and remains available for Guest', async () => {
+  const exported = [];
+  const f = accountHarness({ user: null, onChooseSafetyCopy: async () => null, onExportSafetyCopy: value => exported.push(value), onRestoreSafetyCopy: () => {} });
+  let root = f.render(); labelled(root, 'Export safety copy').onPress(); assert.deepEqual(exported, [true]);
+  labelled(root, 'Include original EPUB files').onPress(); root = f.render(); labelled(root, 'Export safety copy').onPress(); assert.deepEqual(exported, [true, false]);
+  await labelled(root, 'Choose safety copy').onPress(); root = f.render(); assert.doesNotMatch(renderedText(root), /Review this safety copy/);
+  assert.doesNotMatch(renderedText(root), /Supabase|Client Secret|Cloud Console/); f.h.unmount();
+});
+
+test('account-removal retries back off, pause in background, and cancel late work after leaving the reading space', async () => {
+  let calls = 0, resolve;
+  const h = harness({ runEffects: true, moduleMocks: { './deletionRetries': { retryRecordedDeletions: async () => { calls++; return { pending: 2, failed: 1 }; } } } });
+  const { useDeletionRetries } = h.load('../src/lib/useDeletionRetries.ts');
+  const props = { storage: {}, cloud: {}, enabled: true };
+  const component = () => useDeletionRetries(props.storage, props.cloud, props.enabled, '1:1');
+  h.render(component); await new Promise(done => setImmediate(done)); assert.equal(calls, 1); assert.equal([...h.timers.values()][0].ms, 15000);
+  h.tick(); await new Promise(done => setImmediate(done)); assert.equal([...h.timers.values()][0].ms, 30000);
+  h.appState('background'); assert.equal(h.timers.size, 0); h.appState('active'); await new Promise(done => setImmediate(done)); assert.equal(calls, 3);
+  h.unmount(); assert.equal(h.timers.size, 0);
+  const late = harness({ runEffects: true, moduleMocks: { './deletionRetries': { retryRecordedDeletions: () => new Promise(done => { resolve = done; }) } } });
+  const hook = late.load('../src/lib/useDeletionRetries.ts').useDeletionRetries;
+  late.render(() => hook({}, {}, true, '1')); late.unmount(); const writes = late.stateWrites(); resolve({ pending: 1, failed: 1 }); await new Promise(done => setImmediate(done)); assert.equal(late.stateWrites(), writes); assert.equal(late.timers.size, 0);
+});

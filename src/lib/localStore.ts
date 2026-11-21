@@ -175,7 +175,39 @@ export function createLocalStore(scope?: string) {
     }
   }
 
-  return { storageKey, loadJSON, loadJSONStrict, loadJSONEntryStrict, saveJSON, saveJSONStrict, coversDir, savePages, getBookPagesLocation, persistBookFile, removeBookFiles, removeCustomCover, loadPages, persistCoverImage };
+  async function readBackupAsset(bookId: string, kind: 'pages' | 'epub' | 'cover', coverUrl?: string): Promise<Uint8Array | null> {
+    const id = fileKey(bookId);
+    const file = kind === 'pages' ? new File(ROOT, 'pages', `${id}.json`) : kind === 'epub' ? new File(ROOT, 'books', `${id}.epub`) : (() => {
+      if (!coverUrl) return null;
+      const prefix = new Directory(ROOT, 'covers').uri.replace(/\/?$/, '/');
+      const imported = coverUrl.startsWith(prefix) && new RegExp(`^${id}\\.(?:png|jpg|jpeg|webp|gif|avif|heic|heif)$`).test(coverUrl.slice(prefix.length));
+      return imported || customCoverName(id, coverUrl) ? new File(coverUrl) : null;
+    })();
+    if (!file?.exists) return null;
+    // Inspect before allocating an entire file in JavaScript memory.
+    if (file.size > 48 * 1024 * 1024) throw new Error('A book file is too large for this safety copy. Try excluding original EPUB files.');
+    return file.bytes();
+  }
+
+  function writeRecoveryAsset(bookId: string, kind: 'pages' | 'epub' | 'cover', bytes: Uint8Array, extension = 'jpg'): string {
+    const id = fileKey(bookId);
+    if (kind === 'cover' && !['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'heic', 'heif'].includes(extension)) throw new Error('Unsupported recovery artwork.');
+    const folder = kind === 'pages' ? 'pages' : kind === 'epub' ? 'books' : 'covers';
+    const suffix = kind === 'pages' ? 'json' : kind === 'epub' ? 'epub' : extension;
+    const file = new File(ensureDir(folder), `${id}.${suffix}`);
+    if (file.exists) throw new Error('This recovery file already exists.');
+    try {
+      file.create(); file.write(bytes);
+      if (!file.exists || file.size !== bytes.length) throw new Error('Incomplete recovery file');
+      return file.uri;
+    } catch {
+      let cleaned = true;
+      try { if (file.exists) file.delete(); } catch { cleaned = false; }
+      throw new Error(cleaned ? 'The recovery file could not be saved completely. Check available storage.' : 'The recovery file could not be saved completely, and an incomplete file remains on this device.');
+    }
+  }
+
+  return { storageKey, loadJSON, loadJSONStrict, loadJSONEntryStrict, saveJSON, saveJSONStrict, coversDir, savePages, getBookPagesLocation, persistBookFile, removeBookFiles, removeCustomCover, loadPages, persistCoverImage, readBackupAsset, writeRecoveryAsset };
 }
 
 export type LocalStore = ReturnType<typeof createLocalStore>;

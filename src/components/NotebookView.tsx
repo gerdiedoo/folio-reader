@@ -35,6 +35,8 @@ interface NotebookViewProps {
   onOpenFlashcard: (item: LexiconEntry) => void;
   showToast: (msg: string) => void;
   bottomInset: number;
+  deletionNotice?: string | null;
+  onRetryDeletions?: () => void;
 }
 
 export const NotebookView: React.FC<NotebookViewProps> = ({
@@ -57,6 +59,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   onOpenFlashcard,
   showToast,
   bottomInset,
+  deletionNotice, onRetryDeletions,
 }) => {
   const colors = useAppTheme();
   const { upsertBookToSupabase, upsertHighlightToSupabase, upsertLexiconToSupabase } = cloud;
@@ -499,6 +502,10 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
       ))}
 
       {/* Sync hub */}
+      {deletionNotice && <View style={{ padding: 16, gap: 8 }}>
+        <Text accessibilityLiveRegion="polite" style={styles.statusText}>{deletionNotice}</Text>
+        {onRetryDeletions && <Pressable accessibilityRole="button" accessibilityLabel="Retry account removals" onPress={onRetryDeletions} style={{ minHeight: 48, justifyContent: 'center' }}><Text style={{ color: colors.primary }}>Retry removals</Text></Pressable>}
+      </View>}
       <View style={styles.hub}>
         <View style={styles.hubHead}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>

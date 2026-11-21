@@ -4,7 +4,7 @@ interface Storage {
   loadJSONEntryStrict(key: string): Promise<{ present: boolean; value: unknown }>;
   saveJSONStrict(key: string, value: unknown): Promise<void>;
 }
-interface LibraryArchive { version: 1; books: Book[]; removedBookIds: string[] }
+interface LibraryArchive { version: 1; books: Book[]; removedBookIds: string[]; pendingFileRemovals: { id: string; coverUrl: string }[] }
 const KEY = 'libraryArchive';
 const queues = new Map<string, Promise<void>>();
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -31,14 +31,17 @@ export function createLibraryStore(storage: Storage) {
     const entry = await storage.loadJSONEntryStrict(KEY);
     if (!entry.present) {
       const legacy = await storage.loadJSONEntryStrict('books');
-      return { version: 1, books: legacy.present ? books(legacy.value) : [], removedBookIds: [] };
+      return { version: 1, books: legacy.present ? books(legacy.value) : [], removedBookIds: [], pendingFileRemovals: [] };
     }
     const value = entry.value;
     if (!record(value) || value.version !== 1 || !Array.isArray(value.removedBookIds) ||
       !value.removedBookIds.every(id => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(id)) || new Set(value.removedBookIds).size !== value.removedBookIds.length) throw Error('The saved library archive could not be read.');
     const items = books(value.books), removed = value.removedBookIds as string[];
     if (items.some(book => removed.includes(book.id))) throw Error('The saved library archive is inconsistent.');
-    return { version: 1, books: items, removedBookIds: removed };
+    const pending = value.pendingFileRemovals ?? [];
+    if (!Array.isArray(pending) || !pending.every(item => record(item) && typeof item.id === 'string' && removed.includes(item.id) && typeof item.coverUrl === 'string') ||
+      new Set(pending.map(item => item.id)).size !== pending.length) throw Error('The saved file cleanup list could not be read.');
+    return { version: 1, books: items, removedBookIds: removed, pendingFileRemovals: pending };
   };
   const update = (change: (current: LibraryArchive) => LibraryArchive) => enqueue(async () => {
     const current = await read(), next = change(current);
@@ -60,7 +63,13 @@ export function createLibraryStore(storage: Storage) {
     }),
     remove: (id: string) => update(current => {
       if (!/^[a-zA-Z0-9_-]{1,200}$/.test(id)) throw Error('Invalid book identifier.');
-      return { ...current, books: current.books.filter(book => book.id !== id), removedBookIds: [...new Set([...current.removedBookIds, id])] };
+      const book = current.books.find(item => item.id === id);
+      return { ...current, books: current.books.filter(book => book.id !== id), removedBookIds: [...new Set([...current.removedBookIds, id])],
+        pendingFileRemovals: book ? [...current.pendingFileRemovals.filter(item => item.id !== id), { id, coverUrl: book.coverUrl }] : current.pendingFileRemovals };
+    }),
+    cleanupFiles: (remove: (id: string, coverUrl: string) => boolean) => update(current => {
+      const pending = current.pendingFileRemovals.filter(item => { try { return !remove(item.id, item.coverUrl); } catch { return true; } });
+      return pending.length === current.pendingFileRemovals.length ? current : { ...current, pendingFileRemovals: pending };
     }),
     mergeRemote: (remote: unknown[]) => {
       let skipped = 0;
