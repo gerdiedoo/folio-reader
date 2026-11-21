@@ -162,29 +162,7 @@ jobs:
           JS
       - name: Start disposable Android emulator
         timeout-minutes: 15
-        run: |
-          if [ ! -e /dev/kvm ]; then
-            echo '::error::Hardware acceleration is required for the Android smoke test.'
-            exit 1
-          fi
-          sudo chmod a+rw /dev/kvm
-          export PATH="$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
-          echo "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
-          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-          sdkmanager 'emulator' 'platform-tools' 'system-images;android-36;google_apis;x86_64'
-          echo no | avdmanager create avd --force --name folio-smoke --package 'system-images;android-36;google_apis;x86_64' --device pixel_6
-          emulator -avd folio-smoke -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -memory 2048 > "$RUNNER_TEMP/folio-emulator.log" 2>&1 &
-          adb wait-for-device
-          for attempt in $(seq 1 120); do
-            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; then break; fi
-            sleep 2
-          done
-          test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1
-          adb shell input keyevent 82
-          adb shell settings put global window_animation_scale 0
-          adb shell settings put global transition_animation_scale 0
-          adb shell settings put global animator_duration_scale 0
-          adb install "$RUNNER_TEMP/folio-dev.apk"
+        run: bash scripts/device-checks/start-emulator.sh
       - name: Exercise Android reading and recovery journey
         timeout-minutes: 8
         env:
@@ -201,6 +179,7 @@ jobs:
           path: |
             ${{ runner.temp }}/folio-android-evidence
             ${{ runner.temp }}/folio-emulator.log
+            ${{ runner.temp }}/folio-emulator-setup.log
           if-no-files-found: warn
           retention-days: 7
       - name: Explain build failure
