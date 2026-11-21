@@ -1940,6 +1940,20 @@ test('Library Recent and Continue Reading use reading date and device text; Down
   assert.deepEqual(labelled(root, 'Grid view').accessibilityState, { selected: false }); f.h.unmount();
 });
 
+test('Library grid shows truthful percentage badges for unread and finished books while list status stays descriptive', () => {
+  const f = libraryHarness();
+  f.props.books = f.props.books.map(book => book.id === 'Amber' ? { ...book, isFinished: true } : book);
+  const cover = (root, id) => elements(libraryRows(root).find(row => row.props.accessibilityLabel.startsWith(id + ' by '))).find(node => node.type === 'BookCover').props;
+  let root = f.render();
+  assert.deepEqual(cover(root, 'Unread').badge, { kind: 'percent', value: 0 });
+  assert.deepEqual(cover(root, 'Amber').badge, { kind: 'percent', value: 100 });
+  assert.deepEqual(cover(root, 'Brook').badge, { kind: 'percent', value: 40 });
+  labelled(root, 'List view').onPress(); root = f.render();
+  assert.equal(cover(root, 'Unread').badge, undefined);
+  assert.deepEqual(cover(root, 'Amber').badge, { kind: 'read' });
+  f.h.unmount();
+});
+
 test('book details and Android back retain Library search; cover edit is a separate named action', () => {
   const f = libraryHarness(); let root = f.render();
   labelled(root, 'Search Library by title or author').onChangeText('amber'); root = f.render();
@@ -2078,8 +2092,8 @@ test('image covers show bundled illustrations when missing or failed; explicit c
   const book = { title: 'A Book', author: 'An Author', coverUrl: '', coverAlt: 'A book cover' };
   let root = h.render(BookCover, { book, style: 'image' });
   assert.ok(elements(root).some(node => node.type === 'CoverIllustration'));
-  root = h.render(BookCover, { book: { ...book, coverUrl: 'https://example.com/cover.jpg' }, style: 'image' });
-  elements(root).find(node => node.type === 'Image').props.onError(); root = h.render(BookCover, { book: { ...book, coverUrl: 'https://example.com/cover.jpg' }, style: 'image' });
+  root = h.render(BookCover, { book: { ...book, coverUrl: 'https://example.com/cover.jpg' }, style: 'image', variant: 'library' });
+  elements(root).find(node => node.type === 'Image').props.onError(); root = h.render(BookCover, { book: { ...book, coverUrl: 'https://example.com/cover.jpg' }, style: 'image', variant: 'library' });
   assert.ok(elements(root).some(node => node.type === 'CoverIllustration'));
   root = h.render(BookCover, { book, style: 'typographic' });
   assert.equal(elements(root).some(node => node.type === 'CoverIllustration'), false); h.unmount();

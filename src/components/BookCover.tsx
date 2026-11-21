@@ -24,6 +24,7 @@ interface BookCoverProps {
   tint?: ClothTint;
   /** Compact = featured card / editor preview; regular = library grid. */
   size?: 'compact' | 'regular';
+  variant?: 'default' | 'library';
   badge?: { kind: 'read' } | { kind: 'percent'; value: number };
   onEdit?: () => void;
   containerStyle?: StyleProp<ViewStyle>;
@@ -46,6 +47,7 @@ export const BookCover: React.FC<BookCoverProps> = ({
   uriOverride,
   tint,
   size = 'regular',
+  variant = 'default',
   badge,
   onEdit,
   containerStyle,
@@ -58,10 +60,11 @@ export const BookCover: React.FC<BookCoverProps> = ({
   const showTypographic = style === 'typographic';
   const showIllustration = !uri || failedUri === uri;
   const compact = size === 'compact';
+  const library = variant === 'library';
   const palette = CLOTH[normalizeCoverTint(tint ?? book.coverTint)];
 
-  return (
-    <View style={[styles.cover, containerStyle]}>
+  const cover = (
+    <View style={[styles.cover, library ? styles.libraryArtwork : containerStyle]}>
       {showTypographic ? (
         <View
           style={[
@@ -105,7 +108,7 @@ export const BookCover: React.FC<BookCoverProps> = ({
             resizeMode="cover"
             onError={() => setFailedUri(uri)}
           />
-          <SpineShadow />
+          {!library && <SpineShadow />}
         </View>
       )}
 
@@ -116,8 +119,8 @@ export const BookCover: React.FC<BookCoverProps> = ({
             <Text style={[styles.badgeText, { color: '#ffe2c2' }]}>Read</Text>
           </View>
         ) : (
-          <View style={[styles.badge, { backgroundColor: 'rgba(253,249,242,0.92)' }]}>
-            <Text style={[styles.badgeText, { color: colors.onSurface }]}>{badge.value}%</Text>
+          <View style={[styles.badge, library && styles.libraryBadge, { backgroundColor: 'rgba(253,249,242,0.94)' }]}>
+            <Text style={[styles.badgeText, library && styles.libraryBadgeText, { color: colors.onSurface }]}>{badge.value}%</Text>
           </View>
         )
       ) : null}
@@ -134,6 +137,7 @@ export const BookCover: React.FC<BookCoverProps> = ({
       ) : null}
     </View>
   );
+  return library ? <View style={[styles.libraryCover, containerStyle]}>{cover}</View> : cover;
 };
 
 const styles = StyleSheet.create({
@@ -147,6 +151,18 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 3 },
   },
+  libraryCover: {
+    borderRadius: 10,
+    backgroundColor: colors.surfaceHighest,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.14,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  libraryArtwork: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, borderRadius: 10, elevation: 0, shadowOpacity: 0 },
+  libraryBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 7 },
+  libraryBadgeText: { fontFamily: F.sansSemi, fontSize: 14, lineHeight: 20, letterSpacing: 0.2 },
   image: { width: '100%', height: '100%' },
   cloth: {
     flex: 1,

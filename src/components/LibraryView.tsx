@@ -539,13 +539,16 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   book={b}
                   style={b.coverStyle || globalCoverStyle}
                   size={viewMode === 'list' ? 'compact' : 'regular'}
+                  variant={viewMode === 'grid' ? 'library' : 'default'}
                   containerStyle={
                     viewMode === 'grid'
                       ? { width: '100%', aspectRatio: 2 / 3 }
                       : styles.libraryListCover
                   }
                   badge={
-                    b.isFinished
+                    viewMode === 'grid'
+                      ? { kind: 'percent', value: displayedBookProgress(b) }
+                      : b.isFinished
                       ? { kind: 'read' }
                       : hasReadingHistory(b)
                       ? { kind: 'percent', value: displayedBookProgress(b) }
@@ -553,8 +556,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   }
                 />
                 <View style={viewMode === 'list' ? styles.libraryListCopy : undefined}>
-                  <Text style={styles.cardTitle} numberOfLines={2}>{b.title}</Text>
-                  <Text style={styles.cardAuthor} numberOfLines={1}>{b.author}</Text>
+                  <Text style={viewMode === 'grid' ? styles.shelfTitle : styles.cardTitle} numberOfLines={2} ellipsizeMode="tail">{b.title}</Text>
+                  <Text style={viewMode === 'grid' ? styles.shelfAuthor : styles.cardAuthor} numberOfLines={viewMode === 'grid' ? 2 : 1} ellipsizeMode="tail">{b.author}</Text>
                   {viewMode === 'list' ? (
                     <Text style={styles.listBookProgress}>
                       {libraryBookStatus(b)} · Position {b.currentPage} of {b.totalPages}
@@ -563,10 +566,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   {libraryStatus === 'ready' && !available.has(b.id) && <Text style={styles.listBookProgress}>EPUB needed on this device</Text>}
                 </View>
               </Pressable>
-              <Pressable onPress={() => { if (libraryStatus === 'ready') setEditing(b); }} disabled={libraryStatus !== 'ready'}
-                accessibilityRole="button" accessibilityLabel={`Customize cover for ${b.title}`} accessibilityState={{ disabled: libraryStatus !== 'ready' }} style={styles.editBookAction}>
-                <Icon name="palette" size={20} color={colors.primary} />
-              </Pressable>
+              <View pointerEvents="box-none" style={viewMode === 'grid' ? styles.coverActions : StyleSheet.absoluteFill}>
+                <Pressable onPress={() => { if (libraryStatus === 'ready') setEditing(b); }} disabled={libraryStatus !== 'ready'}
+                  accessibilityRole="button" accessibilityLabel={`Customize cover for ${b.title}`} accessibilityState={{ disabled: libraryStatus !== 'ready' }}
+                  style={viewMode === 'grid' ? styles.shelfEditTarget : styles.editBookAction}>
+                  <View pointerEvents="none" style={viewMode === 'grid' ? styles.shelfEditFace : undefined}>
+                    <Icon name="palette" size={20} color={viewMode === 'grid' ? '#605e5a' : colors.primary} />
+                  </View>
+                </Pressable>
+              </View>
             </View>
           ))}
           {visibleRecoveryBooks.map((recovery) => {
@@ -594,6 +602,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     }}
                     style="typographic"
                     size={viewMode === 'list' ? 'compact' : 'regular'}
+                    variant={viewMode === 'grid' ? 'library' : 'default'}
                     containerStyle={
                       viewMode === 'grid'
                         ? { width: '100%', aspectRatio: 2 / 3 }
@@ -615,8 +624,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   ) : null}
                 </View>
                 <View style={viewMode === 'list' ? styles.libraryListCopy : undefined}>
-                  <Text style={styles.cardTitle} numberOfLines={2}>{recovery.title}</Text>
-                  <Text style={styles.cardAuthor} numberOfLines={1}>{recovery.author}</Text>
+                  <Text style={viewMode === 'grid' ? styles.shelfTitle : styles.cardTitle} numberOfLines={2} ellipsizeMode="tail">{recovery.title}</Text>
+                  <Text style={viewMode === 'grid' ? styles.shelfAuthor : styles.cardAuthor} numberOfLines={viewMode === 'grid' ? 2 : 1} ellipsizeMode="tail">{recovery.author}</Text>
                   {viewMode === 'list' ? (
                     <>
                       <Text style={styles.listBookProgress}>Needs the original EPUB file</Text>
@@ -1021,7 +1030,12 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   coverToggle: { flexDirection: 'row', backgroundColor: colors.surfaceContainer, padding: 3, borderRadius: 10, gap: 2 },
   toggleBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
 
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 16, rowGap: 22 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 16, rowGap: 26 },
+  coverActions: { position: 'absolute', top: 0, left: 0, right: 0, aspectRatio: 2 / 3, zIndex: 1 },
+  shelfEditTarget: { position: 'absolute', right: 4, bottom: 4, width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
+  shelfEditFace: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.94)', alignItems: 'center', justifyContent: 'center' },
+  shelfTitle: { fontFamily: F.serifSemi, fontSize: 19, lineHeight: 24, color: colors.onSurface, marginTop: 10 },
+  shelfAuthor: { fontFamily: F.sans, fontSize: 14, lineHeight: 20, color: colors.muted, marginTop: 3 },
   list: { gap: 12 },
   libraryListCard: {
     width: '100%',
