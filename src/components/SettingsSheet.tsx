@@ -6,6 +6,7 @@ import { colors, F, previewPaper, readerFontFamily, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
 import { LineSpacing, Margins, PaperTheme, ReadingSettings } from '../types';
 import { Icon, IconName } from './ui/Icon';
+import { choiceAppearance, choiceStyles } from './ui/choiceStyles';
 import { ModalShell } from './ui/ModalShell';
 
 interface SettingsSheetProps {
@@ -198,12 +199,14 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                       accessibilityLabel={`${f} typeface`}
                       disabled={locked}
                       accessibilityState={{ selected, ...(locked ? { disabled: true } : {}) }}
-                      style={[styles.fontPill, { backgroundColor: selected ? colors.primaryContainer : colors.surface }]}
+                      style={choiceStyles.target}
                     >
-                      {selected && <Icon name="check_small" size={16} color="#fff" />}
-                      <Text style={[styles.fontPillText, { color: selected ? '#fff' : colors.onSurface }]}>
-                        {f}
-                      </Text>
+                      <View style={[choiceStyles.face, choiceAppearance(colors, selected)]} pointerEvents="none">
+                        {selected && <Icon name="check_small" size={16} color={colors.onPrimaryContainer} />}
+                        <Text style={[styles.fontPillText, { color: selected ? colors.onPrimaryContainer : colors.onSurface }]}>
+                          {f}
+                        </Text>
+                      </View>
                     </Pressable>
                   );
                 })}
@@ -591,14 +594,6 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   fieldLabel: { ...type.labelMd, color: colors.muted, letterSpacing: 0.8 },
   fieldHint: { ...type.labelSm, color: colors.primary },
   pillWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  fontPill: {
-    minHeight: 48,    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 8,
-  },
   fontPillText: { ...type.labelMd },
   card: {
     gap: 10,

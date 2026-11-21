@@ -23,6 +23,7 @@ import { Book, BookContentPage } from '../types';
 import { BookCover } from './BookCover';
 import { Chip } from './ui/Chip';
 import { Icon } from './ui/Icon';
+import { choiceAppearance, choiceStyles } from './ui/choiceStyles';
 import { ProgressBar } from './ui/ProgressBar';
 
 interface Props {
@@ -489,14 +490,16 @@ export const BrowseBooksScreen: React.FC<Props> = ({
             <Pressable
               key={option.id}
               onPress={() => setSortBy(option.id)}
-              style={styles.smallAction}
+              style={choiceStyles.target}
               accessibilityLabel={`Sort free books by ${option.label}`}
               accessibilityRole="button"
               accessibilityState={{ selected: sortBy === option.id }}
             >
-              <Text style={[styles.sortText, sortBy === option.id && styles.sortActive]}>
-                {option.label}
-              </Text>
+              <View style={[choiceStyles.face, choiceAppearance(palette, sortBy === option.id)]} pointerEvents="none">
+                <Text style={[styles.sortText, { color: sortBy === option.id ? palette.onPrimaryContainer : palette.onSurface }]}>
+                  {option.label}
+                </Text>
+              </View>
             </Pressable>
           ))}
         </ScrollView>
@@ -683,7 +686,7 @@ const createStyles = (p: AppPalette) =>
     chipRow: { gap: 6, paddingHorizontal: 20 },
     sortRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: 20 },
     sortGroup: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
-    sortOptions: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingRight: 6 },
+    sortOptions: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: 6 },
     sortText: { ...type.labelMd, color: p.muted },
     sortActive: { color: p.primary },
     sortNote: { ...type.bodySm, color: p.muted, marginTop: 0, paddingHorizontal: 20 },

@@ -25,6 +25,7 @@ import { BookCover, CLOTH, ClothTint } from './BookCover';
 import { BrowseBooksScreen } from './BrowseBooksScreen';
 import { Chip } from './ui/Chip';
 import { Icon } from './ui/Icon';
+import { choiceAppearance, choiceStyles } from './ui/choiceStyles';
 import { ModalShell } from './ui/ModalShell';
 import { ProgressBar } from './ui/ProgressBar';
 
@@ -464,8 +465,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         <View style={styles.sortGroup}>
           <Icon name="sort" size={16} color={colors.muted} />
           {SORTS.map((s) => (
-            <Pressable key={s.id} onPress={() => setSort(s.id)} accessibilityRole="button" accessibilityLabel={`Sort Library by ${s.label}`} accessibilityState={{ selected: sort === s.id }} style={styles.sortButton}>
-              <Text style={[styles.sortText, sort === s.id && styles.sortActive]}>{s.label}</Text>
+            <Pressable key={s.id} onPress={() => setSort(s.id)} accessibilityRole="button" accessibilityLabel={`Sort Library by ${s.label}`} accessibilityState={{ selected: sort === s.id }} style={choiceStyles.target}>
+              <View style={[choiceStyles.face, choiceAppearance(colors, sort === s.id)]} pointerEvents="none">
+                <Text style={[styles.sortText, { color: sort === s.id ? colors.onPrimaryContainer : colors.onSurface }]}>{s.label}</Text>
+              </View>
             </Pressable>
           ))}
         </View>
@@ -1042,7 +1045,6 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     justifyContent: 'center',
   },
   sortGroup: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4, flexShrink: 1 },
-  sortButton: { minWidth: 48, minHeight: 48, paddingHorizontal: 8, justifyContent: 'center' },
   sortText: { ...type.labelMd, color: colors.muted },
   sortActive: { color: colors.primary },
   coverToggle: { flexDirection: 'row', backgroundColor: colors.surfaceContainer, padding: 3, borderRadius: 10, gap: 2 },

@@ -797,3 +797,25 @@ forced into a clipped fixed height. Selected text uses the theme's contrast colo
    still expand cards. Library's reading summary is smaller with closer section
    spacing. Native layout and touch behavior require this phone check; automated
    regression tests and bundle exports do not verify visual appearance.
+
+## Consistent typeface and sort choices (step 22, awaiting an APK)
+
+This step is saved locally on development. No push or APK build was requested.
+When a later APK includes it, check the following on the phone:
+
+1. Compare Settings typefaces, Library sort choices and Free Books sort choices
+   with the shared filter chips. All use a 36-point minimum visible rectangle,
+   8-point corners and the same selected/background/contrast colors. The full
+   button retains a 48-point minimum touch target. Typeface choices retain their
+   selected checkmark and their existing pending-save disabled states.
+2. Select a different typeface, apply it, reopen Settings and confirm the saved
+   choice. Try Library Recent/Title/Progress and all Free Books sorting options;
+   their labels, selected states and underlying sorting must remain intact.
+3. Check Charcoal, large system text, narrow screens and landscape. Library sorts
+   can wrap, Free Books sorts scroll horizontally, and typeface choices wrap.
+   Text may grow beyond the minimum visible height. Confirm no clipping and
+   check TalkBack names, selection and disabled states.
+
+TypeScript and the existing 336 regression tests pass. Styling is shared in
+`src/components/ui/choiceStyles.ts`; native appearance and touch checks remain
+pending until an APK is requested.
