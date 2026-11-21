@@ -109,7 +109,8 @@ try:run()
 except Exception as error:
     try:
         labels=[node.get('content-desc') or node.get('text') for node in nodes()]
-        message=json.dumps({'error':str(error),'visible':[label for label in labels if label]},ensure_ascii=True)[:6000]
+        runtime=adb('logcat','-d','-v','brief','ReactNativeJS:V','AndroidRuntime:E','*:S',check=False).decode(errors='replace')[-2200:]
+        message=json.dumps({'error':str(error),'runtime':runtime,'visible':[label for label in labels if label]},ensure_ascii=True)[:3800]
         print('::error title=Android reading journey failed::'+message.replace('%','%25').replace('\r','%0D').replace('\n','%0A'),flush=True)
     except Exception:pass
     try:screenshot('failure')
