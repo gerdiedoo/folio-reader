@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { READER_FONTS, normalizeReaderSettings, readerTextMetrics } from '../lib/readerPreferences';
 import { INITIAL_SETTINGS } from '../data/initialData';
-import { colors, F, previewPaper, readerFontFamily, type } from '../theme';
+import { F, previewPaper, readerFontFamily, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
 import { LineSpacing, Margins, PaperTheme, ReadingSettings } from '../types';
 import { Icon, IconName } from './ui/Icon';
@@ -27,11 +27,11 @@ type SheetTab = 'font' | 'themes' | 'info';
 
 const TOTAL_STEPS = 8;
 
-const THEME_OPTIONS: { id: PaperTheme; label: string; swatch: string; check: string; border?: boolean }[] = [
-  { id: 'parchment', label: 'Parchment', swatch: '#fdf9f2', check: colors.primary },
-  { id: 'white', label: 'White', swatch: '#ffffff', check: colors.primary },
-  { id: 'sepia', label: 'Sepia', swatch: '#ffddb6', check: colors.tertiary },
-  { id: 'charcoal', label: 'Charcoal', swatch: '#31302c', check: '#f4f0e9' },
+const THEME_OPTIONS: { id: PaperTheme; label: string }[] = [
+  { id: 'parchment', label: 'Parchment' },
+  { id: 'white', label: 'White' },
+  { id: 'sepia', label: 'Sepia' },
+  { id: 'charcoal', label: 'Charcoal' },
 ];
 
 const SPACING_OPTIONS: { id: LineSpacing; icon: IconName }[] = [
@@ -120,7 +120,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
         <View style={styles.headerRow}>
           <View style={styles.headerLeft}>
             <Icon name="format_size" size={22} color={colors.primary} />
-            <Text style={styles.headerTitle}>Typography &amp; Layout</Text>
+            <Text accessibilityRole="header" style={styles.headerTitle}>Reading settings</Text>
           </View>
           {isSheetOnly && (
             <Pressable disabled={locked} onPress={close} accessibilityRole="button" accessibilityLabel="Close Settings" style={styles.closeBtn}>
@@ -128,8 +128,15 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
             </Pressable>
           )}
         </View>
+      </View>
 
-        <View style={styles.segment}>
+      <ScrollView
+        style={styles.scroller}
+        contentContainerStyle={[styles.content, { paddingBottom: bottomSpace }]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.segment} keyboardShouldPersistTaps="handled">
           {tabs.map((t) => {
             const active = activeTab === t.id;
             return (
@@ -139,24 +146,21 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                 accessibilityRole="tab"
                 accessibilityLabel={t.label}
                 accessibilityState={{ selected: active }}
-                style={[styles.segBtn, active && styles.segBtnActive]}
+                style={choiceStyles.target}
               >
-                <Icon name={t.icon} size={16} color={active ? colors.primary : colors.muted} />
-                <Text style={[styles.segText, { color: active ? colors.primary : colors.muted }]} numberOfLines={1}>
-                  {t.label}
-                </Text>
+                <View style={[choiceStyles.face, choiceAppearance(colors, active)]} pointerEvents="none">
+                  <Icon name={t.icon} size={16} color={active ? colors.onPrimaryContainer : colors.onSurface} />
+                  <Text style={[styles.segText, { color: active ? colors.onPrimaryContainer : colors.onSurface }]}>
+                    {t.label}
+                  </Text>
+                </View>
               </Pressable>
             );
           })}
-        </View>
-      </View>
+        </ScrollView>
 
-      <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: bottomSpace }]}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* Live preview */}
-        <View style={[styles.preview, { backgroundColor: paper.bg }]}>
+        {/* Preview is useful for font and theme choices; Reading Info stays compact. */}
+        {activeTab !== 'info' && <View style={[styles.preview, { backgroundColor: paper.bg }]}>
           <View style={styles.previewHead}>
             <Text style={[styles.previewLabel, { color: paper.fg }]}>LIVE TYPOGRAPHY PREVIEW</Text>
             <Text style={[styles.previewFont, { color: paper.fg }]}>
@@ -174,7 +178,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
             “There is no frigate like a book to take us lands away, nor any coursers like a page of prancing poetry.”
           </Text>
           <Text style={[styles.previewAuthor, { color: paper.fg }]}>— Emily Dickinson</Text>
-        </View>
+        </View>}
 
         {activeTab === 'font' && (
           <>
@@ -199,7 +203,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                       accessibilityLabel={`${f} typeface`}
                       disabled={locked}
                       accessibilityState={{ selected, ...(locked ? { disabled: true } : {}) }}
-                      style={choiceStyles.target}
+                      style={[choiceStyles.target, styles.fittedChoice]}
                     >
                       <View style={[choiceStyles.face, choiceAppearance(colors, selected)]} pointerEvents="none">
                         {selected && <Icon name="check_small" size={16} color={colors.onPrimaryContainer} />}
@@ -343,7 +347,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
         {activeTab === 'themes' && (
           <View style={{ gap: 8 }}>
             <Text style={styles.fieldLabel}>PAGE SURFACE &amp; TONE</Text>
-            <View style={{ flexDirection: 'row', gap: 10 }}>
+            <View style={styles.choiceRow}>
               {THEME_OPTIONS.map((t) => {
                 const selected = local.theme === t.id;
                 return (
@@ -354,25 +358,14 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                     accessibilityLabel={`${t.label} page theme`}
                     disabled={locked}
                     accessibilityState={{ selected, ...(locked ? { disabled: true } : {}) }}
-                    style={[
-                      styles.themeBtn,
-                      selected
-                        ? { backgroundColor: colors.surfaceContainer, borderColor: 'rgba(137,52,20,0.3)' }
-                        : { backgroundColor: colors.surfaceLow, borderColor: 'transparent' },
-                    ]}
+                    style={[choiceStyles.target, styles.fittedChoice]}
                   >
-                    <View style={[styles.swatch, { backgroundColor: t.swatch }]}>
-                      {selected && <Icon name="check" size={20} color={t.check} />}
+                    <View style={[choiceStyles.face, choiceAppearance(colors, selected)]} pointerEvents="none">
+                      <View style={[styles.swatch, { backgroundColor: previewPaper[t.id].bg }]}>
+                        {selected && <Icon name="check" size={14} color={previewPaper[t.id].fg} />}
+                      </View>
+                      <Text style={[styles.choiceText, { color: selected ? colors.onPrimaryContainer : colors.onSurface }]}>{t.label}</Text>
                     </View>
-                    <Text
-                      style={{
-                        fontFamily: selected ? F.sansSemi : F.sans,
-                        fontSize: 11,
-                        color: selected ? colors.onSurface : colors.muted,
-                      }}
-                    >
-                      {t.label}
-                    </Text>
                   </Pressable>
                 );
               })}
@@ -384,8 +377,8 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
           <View style={styles.card}>
             <View style={styles.switchRow}>
               <View style={{ flex: 1, paddingRight: 8 }}>
-                <Text style={styles.switchTitle}>Display Reading Pace</Text>
-                <Text style={styles.switchSub}>Show an approximate time based on passage length</Text>
+                <Text style={styles.switchTitle}>Reading time</Text>
+                <Text style={styles.switchSub}>Show an estimate for the current passage.</Text>
               </View>
               <Switch
                 disabled={locked}
@@ -401,7 +394,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
 
             <View style={{ gap: 8 }}>
               <View style={styles.rowBetween}>
-                <Text style={styles.switchTitle}>Reading Flow Mode</Text>
+                <Text style={styles.switchTitle}>Reading mode</Text>
                 <Text style={styles.fieldHint}>
                   {flowMode === 'paginated'
                     ? 'Page by Page'
@@ -411,9 +404,9 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                 </Text>
               </View>
               <Text style={styles.switchSub}>
-                Choose how book chapters are delivered: constantly scroll non-stop or flip page-by-page.
+                Scroll continuously, turn pages, or read one word at a time in Line mode.
               </Text>
-              <View style={{ flexDirection: 'row', gap: 8 }}>
+              <View style={styles.choiceRow}>
                 <ChoiceButton
                   disabled={locked}
                   icon="unfold_more"
@@ -428,6 +421,13 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
                   active={flowMode === 'paginated'}
                   onPress={() => update({ readingFlowMode: 'paginated' })}
                 />
+                <ChoiceButton
+                  disabled={locked}
+                  icon="play_arrow"
+                  label="Single Line"
+                  active={flowMode === 'single-line'}
+                  onPress={() => update({ readingFlowMode: 'single-line' })}
+                />
               </View>
             </View>
 
@@ -435,15 +435,15 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
 
             <View style={{ gap: 8 }}>
               <View style={styles.rowBetween}>
-                <Text style={styles.switchTitle}>Library Book Thumbnail Style</Text>
+                <Text style={styles.switchTitle}>Default cover style</Text>
                 <Text style={styles.fieldHint}>
                   {coverStyle === 'typographic' ? 'Typographic Text' : 'Illustrated Image'}
                 </Text>
               </View>
               <Text style={styles.switchSub}>
-                Choose between illustrated image covers or pure typographic cloth binding.
+                Used when a book has no saved cover style. Edit a saved cover in Library to change it.
               </Text>
-              <View style={{ flexDirection: 'row', gap: 8 }}>
+              <View style={styles.choiceRow}>
                 <ChoiceButton
                   disabled={locked}
                   icon="image"
@@ -476,11 +476,11 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({
           </View>
         )}
 
-        <View style={{ flexDirection: 'row', gap: 8, paddingTop: 4 }}>
-          <Pressable disabled={locked} onPress={reset} accessibilityRole="button" accessibilityLabel="Reset Defaults" accessibilityState={{ disabled: locked }} style={[styles.actionBtn, { backgroundColor: colors.surfaceContainer }]}>
+        <View style={styles.actionRow}>
+          <Pressable disabled={locked} onPress={reset} accessibilityRole="button" accessibilityLabel="Reset Defaults" accessibilityState={{ disabled: locked }} style={[styles.actionBtn, styles.actionSlot, { backgroundColor: colors.surfaceContainer }]}>
             <Text style={[styles.actionText, { color: colors.muted }]}>Reset Defaults</Text>
           </Pressable>
-          <Pressable disabled={locked || saveStatus !== 'ready'} onPress={apply} accessibilityRole="button" accessibilityLabel="Keep Changes" accessibilityState={{ disabled: locked || saveStatus !== 'ready', busy: saving }} style={[styles.actionBtn, { backgroundColor: colors.primaryContainer }]}>
+          <Pressable disabled={locked || saveStatus !== 'ready'} onPress={apply} accessibilityRole="button" accessibilityLabel="Keep Changes" accessibilityState={{ disabled: locked || saveStatus !== 'ready', busy: saving }} style={[styles.actionBtn, styles.actionSlot, { backgroundColor: colors.primaryContainer }]}>
             <Text style={[styles.actionText, { color: '#fff' }]}>{saving ? 'Saving…' : 'Keep Changes'}</Text>
           </Pressable>
         </View>
@@ -515,17 +515,14 @@ const ChoiceButton: React.FC<{
       accessibilityLabel={label}
       disabled={disabled}
       accessibilityState={{ selected: active, ...(disabled ? { disabled: true } : {}) }}
-      style={[
-        styles.choice,
-        active
-          ? { backgroundColor: colors.primaryContainer, borderColor: colors.primaryContainer }
-          : { backgroundColor: colors.surfaceContainer, borderColor: colors.border },
-      ]}
+      style={[choiceStyles.target, styles.fittedChoice]}
     >
-      <Icon name={icon} size={17} color={active ? '#fff' : colors.muted} />
-      <Text style={[styles.choiceText, { color: active ? '#fff' : colors.muted }]} numberOfLines={1}>
-        {label}
-      </Text>
+      <View style={[choiceStyles.face, choiceAppearance(colors, active)]} pointerEvents="none">
+        <Icon name={icon} size={17} color={active ? colors.onPrimaryContainer : colors.onSurface} />
+        <Text style={[styles.choiceText, { color: active ? colors.onPrimaryContainer : colors.onSurface }]}>
+          {label}
+        </Text>
+      </View>
     </Pressable>
   );
 };
@@ -542,46 +539,22 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   headerWrap: { paddingTop: 12, paddingBottom: 8, paddingHorizontal: 20, backgroundColor: colors.surfaceLow },
   handle: { width: 40, height: 6, borderRadius: 3, backgroundColor: colors.secondaryFixedDim, alignSelf: 'center', marginBottom: 12 },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  headerTitle: { ...type.headlineSm, color: colors.onSurface },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 },
+  headerTitle: { ...type.headlineSm, color: colors.onSurface, flexShrink: 1 },
   closeBtn: {
     width: 48,
     height: 48,
-    borderRadius: 18,
-    backgroundColor: colors.surfaceContainer,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  segment: {
-    marginTop: 12,
-    backgroundColor: colors.surfaceContainer,
-    padding: 4,
-    borderRadius: 12,
-    flexDirection: 'row',
-    gap: 4,
-  },
-  segBtn: {
-    flex: 1,
-    minHeight: 48,
-    paddingVertical: 7,
     borderRadius: 8,
-    flexDirection: 'row',
+    backgroundColor: colors.surfaceContainer,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
   },
-  segBtnActive: {
-    backgroundColor: colors.surface,
-    elevation: 1,
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 2,
-    shadowOffset: { width: 0, height: 1 },
-  },
-  segText: { ...type.labelMd, fontSize: 11.5 },
-  content: { paddingHorizontal: 20, paddingTop: 4, gap: 20 },
+  segment: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  segText: { ...type.labelMd },
+  scroller: { flexShrink: 1, minHeight: 0 },
+  content: { paddingHorizontal: 20, paddingTop: 0, gap: 14 },
   preview: {
-    padding: 16,
+    padding: 12,
     borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.borderSoft,
@@ -590,11 +563,11 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   previewLabel: { ...type.labelSm, color: colors.muted },
   previewFont: { ...type.labelSm, color: colors.primary },
   previewAuthor: { ...type.labelSm, opacity: 0.7, fontStyle: 'italic', textAlign: 'right', marginTop: 8 },
-  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  rowBetween: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'space-between', alignItems: 'center' },
   fieldLabel: { ...type.labelMd, color: colors.muted, letterSpacing: 0.8 },
   fieldHint: { ...type.labelSm, color: colors.primary },
   pillWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  fontPillText: { ...type.labelMd },
+  fontPillText: { ...type.labelMd, flexShrink: 1 },
   card: {
     gap: 10,
     backgroundColor: colors.surface,
@@ -636,40 +609,19 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   layoutOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   layoutGroup: { flexGrow: 1, flexBasis: 168, minWidth: 168, gap: 6 },
   iconSegBtn: { flex: 1, minWidth: 48, minHeight: 48, justifyContent: 'center', paddingVertical: 7, borderRadius: 8, alignItems: 'center' },
-  themeBtn: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-  },
+  choiceRow: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 6, rowGap: 0 },
+  fittedChoice: { maxWidth: '100%' },
   swatch: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    elevation: 1,
+    width: 20, height: 20, borderRadius: 5, alignItems: 'center', justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
   },
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   switchTitle: { fontFamily: F.sansSemi, fontSize: 14, color: colors.onSurface },
   switchSub: { fontFamily: F.sans, fontSize: 12, lineHeight: 16, color: colors.muted },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
-  choice: {
-    flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  choiceText: { fontFamily: F.sansSemi, fontSize: 12 },
-  actionBtn: { flex: 1, minHeight: 48, paddingVertical: 11, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  actionText: { ...type.labelLg },
+  choiceText: { ...type.labelMd, flexShrink: 1 },
+  actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingTop: 4 },
+  actionSlot: { flexGrow: 1, flexBasis: 136, minWidth: 136 },
+  actionBtn: { minHeight: 48, paddingHorizontal: 10, paddingVertical: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  actionText: { ...type.labelLg, textAlign: 'center', flexShrink: 1 },
 });

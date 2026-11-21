@@ -2179,3 +2179,57 @@ test('manual quote keeps its chosen book through list reordering and retains a d
   assert.equal(labelled(root, 'Save new highlight').disabled, true); await labelled(root, 'Save new highlight').onPress();
   assert.equal(calls.length, 1); assert.equal(labelled(root, 'Quote text').value, 'A pending quote'); assert.match(renderedText(root), /This book is unavailable. Your draft is kept/); f.h.unmount();
 });
+
+function settingsChoices(root, label) {
+  const choice = elements(root).find(node => typeof node.type === 'function' && node.props?.label === label);
+  assert.ok(choice, `Missing settings choice: ${label}`);
+  return choice;
+}
+
+test('Settings offers Scroll, Pages and Single Line as draft choices and saves only the edited mode', async () => {
+  const h = harness({ runEffects: true });
+  const { SettingsSheet } = h.load('../src/components/SettingsSheet.tsx');
+  const { INITIAL_SETTINGS } = h.load('../src/data/initialData.ts');
+  const saved = [], props = { settings: INITIAL_SETTINGS, onSave: async changes => { saved.push(changes); return true; }, onClose() {} };
+  let root = h.render(SettingsSheet, props); labelled(root, 'Reading Info').onPress(); root = h.render(SettingsSheet, props);
+  for (const label of ['Non-Stop Scroll', 'Page by Page', 'Single Line']) assert.ok(settingsChoices(root, label));
+  settingsChoices(root, 'Single Line').props.onPress(); root = h.render(SettingsSheet, props);
+  assert.equal(settingsChoices(root, 'Single Line').props.active, true); assert.equal(settingsChoices(root, 'Non-Stop Scroll').props.active, false); assert.equal(saved.length, 0);
+  labelled(root, 'Font & Layout').onPress(); root = h.render(SettingsSheet, props);
+  labelled(root, 'Reading Info').onPress(); root = h.render(SettingsSheet, props); assert.equal(settingsChoices(root, 'Single Line').props.active, true);
+  await labelled(root, 'Keep Changes').onPress(); assert.deepEqual(saved, [{ readingFlowMode: 'single-line' }]); h.unmount();
+});
+
+test('new Line choice exposes native button selection and remains locked through a failed settings save', async () => {
+  const h = harness({ runEffects: true });
+  const { SettingsSheet } = h.load('../src/components/SettingsSheet.tsx');
+  const { INITIAL_SETTINGS } = h.load('../src/data/initialData.ts');
+  let resolve, closed = 0;
+  const props = { settings: INITIAL_SETTINGS, isSheetOnly: true, onSave: () => new Promise(done => { resolve = done; }), onClose: () => closed++ };
+  let root = h.render(SettingsSheet, props); labelled(root, 'Reading Info').onPress(); root = h.render(SettingsSheet, props);
+  settingsChoices(root, 'Single Line').props.onPress(); root = h.render(SettingsSheet, props);
+  const choice = settingsChoices(root, 'Single Line'), native = harness();
+  const control = labelled(native.render(choice.type, choice.props), 'Single Line');
+  assert.equal(control.accessibilityRole, 'button'); assert.deepEqual(control.accessibilityState, { selected: true });
+  const pending = labelled(root, 'Keep Changes').onPress(); root = h.render(SettingsSheet, props);
+  assert.equal(settingsChoices(root, 'Single Line').props.disabled, true);
+  settingsChoices(root, 'Page by Page').props.onPress(); root = h.render(SettingsSheet, props); assert.equal(settingsChoices(root, 'Single Line').props.active, true);
+  resolve(false); await pending; root = h.render(SettingsSheet, props);
+  assert.equal(settingsChoices(root, 'Single Line').props.active, true); assert.equal(settingsChoices(root, 'Single Line').props.disabled, false); assert.equal(closed, 0); h.unmount();
+});
+
+test('Settings tab selection retains theme drafts and shows the typography preview only on font/theme tabs', async () => {
+  const h = harness({ runEffects: true });
+  const { SettingsSheet } = h.load('../src/components/SettingsSheet.tsx');
+  const { INITIAL_SETTINGS } = h.load('../src/data/initialData.ts');
+  let saved;
+  const props = { settings: INITIAL_SETTINGS, onSave: async changes => { saved = changes; return true; }, onClose() {} };
+  let root = h.render(SettingsSheet, props); assert.match(renderedText(root), /LIVE TYPOGRAPHY PREVIEW/);
+  labelled(root, 'Themes').onPress(); root = h.render(SettingsSheet, props);
+  assert.deepEqual(labelled(root, 'Themes').accessibilityState, { selected: true });
+  for (const label of ['Parchment', 'White', 'Sepia', 'Charcoal']) assert.ok(labelled(root, `${label} page theme`));
+  labelled(root, 'Charcoal page theme').onPress(); root = h.render(SettingsSheet, props);
+  labelled(root, 'Reading Info').onPress(); root = h.render(SettingsSheet, props); assert.doesNotMatch(renderedText(root), /LIVE TYPOGRAPHY PREVIEW/);
+  labelled(root, 'Themes').onPress(); root = h.render(SettingsSheet, props); assert.equal(labelled(root, 'Charcoal page theme').accessibilityState.selected, true);
+  assert.match(renderedText(root), /LIVE TYPOGRAPHY PREVIEW/); await labelled(root, 'Keep Changes').onPress(); assert.deepEqual(saved, { theme: 'charcoal' }); h.unmount();
+});

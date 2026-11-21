@@ -847,3 +847,35 @@ no APK is built until requested. When a later APK includes it:
 6. Check Charcoal, large system text, landscape and narrow screens for clipping,
    readable selected colors, reachable actions, keyboard behavior and book names.
    No native visual/focus behavior is claimed by the local event tests.
+
+## Compact reading settings (step 24, awaiting an APK)
+
+This step remains local on development; no APK build is triggered. In a later
+APK, check Settings both as a tab and as a sheet over an open book:
+
+1. Reading Info now offers all three modes: Non-Stop Scroll, Page by Page and
+   Single Line. Select Single Line, change tabs, then return: the selection must
+   remain a draft until Keep Changes. Apply and confirm the existing Line reader
+   opens at its saved position paused. Return to Scroll/Pages through Settings.
+   Automated events verify the mode patch, pending lock and failed-save retry.
+2. Tabs scroll horizontally within the settings content, keeping full names
+   instead of ellipses. The title/close control stays above the vertical scroller.
+   Reading Info omits the typography preview; Font & Layout and Themes retain it.
+   Verify each tab's name/selected state with TalkBack and preserve unsaved choices
+   when switching tabs.
+3. Themes use the compact shared rectangles with small swatches matching the
+   actual preview paper colors. Themes, typefaces and reading/cover choices can
+   wrap rather than being forced into fixed-width rows. Check Charcoal selection
+   contrast, largest system text, landscape and narrow widths. Text can increase
+   visible choice height beyond the 36-point minimum; targets remain at least 48.
+4. Reset Defaults and Keep Changes wrap on narrow screens. Check their full
+   labels, reachability by scrolling, and saving/disabled states. Retry remains
+   available at normal button height after a read/save failure. Existing draft,
+   dirty-field merging, device acknowledgement and retry behavior are unchanged.
+5. Default cover style now explains its existing scope: it applies when a book
+   has no saved cover style. Change an already saved cover from Library. This
+   step does not rewrite book covers or alter preference storage/cloud behavior.
+
+All 352 regression tests and TypeScript pass locally. Native scrolling, focus,
+text measurement and mode handoff still need the phone checks when an APK is
+requested. No visual or device validation is claimed by component event tests.
