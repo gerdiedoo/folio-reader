@@ -3,6 +3,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { Book, BookContentPage } from '../types';
 import { CoverSaveError } from './bookCover';
 import { ImportStorageError, ImportCollisionError } from './bookImport';
+import { validatedBookPages } from './bookPages';
 
 /**
  * Local-first persistence. The web app kept imported EPUB text only in memory,
@@ -139,10 +140,17 @@ export function createLocalStore(scope?: string) {
     try {
       const file = new File(ROOT, 'pages', `${fileKey(bookId)}.json`);
       if (!file.exists) return null;
-      return JSON.parse(await file.text()) as BookContentPage[];
+      if (file.size > 48 * 1024 * 1024) throw new Error('Reading cache exceeds the supported size');
+      return validatedBookPages(JSON.parse(await file.text()));
     } catch {
       return null;
     }
+  }
+
+  function listAvailableBookIds(): string[] {
+    const dir = new Directory(ROOT, 'pages');
+    if (!dir.exists) return [];
+    return dir.list().filter(entry => entry instanceof File && /^[a-zA-Z0-9_-]{1,200}\.json$/.test(entry.name)).map(entry => entry.name.slice(0, -5));
   }
 
   async function verifyImportedBook(book: Book): Promise<boolean> {
@@ -204,13 +212,19 @@ export function createLocalStore(scope?: string) {
     return file.bytes();
   }
 
-  function writeRecoveryAsset(bookId: string, kind: 'pages' | 'epub' | 'cover', bytes: Uint8Array, extension = 'jpg'): string {
+  function writeRecoveryAsset(bookId: string, kind: 'pages' | 'epub' | 'cover', bytes: Uint8Array, extension = 'jpg', reuseIdentical = false): string | Promise<string> {
     const id = fileKey(bookId);
     if (kind === 'cover' && !['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'heic', 'heif'].includes(extension)) throw new Error('Unsupported recovery artwork.');
     const folder = kind === 'pages' ? 'pages' : kind === 'epub' ? 'books' : 'covers';
     const suffix = kind === 'pages' ? 'json' : kind === 'epub' ? 'epub' : extension;
     const file = new File(ensureDir(folder), `${id}.${suffix}`);
-    if (file.exists) throw new Error('This recovery file already exists.');
+    if (file.exists) {
+      if (!reuseIdentical || file.size !== bytes.length) throw new Error('This recovery file already exists with different contents. Existing files have been kept. Restore separate copies instead.');
+      return file.bytes().then(existing => {
+        if (existing.length !== bytes.length || existing.some((value, index) => value !== bytes[index])) throw new Error('This recovery file already exists with different contents. Restore separate copies instead.');
+        return file.uri;
+      });
+    }
     try {
       file.create(); file.write(bytes);
       if (!file.exists || file.size !== bytes.length) throw new Error('Incomplete recovery file');
@@ -222,7 +236,7 @@ export function createLocalStore(scope?: string) {
     }
   }
 
-  return { storageKey, loadJSON, loadJSONStrict, loadJSONEntryStrict, saveJSON, saveJSONStrict, coversDir, savePages, getBookPagesLocation, persistBookFile, removeBookFiles, removeCustomCover, loadPages, persistCoverImage, readBackupAsset, writeRecoveryAsset, verifyImportedBook };
+  return { storageKey, loadJSON, loadJSONStrict, loadJSONEntryStrict, saveJSON, saveJSONStrict, coversDir, savePages, getBookPagesLocation, persistBookFile, removeBookFiles, removeCustomCover, loadPages, persistCoverImage, readBackupAsset, writeRecoveryAsset, verifyImportedBook, listAvailableBookIds };
 }
 
 export type LocalStore = ReturnType<typeof createLocalStore>;

@@ -1,3 +1,4 @@
+import { withArchiveLock } from './archiveQueue';
 import type { BookContentPage, Bookmark } from '../types';
 import { resolveSourceAnchor, sourceAnchorForPosition, validSourceAnchor } from './sourceAnchors';
 
@@ -47,28 +48,13 @@ export function readBookmarks(raw: string | null): Bookmark[] {
   return records as Bookmark[];
 }
 
-const storageQueues = new WeakMap<BookmarkStorage, Map<string, Promise<void>>>();
-
 export function createBookmarkStore(storage: BookmarkStorage, storageKey = STORAGE_KEY) {
-  let queues = storageQueues.get(storage);
-  if (!queues) { queues = new Map(); storageQueues.set(storage, queues); }
-  const queue = queues;
-  const load = async (): Promise<Bookmark[]> => {
-    await queue.get(storageKey);
-    return readBookmarks(await storage.getItem(storageKey));
-  };
-  const update = (change: (current: Bookmark[]) => Bookmark[]) => {
-    const operation = (queue.get(storageKey) ?? Promise.resolve()).then(async () => {
-      // Read durable state inside the queue; an older mounted instance may have saved.
-      const next = change(readBookmarks(await storage.getItem(storageKey)));
-      await storage.setItem(storageKey, JSON.stringify(next));
-      return next;
-    });
-    const settled = operation.then(() => undefined, () => undefined);
-    queue.set(storageKey, settled);
-    void settled.then(() => { if (queue.get(storageKey) === settled) queue.delete(storageKey); });
-    return operation;
-  };
+  const load = () => withArchiveLock(storageKey, async () => readBookmarks(await storage.getItem(storageKey)));
+  const update = (change: (current: Bookmark[]) => Bookmark[]) => withArchiveLock(storageKey, async () => {
+    const next = change(readBookmarks(await storage.getItem(storageKey)));
+    await storage.setItem(storageKey, JSON.stringify(next));
+    return next;
+  });
   return {
     load,
     toggle: (bookmark: Bookmark) => update(current => current.some(item => item.id === bookmark.id)

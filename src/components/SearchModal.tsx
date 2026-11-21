@@ -13,6 +13,7 @@ import { ModalShell } from './ui/ModalShell';
 interface SearchModalProps {
   books: Book[];
   bookPages: SearchBookPages;
+  availableBookIds?: string[];
   globalCoverStyle: 'image' | 'typographic';
   highlights: HighlightEntry[];
   lexicon: LexiconEntry[];
@@ -34,7 +35,7 @@ const FILTERS: { id: ArchiveSearchFilter; label: string }[] = [
 ];
 
 export const SearchModal: React.FC<SearchModalProps> = ({
-  books, bookPages, globalCoverStyle, highlights, lexicon, libraryStatus, highlightStatus, vocabularyStatus,
+  books, bookPages, availableBookIds, globalCoverStyle, highlights, lexicon, libraryStatus, highlightStatus, vocabularyStatus,
   onRetryHighlights, onRetryVocabulary, onShowLibrary, onClose, onSelectBook, onSelectHighlight, onSelectVocabulary,
 }) => {
   const colors = useAppTheme();
@@ -67,7 +68,9 @@ export const SearchModal: React.FC<SearchModalProps> = ({
     }
     if (item.kind === 'quote') {
       const quote = item.quote;
-      const canJump = libraryStatus === 'ready' && canOpenSavedPassage(books, bookPages, quote.bookId, quote.page, quote.anchor);
+      const loaded = Object.hasOwn(bookPages, quote.bookId);
+      const canJump = libraryStatus === 'ready' && (loaded ? canOpenSavedPassage(books, bookPages, quote.bookId, quote.page, quote.anchor)
+        : Boolean(availableBookIds?.includes(quote.bookId)) && books.some(book => book.id === quote.bookId) && Number.isSafeInteger(quote.page) && quote.page > 0);
       const destination = canJump ? `Open passage ${quote.page}` : libraryStatus === 'loading' ? 'Checking saved reading text…'
         : libraryStatus === 'error' ? 'Saved library unavailable' : 'Passage unavailable on this device';
       return <View style={styles.card}>

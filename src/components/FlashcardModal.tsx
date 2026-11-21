@@ -15,6 +15,7 @@ interface FlashcardModalProps {
   saveBusy?: boolean;
   cardAvailable?: boolean;
   onRetry?: () => void;
+  onOpenContext?: () => void;
   showToast: (msg: string) => void;
 }
 const RATINGS = [
@@ -25,7 +26,7 @@ const RATINGS = [
 
 export const FlashcardModal: React.FC<FlashcardModalProps> = ({
   lexiconItem, onClose, onUpdateMastery, saveStatus = 'ready', saveBusy = false,
-  cardAvailable = true, onRetry, showToast,
+  cardAvailable = true, onRetry, onOpenContext, showToast,
 }) => {
   const colors = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -100,6 +101,9 @@ export const FlashcardModal: React.FC<FlashcardModalProps> = ({
               <Text accessibilityRole="header" style={styles.contextLabel}>In context</Text>
               <Text selectable style={styles.context}>{lexiconItem.contextPassage}</Text>
             </View> : null}
+            {onOpenContext ? <Pressable onPress={() => { if (!pending.current) onOpenContext(); }} disabled={saving} accessibilityRole="button" accessibilityLabel="Return to vocabulary passage" style={choiceStyles.target}>
+              <View style={[choiceStyles.face, choiceAppearance(colors, false)]}><Text style={styles.returnText}>Read in book</Text></View>
+            </Pressable> : null}
             {lexiconItem.chapter ? <Text style={styles.status}>{lexiconItem.chapter}</Text> : null}
             <Pressable onPress={() => flip(false)} disabled={saving} accessibilityRole="button"
               accessibilityLabel={`Show word again for ${lexiconItem.word}`} accessibilityState={{ disabled: saving }} style={[choiceStyles.target, styles.choiceTarget]}>

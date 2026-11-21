@@ -22,7 +22,9 @@ interface ProfileModalProps {
   onRestoreLibrary: (onProgress: (progress: LibraryRestoreProgress) => void) => Promise<LibraryRestoreResult | null>;
   onChooseSafetyCopy?: () => Promise<PreparedBackup | null>;
   onExportSafetyCopy?: (includeOriginals: boolean) => void;
-  onRestoreSafetyCopy?: (copy: PreparedBackup, preferences: boolean) => void;
+  onRestoreSafetyCopy?: (copy: PreparedBackup, preferences: boolean, recoverMatching?: boolean) => void;
+  syncSummary?: string;
+  onReviewConflicts?: () => void;
   showToast: (msg: string) => void;
 }
 
@@ -58,6 +60,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   onBackupLibrary,
   onRestoreLibrary,
   onChooseSafetyCopy, onExportSafetyCopy, onRestoreSafetyCopy,
+  syncSummary, onReviewConflicts,
   showToast,
 }) => {
   const colors = useAppTheme();
@@ -72,6 +75,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   const [restoreProgress, setRestoreProgress] = useState<LibraryRestoreProgress | null>(null);
   const [restoreResult, setRestoreResult] = useState<LibraryRestoreResult | null>(null);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
+  const [recoverMatching, setRecoverMatching] = useState(true);
   const [safetyCopy, setSafetyCopy] = useState<PreparedBackup | null>(null);
   const [includeOriginals, setIncludeOriginals] = useState(true);
   const [restorePreferences, setRestorePreferences] = useState(false);
@@ -152,6 +156,8 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 
           <Text style={styles.name}>{user?.fullName || 'Guest'}</Text>
           <Text style={styles.email}>{user?.email || 'Not signed in'}</Text>
+          {syncSummary && <Text accessibilityLiveRegion="polite" style={styles.backupDescription}>{syncSummary}</Text>}
+          {onReviewConflicts && <Pressable accessibilityRole="button" accessibilityLabel="Review account changes" disabled={busy} onPress={() => { if (!pending.current) onReviewConflicts(); }} style={styles.helpRow}><Text style={styles.helpText}>Review conflicting versions</Text></Pressable>}
 
           {user ? (
             <View style={styles.authRow}>
@@ -285,10 +291,12 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           {safetyCopy && <View style={styles.restoreProgress}>
             <Text accessibilityRole="header" style={styles.restoreResultTitle}>Review this safety copy</Text>
             <Text style={styles.guideIntro}>{safetyCopy.summary.books} books · {safetyCopy.summary.originals} original EPUBs · {safetyCopy.summary.readable} with reading text{ '\n' }{safetyCopy.summary.highlights} notes/highlights · {safetyCopy.summary.vocabulary} vocabulary cards · {safetyCopy.summary.bookmarks} bookmarks</Text>
-            <Text style={styles.guideIntro}>Restore adds separate copies to this reading space. Existing books and saved work stay in place. Repeating restore creates additional copies. Books without reading text need their original EPUB.</Text>
+            <Pressable accessibilityRole="checkbox" accessibilityLabel="Recover matching editions without duplicate books" accessibilityState={{ checked: recoverMatching, disabled: busy }} disabled={busy} onPress={() => setRecoverMatching(value => !value)} style={styles.helpRow}><Text style={styles.helpText}>{recoverMatching ? '☑' : '☐'} Recover matching editions</Text></Pressable>
+            <Text style={styles.guideIntro}>{recoverMatching ? 'Matching identifiers and editions recover missing files. Current progress and existing notes take priority; removed records stay removed. Different or older editions become separate copies.' : 'Every book becomes a separate copy. Repeating restore adds more copies.'}</Text>
+            <Text style={styles.guideIntro}>Books without reading text need their original EPUB.</Text>
             <Pressable accessibilityRole="checkbox" accessibilityLabel="Use reading settings from safety copy" accessibilityState={{ checked: restorePreferences, disabled: busy }} disabled={busy} onPress={() => setRestorePreferences(value => !value)} style={styles.helpRow}><Text style={styles.helpText}>{restorePreferences ? '☑' : '☐'} Use its reading settings</Text></Pressable>
             <View style={styles.backupActions}>
-              <Pressable accessibilityRole="button" accessibilityLabel="Restore safety copy as separate books" disabled={libraryUnavailable} accessibilityState={{ disabled: libraryUnavailable }} style={styles.backupButton} onPress={() => { if (!pending.current && libraryStatus === 'ready') onRestoreSafetyCopy(safetyCopy, restorePreferences); }}><Text style={styles.backupButtonText}>Restore copies</Text></Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel={recoverMatching ? "Recover books from safety copy" : "Restore safety copy as separate books"} disabled={libraryUnavailable} accessibilityState={{ disabled: libraryUnavailable }} style={styles.backupButton} onPress={() => { if (!pending.current && libraryStatus === 'ready') onRestoreSafetyCopy(safetyCopy, restorePreferences, recoverMatching); }}><Text style={styles.backupButtonText}>{recoverMatching ? 'Recover books' : 'Restore copies'}</Text></Pressable>
               <Pressable accessibilityRole="button" accessibilityLabel="Cancel safety copy restore" disabled={busy} style={styles.backupButton} onPress={() => setSafetyCopy(null)}><Text style={styles.backupButtonText}>Cancel</Text></Pressable>
             </View>
           </View>}
@@ -424,7 +432,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   },
   backupHeading: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   backupTitle: { ...type.labelLg },
-  backupDescription: { ...type.bodySm },
+  backupDescription: { ...type.bodySm, color: colors.muted },
   restoreProgress: { width: '100%', gap: 6, marginTop: 4 },
   restoreProgressLabels: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   restoreProgressText: { ...type.bodySm, flexShrink: 1 },

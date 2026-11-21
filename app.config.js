@@ -5,6 +5,7 @@ module.exports = ({ config }) => {
     throw new Error('EXPO_PUBLIC_APP_VARIANT must be development or production.');
   }
   if (variant !== 'development') return config;
+  config = { ...config, plugins: [...(config.plugins || []), './plugins/withReaderStorage'] };
 
   if (process.env.EAS_BUILD_PROFILE === 'dev-preview' &&
       (!process.env.EXPO_PUBLIC_DEV_SUPABASE_URL || !process.env.EXPO_PUBLIC_DEV_SUPABASE_KEY)) {

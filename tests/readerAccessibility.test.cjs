@@ -171,7 +171,7 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
 function elements(root) {
   if (!root || typeof root !== 'object') return [];
   if (Array.isArray(root)) return root.flatMap(elements);
-  return [root, ...elements(root.props?.children), ...elements(root.props?.ListHeaderComponent)];
+  return [root, ...elements(root.props?.children), ...elements(root.props?.ListHeaderComponent), ...(root.props?.testID === 'library-collection' ? [...elements(root.props.data.length ? null : root.props.ListEmptyComponent), ...root.props.data.flatMap((item, index) => elements(root.props.renderItem({ item, index })))] : [])];
 }
 function labelled(root, label) {
   const found = elements(root).find(node => node.props?.accessibilityLabel === label);
@@ -2482,13 +2482,14 @@ test('book details collapse diagnostic identifiers and expose removal independen
 test('safety-copy selection is guarded while checking; restore needs a reviewed copy and preserves settings by default', async () => {
   let choose, copies = [], exported = [];
   const copy = { summary: { books: 2, originals: 1, readable: 2, highlights: 4, vocabulary: 3, bookmarks: 2 } };
-  const f = accountHarness({ onChooseSafetyCopy: () => new Promise(done => { choose = done; }), onExportSafetyCopy: originals => exported.push(originals), onRestoreSafetyCopy: (value, preferences) => copies.push([value, preferences]) });
+  const f = accountHarness({ onChooseSafetyCopy: () => new Promise(done => { choose = done; }), onExportSafetyCopy: originals => exported.push(originals), onRestoreSafetyCopy: (value, preferences, matching) => copies.push([value, preferences, matching]) });
   let root = f.render(); const pending = labelled(root, 'Choose safety copy').onPress(); root = f.render();
   assert.equal(labelled(root, 'Close account').disabled, true); labelled(root, 'Export safety copy').onPress(); assert.deepEqual(exported, []);
   choose(copy); await pending; root = f.render();
-  assert.match(renderedText(root), /Review this safety copy/); assert.match(renderedText(root), /Restore adds separate copies/); assert.deepEqual(copies, []);
-  labelled(root, 'Restore safety copy as separate books').onPress(); assert.deepEqual(copies, [[copy, false]]);
-  labelled(root, 'Use reading settings from safety copy').onPress(); root = f.render(); labelled(root, 'Restore safety copy as separate books').onPress(); assert.deepEqual(copies[1], [copy, true]);
+  assert.match(renderedText(root), /Review this safety copy/); assert.match(renderedText(root), /Matching identifiers and editions recover missing files/); assert.deepEqual(copies, []);
+  labelled(root, 'Recover books from safety copy').onPress(); assert.deepEqual(copies, [[copy, false, true]]);
+  labelled(root, 'Recover matching editions without duplicate books').onPress(); root = f.render();
+  labelled(root, 'Use reading settings from safety copy').onPress(); root = f.render(); labelled(root, 'Restore safety copy as separate books').onPress(); assert.deepEqual(copies[1], [copy, true, false]);
   labelled(root, 'Cancel safety copy restore').onPress(); root = f.render(); assert.doesNotMatch(renderedText(root), /Review this safety copy/); f.h.unmount();
 });
 
@@ -2523,4 +2524,48 @@ test('the upper-left Folio mark uses the bundled PNG offline and its Library act
   assert.ok(mark); assert.equal(mark.type, 'Image'); assert.equal(mark.props.source.bundledAsset, path.resolve(__dirname, '../assets/folio-logo.png'));
   assert.equal(fs.existsSync(mark.props.source.bundledAsset), true); assert.equal(mark.props.source.uri, undefined);
   assert.equal(mark.props.accessible, false); labelled(root, 'Folio Library').onPress(); assert.deepEqual(selected, ['library']);
+});
+
+test('Library rows are virtualized and loading a book keeps its details and blocks duplicate opens', () => {
+ const f = libraryHarness({ openingBookId: 'Amber', selectedBookId: 'Amber' });
+ let root = f.render(); const read = labelled(root, 'Read Amber'); assert.equal(read.disabled, true); read.onPress(); assert.deepEqual(f.opened, []);
+ f.props.openingBookId = null; root = f.render(); labelled(root, 'Read Amber').onPress(); assert.deepEqual(f.opened, ['Amber']); assert.deepEqual(f.selected, []);
+ f.props.selectedBookId = null; root = f.render(); const list = elements(root).find(node => node.props?.testID === 'library-collection');
+ assert.equal(list.type, 'FlatList'); assert.equal(list.props.data.flat().length, 5); assert.equal(list.props.initialNumToRender, 4); f.h.unmount();
+});
+
+test('chapter-relative references open the target and return to the previous reading context', () => {
+ const f = scrollingReader();
+ f.props().customPages[2].source = { version: 1, edition: 'a'.repeat(64), href: 'EPUB/notes.xhtml', paths: ['body/0/0'] };
+ f.props().customPages[2].rich = [{ version: 1, kind: 'paragraph', text: 'A note.', runs: [{ text: 'A note.' }], targets: ['fn1'] }];
+ f.settle(); const rendered = f.list().renderItem({ item: f.list().data[0], index: 0 });
+ rendered.props.onLink('EPUB/notes.xhtml#fn1'); f.settle(); assert.equal(f.list().data[0].pageNumber, 3);
+ labelled(f.render(), 'Back to reference').onPress(); f.settle(); assert.equal(f.list().data[0].pageNumber, 8); f.h.unmount();
+});
+
+test('measured Scroll text lines retain a source word through a different typography layout',()=>{
+  const f=scrollingReader();f.viewport();f.measure(8,84,1500);
+  const block=f.list().renderItem({item:f.list().data[0],index:0});
+  block.props.onBlockLines(8,0,[{y:80,height:24,word:0},{y:104,height:24,word:4},{y:128,height:24,word:8}]);
+  f.list().onScrollBeginDrag(scrolled(200));f.h.unmount();const saved=f.positions[0].position;
+  assert.equal(saved.wordOffset,4);
+  const next=scrollingReader({currentBook:{...f.props().currentBook,readingPosition:saved},settings:{...f.props().settings,fontSizeStep:7}});
+  next.viewport();next.measure(8,84,2000);
+  const rendered=next.list().renderItem({item:next.list().data[0],index:0});
+  rendered.props.onBlockLines(8,0,[{y:90,height:32,word:0},{y:122,height:32,word:4},{y:154,height:32,word:8}]);
+  assert.deepEqual(next.restored.at(-1),{offset:206,animated:false});
+  const before=next.restored.length;block.props.onBlockLines(8,0,[{y:900,height:24,word:4}]);assert.equal(next.restored.length,before);
+  next.h.unmount();
+});
+
+test('conflict review blocks duplicate choices and dismissal until the durable choice completes; failures retain both versions',async()=>{
+ const h=harness({runEffects:true}), {SyncReviewModal}=h.load('../src/components/SyncReviewModal.tsx');
+ let complete,calls=0,closed=0;const conflict={kind:'highlight',id:'n',token:'t',device:{text:'Device words',note:'Device thought'},account:{revision:2,payload:{text:'Account words',note:'Account thought'}}};
+ const props={conflicts:[conflict],onResolve:()=>{calls++;return new Promise((_,reject)=>{complete=reject;});},onClose:()=>closed++};
+ let root=h.render(SyncReviewModal,props);const row=()=>elements(root).find(node=>node.type==='FlatList').props.renderItem({item:conflict});
+ labelled(row(),'Use device version').onPress();labelled(row(),'Use account version').onPress();labelled(root,'Close account change review').onPress();assert.equal(calls,1);assert.equal(closed,0);
+ root=h.render(SyncReviewModal,props);assert.equal(labelled(row(),'Use account version').disabled,true);
+ complete(Error('Storage acknowledgement failed'));await flushJobs();root=h.render(SyncReviewModal,props);
+ assert.match(renderedText(root),/Storage acknowledgement failed/);assert.match(renderedText(row()),/Device thought/);assert.match(renderedText(row()),/Account thought/);
+ labelled(root,'Close account change review').onPress();assert.equal(closed,1);h.unmount();
 });

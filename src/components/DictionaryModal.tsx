@@ -13,6 +13,7 @@ interface DictionaryModalProps {
   contextPassage?: string;
   /** Book the lookup originated from, so saved cards are filed under it. */
   bookId: string;
+  source?: { page: number; chapter: string; anchor?: LexiconEntry['anchor'] };
   onClose: () => void;
   onSaveToLexicon: (entry: Omit<LexiconEntry, 'id'>) => Promise<boolean>;
   saveStatus?: 'loading' | 'ready' | 'error';
@@ -23,7 +24,7 @@ interface DictionaryModalProps {
 export const DictionaryModal: React.FC<DictionaryModalProps> = ({
   initialWord = '',
   contextPassage = '',
-  bookId,
+  bookId, source,
   onClose,
   onSaveToLexicon,
   saveStatus = 'ready',
@@ -75,7 +76,8 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
         partOfSpeech: entry.partOfSpeech,
         definition: entry.definition,
         contextPassage: contextPassage || entry.example,
-        chapter: 'Reader Lexicon',
+        chapter: source?.chapter || 'Reader Lexicon',
+        ...(source ? { page: source.page, anchor: source.anchor } : {}),
         masteryLevel: 1,
       });
       if (saved) { showToast(`Saved "${key}" on this device`); onClose(); }

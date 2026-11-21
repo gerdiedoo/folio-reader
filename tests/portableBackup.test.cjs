@@ -244,3 +244,22 @@ test('portable jobs can wait for prior import commits, and pre-intent readiness 
   const blocked = journaledImport(f, { assertReady: async () => { throw Error('Space changed'); } });
   await assert.rejects(blocked.commit(book('new'), [page])); assert.deepEqual(blocked.events, ['cleanup']); assert.equal((await createLibraryStore(f.storage).load()).books[0].id, 'a');
 });
+
+test('matching-edition recovery reattaches missing files and retains current progress and notes without duplicate books',async()=>{
+ const f=store(),files=fileStore(), fingerprint='a'.repeat(64), initial=snapshot();initial.books[0].documentFingerprint=fingerprint;
+ const copy=await inspectPortableBackup(await buildPortableBackup(initial,assets,true));
+ await createLibraryStore(f.storage).add({...book(),documentFingerprint:fingerprint,fileLocation:undefined,coverUrl:'',currentPage:8,progressPercent:80});
+ f.set('highlightArchive',{version:1,items:[{...note,note:'Newer reflection'}],removedIds:[],removedBookIds:[]});
+ await restorePortableBackup(f.storage,copy,files,false,'matching',true);
+ await restorePortableBackup(f.storage,copy,files,false,'matching-again',true);
+ const saved=await readBackupSnapshot(f.storage);assert.equal(saved.books.length,1);assert.equal(saved.books[0].id,'a');assert.equal(saved.books[0].currentPage,8);assert.match(saved.books[0].fileLocation,/\/a\./);
+ assert.equal(saved.highlights.length,1);assert.equal(saved.highlights[0].note,'Newer reflection');assert.equal(saved.lexicon.length,1);assert.equal(saved.bookmarks.length,1);
+});
+test('matching recovery preserves original identities on a new device and never revives removed books or notes',async()=>{
+ const f=store(),files=fileStore(), initial=snapshot();initial.books[0].documentFingerprint='a'.repeat(64);
+ const copy=await inspectPortableBackup(await buildPortableBackup(initial,assets,true));
+ await restorePortableBackup(f.storage,copy,files,false,'new-device',true);
+ assert.equal((await readBackupSnapshot(f.storage)).books[0].id,'a');assert.equal((await readBackupSnapshot(f.storage)).highlights[0].id,'note');
+ const blocked=store();blocked.set('libraryArchive',{version:1,books:[],removedBookIds:['a'],pendingFileRemovals:[]});
+ await restorePortableBackup(blocked.storage,copy,fileStore(),false,'removed',true);const saved=await readBackupSnapshot(blocked.storage);assert.equal(saved.books.length,0);assert.equal(saved.highlights.length,0);
+});

@@ -1,13 +1,16 @@
+import { canonical as stableValue } from './stableValue';
+import { withArchiveLock } from './archiveQueue';
 import type { LexiconEntry } from '../types';
+import { validSourceAnchor } from './sourceAnchors';
 
 interface ArchiveStorage {
   storageKey(key: string): string;
+  subscribeArchive?(key: string, callback: () => void): () => void;
   loadJSONEntryStrict(key: string): Promise<{ present: boolean; value: unknown }>;
   saveJSONStrict(key: string, value: unknown): Promise<void>;
 }
 interface Archive { version: 1; items: LexiconEntry[]; removedBookIds: string[] }
 const KEY = 'lexiconArchive';
-const queues = new Map<string, Promise<void>>();
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 type StoredEntry = Omit<LexiconEntry, 'phonetic' | 'partOfSpeech' | 'contextPassage' | 'chapter'> & {
   phonetic?: string | null; partOfSpeech?: string | null; contextPassage?: string | null; chapter?: string | null;
@@ -19,6 +22,8 @@ export function validLexiconEntry(value: unknown): value is StoredEntry {
     typeof value.word === 'string' && Boolean(value.word.trim()) &&
     typeof value.definition === 'string' && Boolean(value.definition.trim()) &&
     ['phonetic', 'partOfSpeech', 'contextPassage', 'chapter'].every(key => value[key] == null || typeof value[key] === 'string') &&
+    (value.page === undefined || Number.isSafeInteger(value.page) && Number(value.page) >= 1) &&
+    (value.anchor === undefined || validSourceAnchor(value.anchor)) &&
     Number.isInteger(value.masteryLevel) && (value.masteryLevel as number) >= 1 && (value.masteryLevel as number) <= 5;
 }
 function canonical(entry: StoredEntry): LexiconEntry {
@@ -33,13 +38,7 @@ function entries(value: unknown): LexiconEntry[] {
 /** Vocabulary data and book-removal markers share one confirmed, account-scoped write. */
 export function createLexiconArchive(storage: ArchiveStorage) {
   const queueKey = storage.storageKey(KEY);
-  const enqueue = <T,>(work: () => Promise<T>): Promise<T> => {
-    const operation = (queues.get(queueKey) ?? Promise.resolve()).then(work);
-    const settled = operation.then(() => undefined, () => undefined);
-    queues.set(queueKey, settled);
-    void settled.then(() => { if (queues.get(queueKey) === settled) queues.delete(queueKey); });
-    return operation;
-  };
+  const enqueue = <T,>(work: () => Promise<T>): Promise<T> => withArchiveLock(queueKey, work);
   const read = async (): Promise<Archive> => {
     const entry = await storage.loadJSONEntryStrict(KEY);
     if (!entry.present) {
@@ -63,6 +62,8 @@ export function createLexiconArchive(storage: ArchiveStorage) {
   return {
     load: () => enqueue(read),
     add: (entry: LexiconEntry) => update(current => {
+      const existing = current.items.find(item => item.id === entry.id);
+      if (existing && stableValue(existing) === stableValue(canonical(entry))) return current;
       if (!validLexiconEntry(entry) || current.items.some(item => item.id === entry.id) || current.removedBookIds.includes(entry.bookId)) throw new Error('This vocabulary card cannot be added.');
       return { ...current, items: [canonical(entry), ...current.items] };
     }),

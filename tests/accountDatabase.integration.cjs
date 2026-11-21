@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, execFile } = require('node:child_process');
 const { test } = require('node:test');
 const root = path.resolve(__dirname, '..');
 const A = '00000000-0000-4000-8000-000000000001';
@@ -12,12 +12,13 @@ const migration = fs.readFileSync(path.join(root, 'supabase/migrations/202611200
 test('PostgreSQL account isolation, migration and legacy preservation', { timeout: 180000 }, async t => {
   const container = `folio-account-test-${process.pid}-${Date.now()}`;
   const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
-  const sql = input => execFileSync('docker', ['exec', '-i', container, 'psql', '-X', '-q', '-U', 'postgres', '-v', 'ON_ERROR_STOP=1'], { input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+  const sql = input => process.env.FOLIO_TEST_SQL_DRIVER ? execFileSync(process.execPath, [process.env.FOLIO_TEST_SQL_DRIVER], { input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }) : execFileSync('docker', ['exec', '-i', container, 'psql', '-X', '-q', '-U', 'postgres', '-v', 'ON_ERROR_STOP=1'], { input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
   const role = (id, body) => `set role authenticated; select set_config('request.jwt.claim.sub', '${id}', false);\n${body}\nreset role;`;
   const denied = statement => `do $test$ begin begin ${statement}; raise exception 'Expected permission denial'; exception when insufficient_privilege then null; end; end $test$;`;
   const check = (expression, label) => `do $test$ begin if not (${expression}) then raise exception '${label}'; end if; end $test$;`;
   let created = false;
   try {
+    if (!process.env.FOLIO_TEST_SQL_DRIVER) {
     docker('run', '--name', container, '--network', 'none', '-e', 'POSTGRES_PASSWORD=local-test-only', '-d', 'postgres:17-alpine');
     created = true;
     let ready = false;
@@ -32,7 +33,8 @@ test('PostgreSQL account isolation, migration and legacy preservation', { timeou
       catch { await new Promise(resolve => setTimeout(resolve, 200)); }
     }
     assert.ok(ready, `PostgreSQL must be ready after initialization. ${ready ? '' : docker('logs', container).slice(-3000)}`);
-    sql(`create role anon nologin; create role authenticated nologin;
+    }
+    sql(`do $$ begin if not exists(select from pg_roles where rolname='anon') then create role anon nologin; end if; if not exists(select from pg_roles where rolname='authenticated') then create role authenticated nologin; end if; end $$;
       create schema auth; create table auth.users (id uuid primary key);
       create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
       grant usage on schema auth to anon, authenticated;
@@ -93,6 +95,38 @@ test('PostgreSQL account isolation, migration and legacy preservation', { timeou
       sql(`delete from auth.users where id='${A}';`);
       for (const table of tables) sql(check(`(select count(*)=1 and bool_and(user_id='${B}') from public.folio_${table})`, `Account deletion crossed ${table}`));
       for (const table of tables) sql(check(`(select count(*)=1 from public.${table})`, `Legacy record removed ${table}`));
+    });
+    await t.test('revision protocol enforces ownership, compare-and-swap, retry identity and persistent deletion', () => {
+      sql(`insert into auth.users values ('${A}');`);
+      const revisionMigration = fs.readFileSync(path.join(root,'supabase/migrations/202611210001_revision_sync.sql'),'utf8');
+      sql(revisionMigration); sql(revisionMigration);
+      const write = (owner, kind, id, payload, revision, token) => `public.folio_write_record('${owner}','${kind}','${id}',${payload === null ? 'null' : "'"+JSON.stringify(payload).replaceAll("'","''")+"'::jsonb"},${revision},'00000000-1111-4000-8000-${String(token).padStart(12,'0')}')`;
+      const book={id:'reader-book',title:'Test edition',author:'Author',coverUrl:'',progressPercent:0,currentPage:1,totalPages:2};
+      const first=write(A,'book',book.id,book,0,1);
+      sql(role(A,check(`(${first}->>'accepted')::boolean`,'Initial revision rejected')));
+      sql(role(A,check(`(${first}->'record'->>'revision')::int=1`,'Retry duplicated revision')));
+      sql(role(A,check(`not (${write(A,'book',book.id,{...book,title:'Stale'},0,2)}->>'accepted')::boolean`,'Stale revision overwrote')));
+      sql(role(A,denied(`select ${write(B,'book','forged', {...book,id:'forged'},0,3)}`)));
+      sql(role(B,check(`(select count(*)=0 from public.folio_records where id='reader-book')`,'Revision visibility crossed accounts')));
+      sql(role(B,denied(`update public.folio_records set payload=null where id='reader-book'`)));
+      sql(`set role anon; ${denied(`select ${first}`)} reset role;`);
+      const note={id:'note',bookId:book.id,bookTitle:book.title,text:'Original note',chapter:'Start',page:1,colorName:'Amber Crayon',colorHex:'#F8E8A2',dateAdded:''};
+      sql(role(A,check(`(${write(A,'highlight','note',note,0,4)}->>'accepted')::boolean`,'Note rejected')));
+      sql(role(A,check(`(${write(A,'book',book.id,null,1,5)}->>'accepted')::boolean`,'Removal rejected')));
+      sql(role(A,check(`(select payload is null and revision=2 from public.folio_records where kind='highlight' and id='note')`,'Child removal not retained')));
+      sql(role(A,check(`not (${write(A,'highlight','offline-note',{...note,id:'offline-note'},0,6)}->>'accepted')::boolean`,'Stale child recreated')));
+      sql(role(A,check(`not (${write(A,'book',book.id,book,1,7)}->>'accepted')::boolean`,'Stale book resurrected')));
+      sql(revisionMigration);
+      sql(role(A,check(`(select payload is null from public.folio_records where kind='book' and id='reader-book')`,'Migration resurrected removal')));
+      sql(role(A,check(`(select count(*)=count(distinct change_id) from public.folio_records)`,'Change cursor duplicated')));
+      sql(role(A,denied(`insert into public.folio_books(id,title,author) values ('bypass','x','x')`)));
+    });
+    await t.test('simultaneous writes to a new record accept exactly one base revision',async()=>{
+      const run = input => new Promise((resolve,reject)=>{ const child=execFile(process.env.FOLIO_TEST_SQL_DRIVER ? process.execPath : 'docker',process.env.FOLIO_TEST_SQL_DRIVER ? [process.env.FOLIO_TEST_SQL_DRIVER] : ['exec','-i',container,'psql','-X','-q','-U','postgres','-v','ON_ERROR_STOP=1'],{encoding:'utf8'},(error,stdout)=>error?reject(error):resolve(stdout));child.stdin.end(input); });
+      const outputs=await Promise.all([1,2].map(token=>run(`begin; ${role(A,`select public.folio_write_record('${A}','book','race','{"id":"race","title":"Concurrent","author":"Test"}',0,'11111111-1111-4111-8111-00000000000${token}'); select pg_sleep(0.2);`)} commit;`)));
+      assert.equal(outputs.filter(value=>/"accepted"\s*:\s*true/.test(value)).length,1);
+      assert.equal(outputs.filter(value=>/"accepted"\s*:\s*false/.test(value)).length,1);
+      sql(check("(select revision=1 from public.folio_records where kind='book' and id='race')",'Competing writes advanced the same base twice'));
     });
   } finally {
     try { if (created) docker('rm', '-f', container); } catch { /* Nothing created or already removed. */ }

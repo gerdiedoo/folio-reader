@@ -1,4 +1,5 @@
 import type { BookContentPage, ReadingPosition } from '../types';
+import { sliceRichWords } from './richText';
 
 export interface PaginatedPage {
   sourceIndex: number;
@@ -33,6 +34,11 @@ export function paginateContent(
   const result: PaginatedPage[] = [];
 
   pages.forEach((source, sourceIndex) => {
+    if (source.rich?.some(block => block && ['image', 'table', 'code'].includes(block.kind))) {
+      const text = source.dropCap + source.paragraph1 + ' ' + source.paragraph2Lead + source.highlightedText + source.paragraph2Rest;
+      result.push({ sourceIndex, page: source, showChapterHeader: true, startWord: 0, endWord: text.trim().split(/\s+/).filter(Boolean).length });
+      return;
+    }
     const firstParagraph = wrapText(source.dropCap + source.paragraph1, charsPerLine);
     const secondParagraph = wrapText(
       source.paragraph2Lead + source.highlightedText + source.paragraph2Rest,
@@ -77,6 +83,8 @@ export function paginateContent(
         showChapterHeader: firstSegment,
         page: {
           ...source,
+          ...(source.rich ? { rich: [sliceRichWords(source.rich[0], firstParagraph.slice(0, firstStart).join(' ').trim().split(/\s+/).filter(Boolean).length, firstText.trim().split(/\s+/).filter(Boolean).length),
+            sliceRichWords(source.rich[1], secondParagraph.slice(0, secondStart).join(' ').trim().split(/\s+/).filter(Boolean).length, secondText.trim().split(/\s+/).filter(Boolean).length)] } : {}),
           dropCap: firstCharacter,
           paragraph1,
           paragraph2Lead: '',

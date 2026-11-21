@@ -5,7 +5,8 @@ import { validHighlight } from './highlightArchive';
 import { validLexiconEntry } from './lexiconArchive';
 import { readBookmarks } from './bookmarks';
 import { normalizeReaderSettings } from './readerPreferences';
-import { validSourceAnchor, validPageSource } from './sourceAnchors';
+import { validSourceAnchor } from './sourceAnchors';
+import { validatedBookPages } from './bookPages';
 
 // This in-memory implementation deliberately bounds both compressed and expanded data.
 export const BACKUP_LIMIT = 48 * 1024 * 1024;
@@ -65,14 +66,9 @@ export function portableBook(value: unknown): Book {
 }
 
 export function validateBackupPages(value: unknown): BookContentPage[] {
-  const strings = ['chapterTitle', 'chapterNumber', 'folioNumber', 'dropCap', 'paragraph1', 'paragraph2Lead', 'highlightedText', 'paragraph2Rest'];
-  const numbers = ['pageNumber', 'totalBookPages', 'locNumber', 'totalLoc', 'minutesLeftInChapter'];
-  if (!Array.isArray(value) || value.length === 0 || value.length > 30000 || !value.every(p => isRecord(p) && strings.every(k => typeof p[k] === 'string') &&
-    numbers.every(k => typeof p[k] === 'number' && Number.isFinite(p[k]) && p[k] >= 0) && Number.isSafeInteger(p.pageNumber) && p.pageNumber >= 1 &&
-    (p.source === undefined || validPageSource(p.source))) ||
-    new Set(value.map(p => p.pageNumber)).size !== value.length) return fail();
-  return value as BookContentPage[];
+  try { return validatedBookPages(value); } catch { return fail(); }
 }
+
 export function backupGoal(value: unknown): ReadingGoal | null {
   if (value === null) return null;
   if (!isRecord(value) || !['minutesReadToday', 'dailyTargetMinutes', 'streakDays', 'booksFinishedYear', 'yearTargetBooks'].every(k => Number.isSafeInteger(value[k]) && value[k] >= 0)) return fail();

@@ -1,12 +1,13 @@
+import { withArchiveLock } from './archiveQueue';
 import type { Book } from '../types';
 interface Storage {
   storageKey(key: string): string;
+  subscribeArchive?(key: string, callback: () => void): () => void;
   loadJSONEntryStrict(key: string): Promise<{ present: boolean; value: unknown }>;
   saveJSONStrict(key: string, value: unknown): Promise<void>;
 }
 interface LibraryArchive { version: 1; books: Book[]; removedBookIds: string[]; pendingFileRemovals: { id: string; coverUrl: string }[] }
 const KEY = 'libraryArchive';
-const queues = new Map<string, Promise<void>>();
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 export function validLibraryBook(value: unknown): value is Book {
   return record(value) && typeof value.id === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(value.id) &&
@@ -21,12 +22,7 @@ function books(value: unknown): Book[] {
 /** All mutations read the latest durable state inside a queue shared by account/store key. */
 export function createLibraryStore(storage: Storage) {
   const queueKey = storage.storageKey(KEY);
-  const enqueue = <T,>(work: () => Promise<T>): Promise<T> => {
-    const operation = (queues.get(queueKey) ?? Promise.resolve()).then(work);
-    const settled = operation.then(() => undefined, () => undefined); queues.set(queueKey, settled);
-    void settled.then(() => { if (queues.get(queueKey) === settled) queues.delete(queueKey); });
-    return operation;
-  };
+  const enqueue = <T,>(work: () => Promise<T>): Promise<T> => withArchiveLock(queueKey, work);
   const read = async (): Promise<LibraryArchive> => {
     const entry = await storage.loadJSONEntryStrict(KEY);
     if (!entry.present) {

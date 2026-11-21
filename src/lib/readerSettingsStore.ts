@@ -1,13 +1,14 @@
+import { withArchiveLock } from './archiveQueue';
 import type { ReadingSettings } from '../types';
 import { normalizeReaderSettings, type ReaderSettingsChange } from './readerPreferences';
 
 interface Storage {
   storageKey(key: string): string;
+  subscribeArchive?(key: string, callback: () => void): () => void;
   loadJSONEntryStrict(key: string): Promise<{ present: boolean; value: unknown }>;
   saveJSONStrict(key: string, value: unknown): Promise<void>;
 }
 const KEY = 'settingsArchive';
-const queues = new Map<string, Promise<void>>();
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 function settings(value: unknown) {
   if (!record(value)) throw new Error('Saved reading preferences could not be read.');
@@ -17,13 +18,7 @@ function settings(value: unknown) {
 /** Serialize read/modify/write across store instances in the same reading space. */
 export function createReaderSettingsStore(storage: Storage) {
   const queueKey = storage.storageKey(KEY);
-  const enqueue = <T,>(work: () => Promise<T>): Promise<T> => {
-    const operation = (queues.get(queueKey) ?? Promise.resolve()).then(work);
-    const settled = operation.then(() => undefined, () => undefined);
-    queues.set(queueKey, settled);
-    void settled.then(() => { if (queues.get(queueKey) === settled) queues.delete(queueKey); });
-    return operation;
-  };
+  const enqueue = <T,>(work: () => Promise<T>): Promise<T> => withArchiveLock(queueKey, work);
   const read = async (): Promise<{ settings: ReadingSettings; hasSaved: boolean }> => {
     const entry = await storage.loadJSONEntryStrict(KEY);
     if (entry.present) {

@@ -19,6 +19,7 @@ import { ActivityIndicator, AppState, BackHandler, Pressable, StyleSheet, Text, 
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomNav } from './src/components/BottomNav';
 import { DictionaryModal } from './src/components/DictionaryModal';
+import { createRetryableWriter } from './src/lib/retryableCreate';
 import { FlashcardModal } from './src/components/FlashcardModal';
 import { Header, HEADER_HEIGHT } from './src/components/Header';
 import { LibraryView } from './src/components/LibraryView';
@@ -26,8 +27,10 @@ import { NotebookView } from './src/components/NotebookView';
 import { ProfileModal } from './src/components/ProfileModal';
 import { JumpTarget, ReaderView } from './src/components/ReaderView';
 import { SearchModal } from './src/components/SearchModal';
+import { createBookPageCache } from './src/lib/bookPageCache';
 import { createLibraryStore, readingFields } from './src/lib/libraryStore';
 import { canOpenSavedPassage } from './src/lib/archiveSearch';
+import { SyncReviewModal } from './src/components/SyncReviewModal';
 import { SettingsSheet } from './src/components/SettingsSheet';
 import { Toast } from './src/components/ui/Toast';
 import { INITIAL_BOOKS, INITIAL_GOAL } from './src/data/initialData';
@@ -41,6 +44,10 @@ import { useReaderSettings } from './src/lib/useReaderSettings';
 import { createBookmark, createBookmarkStore, findBookmarkPage } from './src/lib/bookmarks';
 import { watchAccountSession } from './src/lib/accountSession';
 import { createLocalStore } from './src/lib/localStore';
+import { createReplicatedStore } from './src/lib/replicatedStore';
+import { createSyncAccountRepository } from './src/lib/syncAccount';
+import { useAccountSync } from './src/lib/useAccountSync';
+import { randomUUID } from 'expo-crypto';
 import { createImportCommitter, ImportStorageError, waitForImportCommits } from './src/lib/bookImport';
 import { beginOriginalImport, recoverOriginalImport, hasPendingOriginalImport, IMPORT_JOURNAL } from './src/lib/importRecovery';
 import { parseEpubFile as parseEpubForStore } from './src/lib/epubParser';
@@ -58,14 +65,13 @@ import {
   rememberAdded as rememberAddedForStore,
   LibraryBackupEntry,
 } from './src/lib/catalog';
-import { createAccountRepository, signInWithGoogle, signOutSupabase, supabase, toUserProfile, SUPABASE_URL } from './src/lib/supabase';
+import { signInWithGoogle, signOutSupabase, supabase, toUserProfile, SUPABASE_URL } from './src/lib/supabase';
 import { colors, NAV_SPACE } from './src/theme';
 import { AppThemeProvider, createPalette } from './src/AppTheme';
 import { MotionPreferencesProvider } from './src/MotionPreferences';
 import { useFeedbackMessage } from './src/lib/useFeedbackMessage';
 import { useHighlightArchive } from './src/lib/useHighlightArchive';
 import { useLexiconArchive } from './src/lib/useLexiconArchive';
-import { useDeletionRetries } from './src/lib/useDeletionRetries';
 import { resolveSourceAnchor } from './src/lib/sourceAnchors';
 import {
   Book,
@@ -112,13 +118,14 @@ function applySavedReadingProgress(book: Book, entry: LibraryBackupEntry): Book 
   };
 }
 
-type PortableJob = { kind: 'export'; includeOriginals: boolean } | { kind: 'restore'; backup: PreparedBackup; preferences: boolean } | { kind: 'remove'; bookId: string };
+type PortableJob = { kind: 'export'; includeOriginals: boolean } | { kind: 'restore'; backup: PreparedBackup; preferences: boolean; recoverMatching?: boolean } | { kind: 'remove'; bookId: string };
 interface ReadingSpaceProps { user: UserProfile | null; scope: string; hasLegacyData: boolean }
 function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: ReadingSpaceProps & { onPortableJob: (job: PortableJob) => void; onRemovalJob: (bookId: string) => Promise<BookRemovalResult> }) {
-  const storage = useMemo(() => createLocalStore(scope), [scope]);
-  const { loadJSON, loadPages, removeBookFiles, saveJSON, savePages } = storage;
+  const storage = useMemo(() => createReplicatedStore(createLocalStore(scope), randomUUID, Boolean(user)), [scope]);
+  const { loadJSON, removeBookFiles, saveJSON, savePages } = storage;
+  const pageCache = useMemo(() => createBookPageCache(storage.loadPages, 2), [storage]);
   const libraryStore = useMemo(() => createLibraryStore(storage), [storage]);
-  const cloud = useMemo(() => createAccountRepository(supabase, user?.id ?? null), [user?.id]);
+  const cloud = useMemo(() => createSyncAccountRepository(supabase, user?.id ?? null, storage), [user?.id, storage]);
   const { fetchBooksFromSupabase, fetchReadingGoalFromSupabase, fetchLibraryBackup, saveLibraryBackup, upsertBookToSupabase, upsertReadingGoalToSupabase } = cloud;
   const { message: toastMessage, showMessage: showToast } = useFeedbackMessage();
   const highlightArchive = useHighlightArchive(storage, cloud, showToast);
@@ -127,7 +134,10 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
   const lexicon = lexiconArchive.items;
   const readerSettings = useReaderSettings(storage, cloud, showToast);
   const settings = readerSettings.settings;
-  const bookmarkStore = useMemo(() => createBookmarkStore(AsyncStorage, storage.storageKey('bookmarks')), [storage]);
+  const bookmarkStore = useMemo(() => createBookmarkStore({
+    getItem: async () => { const value = await storage.loadJSONEntryStrict('bookmarks'); return value.present ? JSON.stringify(value.value) : null; },
+    setItem: async (_key, value) => storage.saveJSONStrict('bookmarks', JSON.parse(value)),
+  }, storage.storageKey('bookmarks')), [storage]);
   const parseEpubFile = (uri: string, name: string) => parseEpubForStore(uri, name, storage);
   const loadAdded = () => loadAddedForStore(storage);
   const rememberAdded = (current: Record<string, string>, id: string, bookId: string) => rememberAddedForStore(current, id, bookId, storage);
@@ -139,6 +149,13 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
   booksRef.current = books;
   const spaceActive = useRef(true);
   useEffect(() => { spaceActive.current = true; return () => { spaceActive.current = false; }; }, []);
+  useEffect(() => storage.subscribeArchive('libraryArchive', () => {
+    void libraryStore.load().then(snapshot => {
+      if (!spaceActive.current) return;
+      removedLibraryIds.current = new Set(snapshot.removedBookIds);
+      booksRef.current = snapshot.books; setBooks(snapshot.books);
+    }).catch(() => undefined);
+  }), [storage, libraryStore]);
   const saveReadingProgress = useMemo(() => createReadingProgressWriter(
     async (_books, changed) => { if (!changed) throw new Error('Missing reading position'); await libraryStore.patch(changed.id, readingFields(changed)); }, upsertBookToSupabase,
     () => { if (spaceActive.current) showToast('Couldn’t save your reading position on this device. Keep the book open and try again.'); },
@@ -176,6 +193,10 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
   const [bookDetailsId, setBookDetailsId] = useState<string | null>(null);
   const removingBook = useRef(false);
   const savingCover = useRef(false);
+  const [availableBookIds, setAvailableBookIds] = useState<string[]>([]);
+  const [openingBookId, setOpeningBookId] = useState<string | null>(null);
+  const [readingLoadError, setReadingLoadError] = useState<string | null>(null);
+  const navigationGeneration = useRef(0);
   const [customPagesMap, setCustomPagesMap] = useState<Record<string, BookContentPage[]>>({});
   const [readingGoal, setReadingGoal] = useState<ReadingGoal>(INITIAL_GOAL);
   const [recoveryBooks, setRecoveryBooks] = useState<LibraryRecoveryBook[]>([]);
@@ -216,10 +237,12 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
     }
   }, [bookmarkStore]);
   useEffect(() => { void loadBookmarks(); }, [loadBookmarks]);
+  useEffect(() => storage.subscribeArchive('bookmarks', () => { void loadBookmarks(); }), [storage, loadBookmarks]);
   const [isSettingsSheetOpen, setIsSettingsSheetOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [dictionaryState, setDictionaryState] = useState<{ isOpen: boolean; word: string; context?: string }>({
+  const [syncReviewOpen, setSyncReviewOpen] = useState(false);
+  const [dictionaryState, setDictionaryState] = useState<{ isOpen: boolean; word: string; context?: string; bookId?: string; source?: { page: number; chapter: string; anchor?: SourceAnchor } }>({
     isOpen: false,
     word: '',
   });
@@ -267,16 +290,15 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
       if (lGoal) setReadingGoal(lGoal);
       if (lRecoveryBooks) setRecoveryBooks(lRecoveryBooks);
 
-      // Re-attach parsed EPUB pages that were saved to disk
-      const pageEntries = await Promise.all(
-        (lBooks ?? []).map(async (b) => [b.id, await loadPages(b.id)] as const)
-      );
-      if (cancelled) return;
-      const pagesMap: Record<string, BookContentPage[]> = {};
-      pageEntries.forEach(([id, pages]) => {
-        if (pages) pagesMap[id] = pages;
-      });
-      setCustomPagesMap(pagesMap);
+      // Presence metadata is cheap; parse only the book the reader actually opens.
+      try {
+        const present = new Set(storage.listAvailableBookIds());
+        if (cancelled) return;
+        setAvailableBookIds([...present]);
+      } catch {
+        if (cancelled) return;
+        showToast('Saved reading files could not be checked. Reopen this reading space to try again.');
+      }
       if (libraryLoadState.current !== 'error') { libraryLoadState.current = 'ready'; setLibraryStatus('ready'); }
       if (lBooks?.length) setCurrentBookId(lBooks[0].id);
 
@@ -629,27 +651,45 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
     showToast(`Restored "${restoredBook.title}" with saved reading progress`);
   };
 
-  const currentBook = books.find((b) => b.id === currentBookId) || books[0];
+  const currentBook = books.find((b) => b.id === currentBookId) || (activeTab !== 'reading' ? books[0] : undefined);
+  useEffect(() => { if (hydrated && activeTab === 'reading' && currentBookId && !books.some(book => book.id === currentBookId)) { navigationGeneration.current++; setActiveTab('library'); showToast('This book was removed from your account. Library has been updated.'); } }, [books, currentBookId, hydrated, activeTab, showToast]);
 
   // ---- Actions ----
-  const handleOpenBook = (bookId: string) => {
-    const book = booksRef.current.find((b) => b.id === bookId);
-    if (book) {
-      const updatedBook = { ...book, lastOpened: new Date().toISOString() };
-      const updatedBooks = booksRef.current.map((item) => (item.id === bookId ? updatedBook : item));
-      booksRef.current = updatedBooks;
-      setBooks(updatedBooks);
-      if (libraryLoadState.current === 'ready') void libraryStore.patch(bookId, { lastOpened: updatedBook.lastOpened }).catch(() => { if (spaceActive.current) showToast('Could not save the last-opened date on this device.'); });
-      void upsertBookToSupabase(updatedBook);
-    }
-    setBookDetailsId(null);
-    setJumpTarget(null);
-    setCurrentBookId(bookId);
-    setActiveTab('reading');
-    if (book) showToast(`Resumed "${book.title}"`);
+  const prepareBook = async (bookId: string): Promise<BookContentPage[] | null> => {
+    const generation = ++navigationGeneration.current;
+    setOpeningBookId(bookId); setReadingLoadError(null);
+    try {
+      const loaded = await pageCache.load(bookId);
+      if (!spaceActive.current || generation !== navigationGeneration.current || !booksRef.current.some(book => book.id === bookId)) return null;
+      const fingerprint = booksRef.current.find(book => book.id === bookId)?.documentFingerprint;
+      if (fingerprint && loaded.some(page => page.source && page.source.edition !== fingerprint)) throw Error('This reading text belongs to a different edition. Its files have been kept; recover the matching EPUB from Library.');
+      setCustomPagesMap(pageCache.snapshot());
+      return loaded;
+    } catch (error) {
+      if (spaceActive.current && generation === navigationGeneration.current) {
+        const message = error instanceof Error ? error.message : 'This book could not be opened. Try again.';
+        setReadingLoadError(message); showToast(message);
+      }
+      return null;
+    } finally { if (spaceActive.current && generation === navigationGeneration.current) setOpeningBookId(null); }
   };
+  const handleOpenBook = async (bookId: string) => {
+    if (!await prepareBook(bookId)) return;
+    const book = booksRef.current.find(b => b.id === bookId);
+    if (!book) return;
+    const updatedBook = { ...book, lastOpened: new Date().toISOString() };
+    booksRef.current = booksRef.current.map(item => item.id === bookId ? updatedBook : item);
+    setBooks(previous => previous.map(item => item.id === bookId ? { ...item, lastOpened: updatedBook.lastOpened } : item));
+    if (libraryLoadState.current === 'ready') void libraryStore.patch(bookId, { lastOpened: updatedBook.lastOpened }).catch(() => { if (spaceActive.current) showToast('Could not save the last-opened date on this device.'); });
+    void upsertBookToSupabase(updatedBook);
+    setBookDetailsId(null); setJumpTarget(null); setCurrentBookId(bookId); setActiveTab('reading');
+  };
+  useEffect(() => {
+    if (activeTab === 'reading' && currentBook && !customPagesMap[currentBook.id]) void handleOpenBook(currentBook.id);
+  }, [activeTab, currentBook?.id]);
 
   const handleSelectBookDetails = (bookId: string) => {
+    navigationGeneration.current++; setOpeningBookId(null);
     setActiveTab('library');
     setBookDetailsId(bookId);
   };
@@ -669,13 +709,16 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
     [saveReadingProgress]
   );
 
-  const handleJumpToReader = (bookId: string, pageNumber: number, anchor?: SourceAnchor) => {
-    if (libraryLoadState.current !== 'ready' || !canOpenSavedPassage(booksRef.current, customPagesMap, bookId, pageNumber, anchor)) {
+  const handleJumpToReader = async (bookId: string, pageNumber: number, anchor?: SourceAnchor) => {
+    const loaded = await prepareBook(bookId);
+    if (!loaded) return;
+    const loadedPages = { [bookId]: loaded };
+    if (libraryLoadState.current !== 'ready' || !canOpenSavedPassage(booksRef.current, loadedPages, bookId, pageNumber, anchor)) {
       showToast('This saved passage is unavailable on this device. Check the book in Library and import its EPUB if needed.');
       return;
     }
-    const target = anchor ? resolveSourceAnchor(anchor, customPagesMap[bookId]) : null;
-    if (target) pageNumber = customPagesMap[bookId][target.index].pageNumber;
+    const target = anchor ? resolveSourceAnchor(anchor, loaded) : null;
+    if (target) pageNumber = loaded[target.index].pageNumber;
     setCurrentBookId(bookId);
     setJumpTarget({ bookId, page: pageNumber, nonce: Date.now(), ...(target ? { wordOffset: target.wordOffset } : {}) });
     setActiveTab('reading');
@@ -708,31 +751,29 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
     void writeBookmarks(() => bookmarkStore.remove(id), () => 'Bookmark removed');
   };
 
-  const handleAddHighlight = (newHl: Omit<HighlightEntry, 'id' | 'dateAdded'>): Promise<boolean> => {
-    const entry: HighlightEntry = {
-      ...newHl,
-      id: `hl-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      dateAdded: 'Added just now',
-    };
-    return highlightArchive.add(entry);
-  };
+  const handleAddHighlight = useMemo(() => createRetryableWriter(
+    (draft: Omit<HighlightEntry, 'id' | 'dateAdded'>): HighlightEntry => ({ ...draft, id: `hl-${randomUUID()}`, dateAdded: new Date().toISOString() }),
+    highlightArchive.add,
+  ), [storage]);
 
   const handleDeleteHighlight = (id: string): Promise<boolean> => highlightArchive.remove(id);
 
   const handleAddReflectionNote = (highlightId: string, noteText: string): Promise<boolean> =>
     highlightArchive.note(highlightId, noteText);
 
-  const handleSaveToLexicon = (newLex: Omit<LexiconEntry, 'id'>): Promise<boolean> => {
-    const entry: LexiconEntry = { ...newLex, id: `lex-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` };
-    return lexiconArchive.add(entry);
-  };
+  const handleSaveToLexicon = useMemo(() => createRetryableWriter(
+    (draft: Omit<LexiconEntry, 'id'>): LexiconEntry => ({ ...draft, id: `lex-${randomUUID()}` }),
+    lexiconArchive.add,
+  ), [storage]);
 
   const handleUpdateMastery = (id: string, newLevel: number): Promise<boolean> =>
     lexiconArchive.mastery(id, newLevel);
 
   const handleAddEpubBook = async (newBook: Book, newPages: BookContentPage[]) => {
     await importCommitterRef.current!(newBook, newPages);
-    setCustomPagesMap((prev) => ({ ...prev, [newBook.id]: newPages }));
+    pageCache.put(newBook.id, newPages);
+    setCustomPagesMap(pageCache.snapshot());
+    setAvailableBookIds(previous => [...new Set([...previous, newBook.id])]);
     void upsertBookToSupabase(newBook);
     showToast(`Added "${newBook.title}" to your Library`);
   };
@@ -793,7 +834,7 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
     return saved;
   };
 
-  const deletionRetries = useDeletionRetries(storage, cloud, Boolean(user) && hydrated && highlightArchive.status === 'ready', `${books.length}:${highlights.length}`);
+  const accountSync = useAccountSync(storage, cloud, Boolean(user) && hydrated);
 
   // ---- Layout ----
   const reading = activeTab === 'reading';
@@ -812,7 +853,7 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
 
       <Header
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={tab => { if (tab !== 'reading') { navigationGeneration.current++; setOpeningBookId(null); } setActiveTab(tab); }}
         onOpenSearch={() => setIsSearchOpen(true)}
         onOpenProfile={() => setIsProfileOpen(true)}
         visible={isNavVisible && !isImmersiveMode}
@@ -822,7 +863,7 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
             ? books.find((book) => book.id === bookDetailsId)?.title ?? 'Book details'
             : undefined
         }
-        onBackFromDetails={() => setBookDetailsId(null)}
+        onBackFromDetails={() => { navigationGeneration.current++; setOpeningBookId(null); setBookDetailsId(null); }}
       />
 
       <View style={[styles.main, { paddingTop: topPad, paddingBottom: reading ? 0 : 0 }]}>
@@ -831,11 +872,12 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
             storage={storage}
             hasLegacyData={hasLegacyData}
             books={books}
-            availableBookIds={Object.keys(customPagesMap).filter(id => customPagesMap[id].length > 0)}
+            availableBookIds={availableBookIds}
+            openingBookId={openingBookId}
             libraryStatus={libraryStatus}
             recoveryBooks={recoveryBooks}
             selectedBookId={bookDetailsId}
-            onSelectBook={setBookDetailsId}
+            onSelectBook={id => { navigationGeneration.current++; setOpeningBookId(null); setBookDetailsId(id); }}
             readingGoal={readingGoal}
             globalCoverStyle={settings.defaultCoverStyle || 'image'}
             onOpenBook={handleOpenBook}
@@ -849,7 +891,13 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
           />
         )}
 
-        {activeTab === 'reading' && (
+        {activeTab === 'reading' && !customPagesMap[currentBook?.id ?? ''] && <View style={[styles.center, { flex: 1, padding: 24 }]}>
+          {openingBookId ? <ActivityIndicator accessibilityLabel="Opening book text" /> : <>
+            <Text accessibilityRole="alert">{readingLoadError || 'Choose a book in Library to start reading.'}</Text>
+            {currentBook && <Pressable accessibilityRole="button" style={{ padding: 16 }} onPress={() => void handleOpenBook(currentBook.id)}><Text>Try opening again</Text></Pressable>}
+          </>}
+        </View>}
+        {activeTab === 'reading' && Boolean(customPagesMap[currentBook?.id ?? '']) && (
           <ReaderView
             key={`${currentBook?.id ?? 'empty'}:${currentBook ? customPagesMap[currentBook.id]?.length ?? 0 : 0}`}
             currentBook={currentBook}
@@ -860,7 +908,7 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
             settingsStatus={readerSettings.status}
             settingsNotice={readerSettings.notice}
             onOpenSettingsSheet={() => setIsSettingsSheetOpen(true)}
-            onOpenDictionary={(word, context) => setDictionaryState({ isOpen: true, word, context })}
+            onOpenDictionary={(word, context, source) => setDictionaryState({ isOpen: true, word, context, bookId: currentBook?.id, source })}
             highlights={highlights}
             onAddHighlight={handleAddHighlight}
             onDeleteHighlight={handleDeleteHighlight}
@@ -886,8 +934,11 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
         {activeTab === 'notebook' && (
           <NotebookView
             cloud={cloud}
-            deletionNotice={deletionRetries.notice}
-            onRetryDeletions={deletionRetries.retry}
+            syncSummary={accountSync.summary}
+            syncBusy={accountSync.busy}
+            accountSignedIn={Boolean(user)}
+            onSyncNow={accountSync.retry}
+            onReviewConflicts={accountSync.status.conflicts.length ? () => setSyncReviewOpen(true) : undefined}
             highlightStatus={highlightArchive.status}
             highlightNotice={highlightArchive.notice}
             highlightBusy={highlightArchive.busy}
@@ -940,6 +991,7 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
         <SearchModal
           books={books}
           bookPages={customPagesMap}
+          availableBookIds={availableBookIds}
           globalCoverStyle={settings.defaultCoverStyle ?? 'image'}
           libraryStatus={libraryStatus}
           highlightStatus={highlightArchive.status}
@@ -956,6 +1008,9 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
         />
       )}
 
+      {syncReviewOpen && <SyncReviewModal conflicts={accountSync.status.conflicts} onClose={() => setSyncReviewOpen(false)} onResolve={async (record, choice) => {
+        await cloud.sync.resolve(record.kind, record.id, record.token, record.account.revision, choice); accountSync.retry();
+      }} />}
       {isProfileOpen && (
         <ProfileModal
           goal={readingGoal}
@@ -969,7 +1024,9 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
           onRestoreLibrary={handleRestoreLibrary}
           onChooseSafetyCopy={choosePortableBackup}
           onExportSafetyCopy={includeOriginals => onPortableJob({ kind: 'export', includeOriginals })}
-          onRestoreSafetyCopy={(backup, preferences) => onPortableJob({ kind: 'restore', backup, preferences })}
+          onRestoreSafetyCopy={(backup, preferences, recoverMatching) => onPortableJob({ kind: 'restore', backup, preferences, recoverMatching })}
+          syncSummary={accountSync.summary}
+          onReviewConflicts={accountSync.status.conflicts.length ? () => { setIsProfileOpen(false); setSyncReviewOpen(true); } : undefined}
           showToast={showToast}
         />
       )}
@@ -978,7 +1035,8 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
         <DictionaryModal
           initialWord={dictionaryState.word}
           contextPassage={dictionaryState.context}
-          bookId={currentBook?.id ?? ''}
+          bookId={dictionaryState.bookId ?? ''}
+          source={dictionaryState.source}
           onClose={() => setDictionaryState({ isOpen: false, word: '' })}
           onSaveToLexicon={handleSaveToLexicon}
           saveStatus={lexiconArchive.status}
@@ -993,6 +1051,10 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
           lexiconItem={lexicon.find(entry => entry.id === flashcardItem.id) ?? flashcardItem}
           cardAvailable={lexiconArchive.status !== 'ready' || lexicon.some(entry => entry.id === flashcardItem.id)}
           onRetry={lexiconArchive.retry}
+          onOpenContext={flashcardItem.page && availableBookIds.includes(flashcardItem.bookId) ? () => {
+            const item = lexicon.find(entry => entry.id === flashcardItem.id) ?? flashcardItem;
+            setFlashcardItem(null); void handleJumpToReader(item.bookId, item.page!, item.anchor);
+          } : undefined}
           onClose={() => setFlashcardItem(null)}
           onUpdateMastery={handleUpdateMastery}
           saveStatus={lexiconArchive.status}
@@ -1004,7 +1066,7 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
       {!isSearchOpen && (
         <BottomNav
           activeTab={activeTab}
-          onTabChange={setActiveTab}
+          onTabChange={tab => { if (tab !== 'reading') { navigationGeneration.current++; setOpeningBookId(null); } setActiveTab(tab); }}
           visible={activeTab !== 'reading' && !bookDetailsId && isNavVisible && !isImmersiveMode}
         />
       )}
@@ -1016,7 +1078,7 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
 
 /** Recovery runs before archive hooks mount. Portable jobs unmount them first. */
 function ReadingSpace(props: ReadingSpaceProps) {
-  const storage = useMemo(() => createLocalStore(props.scope), [props.scope]);
+  const storage = useMemo(() => createReplicatedStore(createLocalStore(props.scope), randomUUID, Boolean(props.user)), [props.scope]);
   const [job, setJob] = useState<PortableJob | null>(null);
   const [phase, setPhase] = useState<'working' | 'ready' | 'done' | 'error'>('working');
   const [message, setMessage] = useState('');
@@ -1042,8 +1104,8 @@ function ReadingSpace(props: ReadingSpaceProps) {
           await exportPortableBackup(storage, job.includeOriginals);
           if (active) { setMessage('Safety copy prepared. Check that your chosen destination saved the ZIP file.'); setPhase('done'); }
         } else if (job?.kind === 'restore') {
-          await importPortableBackup(storage, job.backup, job.preferences);
-          if (active) { setMessage('Safety copy restored as separate books and saved work.'); setPhase('done'); }
+          await importPortableBackup(storage, job.backup, job.preferences, job.recoverMatching);
+          if (active) { setMessage(job.recoverMatching ? 'Safety copy recovered. Matching editions retain their current progress and saved work.' : 'Safety copy restored as separate books and saved work.'); setPhase('done'); }
         } else if (job?.kind === 'remove') {
           const title = await removeBookWithRecovery(storage, job.bookId);
           let filesRemain = true;

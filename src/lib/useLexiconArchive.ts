@@ -18,6 +18,9 @@ export function useLexiconArchive(storage: Storage, cloud: Cloud, report: (messa
   const [attempt, setAttempt] = useState(0);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => storage.subscribeArchive?.('lexiconArchive', () => {
+    void archive.load().then(saved => { if (mounted.current) { setItems(saved.items); setNotice(null); } }).catch(() => undefined);
+  }), [archive, storage]);
 
   useEffect(() => {
     let active = true;

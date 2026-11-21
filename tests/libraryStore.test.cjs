@@ -6,6 +6,7 @@ const { test } = require('node:test');
 const ts = require('typescript');
 const filename = path.resolve(__dirname, '../src/lib/libraryStore.ts');
 const loaded = new Module(filename, module);
+loaded.require = name => require('./loadTypeScript.cjs').loadTypeScript(path.resolve(path.dirname(filename), name + '.ts'));
 loaded._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, filename);
 const { createLibraryStore, readingFields } = loaded.exports;
 const book = (id, extra = {}) => ({ id, title: id, author: 'Author', coverUrl: '', currentPage: 1, totalPages: 10, progressPercent: 0, ...extra });

@@ -20,6 +20,9 @@ export function useReaderSettings(storage: Storage, cloud: Cloud, report: (messa
   const uploads = useRef<Promise<unknown>>(Promise.resolve());
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => storage.subscribeArchive?.('settingsArchive', () => {
+    void store.load().then(saved => { if (mounted.current) { setSettings(saved.settings); setNotice(null); } }).catch(() => undefined);
+  }), [store, storage]);
 
   useEffect(() => {
     let active = true;

@@ -42,6 +42,7 @@ function parser(bytes, { copyFails = false, cleanupFails = false, coverWrites = 
     console,
     require(name) {
       if (name === 'expo-crypto') return { randomUUID: () => require('node:crypto').randomUUID(), CryptoDigestAlgorithm: { SHA256: 'sha256' }, digest: async (_, value) => Uint8Array.from(require('node:crypto').createHash('sha256').update(value).digest()).buffer };
+      if (name === './epubStructure' || name === './epubAssets' || name === './bookPages') return require('./loadTypeScript.cjs').loadTypeScript(path.resolve(__dirname, '../src/lib', name + '.ts'));
       if (name === './bookImport') return importHelpers;
       if (name === 'expo-file-system') return { File };
       if (name === './localStore') return {
@@ -123,7 +124,7 @@ for (const [name, body, expected] of [
   ['mixed blockquote content', '<blockquote>Before.<p>Inside.</p>After.</blockquote>', ['Before.', 'Inside.', 'After.']],
   ['nested paragraph wrappers', '<div class="paragraph">Before.<p>Inside.</p>After.</div>', ['Before.', 'Inside.', 'After.']],
   ['direct body and section text', 'Opening.<section>Start.<div>Middle.</div>End.</section>Closing.', ['Opening.', 'Start.', 'Middle.', 'End.', 'Closing.']],
-  ['table text', '<table><caption>Distances</caption><tr><th>Place</th><th>Miles</th></tr><tr><td>Home</td><td>12</td></tr></table>', ['Distances', 'Place', 'Miles', 'Home', '12']],
+  ['table text', '<table><caption>Distances</caption><tr><th>Place</th><th>Miles</th></tr><tr><td>Home</td><td>12</td></tr></table>', ['Distances\nPlace | Miles\nHome | 12']],
   ['headings and captions', '<h1>Opening</h1><p>Text.</p><h2>Second part</h2><figure><figcaption>The river</figcaption></figure>', ['Opening', 'Text.', 'Second part', 'The river']],
   ['line breaks', '<p>First line<br/>Second line<br/>Last line</p>', ['First line', 'Second line', 'Last line']],
   ['entities and inline words', '<p>Fish &amp; chips with <em>salt</em> and <strong>pepper</strong>.</p>', ['Fish & chips with salt and pepper.']],
@@ -150,7 +151,7 @@ test('the phone-test EPUB retains its entire expected text sequence', async () =
     'Inside the nested paragraph.', 'After the nested paragraph.', 'After the wrapper.',
     'List Check', 'First list item.', 'Second list item.', 'Nested list item.',
     'Before the quotation.', 'Inside the quotation.', 'After the quotation.',
-    'Table Check', 'Journey distances', 'Place', 'Miles', 'Home', '12',
+    'Table Check', 'Journey distances\nPlace | Miles\nHome | 12',
     'First short line.', 'Second short line.', 'Fish & chips with salt and pepper.', 'THE END.',
   ]);
 });
@@ -214,4 +215,14 @@ test('new imports fingerprint the actual EPUB bytes and preserve unique source t
   assert.deepEqual(Array.from(again.pages, page => Array.from(page.source.paths)), Array.from(first.pages, page => Array.from(page.source.paths)));
   const changed = await parser(await fixture('<h1>First</h1><p>Different text.</p>')).parse();
   assert.notEqual(changed.book.documentFingerprint, expected);
+});
+
+test('native journey fixture imports all illustrated passages and its working fragment target without fabricated text',async()=>{
+  const input=parser(new Uint8Array(fs.readFileSync(path.resolve(__dirname,'../docs/fixtures/folio-device-journey.epub'))));
+  const result=await input.parse(), blocks=Array.from(result.pages).flatMap(page=>Array.from(page.rich??[]));
+  assert.equal(blocks.filter(block=>/^Passage \d+\./.test(block.text)).length,40);
+  assert.ok(blocks.some(block=>block.kind==='image'&&block.image.svg.includes('circle')));
+  assert.ok(blocks.some(block=>block.targets.includes('note')));
+  assert.ok(blocks.flatMap(block=>block.runs).some(run=>run.href==='EPUB/body.xhtml#note'));
+  assert.ok(blocks.some(block=>block.text==='Yes.'));assert.ok(blocks.some(block=>block.text==='THE END.'));
 });

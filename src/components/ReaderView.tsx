@@ -2,6 +2,7 @@ import * as Clipboard from 'expo-clipboard';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AppState,
+  Linking,
   FlatList,
   GestureResponderEvent,
   PanResponder,
@@ -14,9 +15,12 @@ import {
   LayoutChangeEvent,
   FlatListProps,
 } from 'react-native';
+import { sourceTextLines, sourceLineAt, sourceLineForWord, type SourceLine } from '../lib/textLines';
+import { StructuredBlock } from './StructuredBlock';
+import { sliceRuns } from '../lib/richText';
 import { paginateContent, displayPageForPosition } from '../lib/readerPagination';
 import { savedReadingPosition, scrollPositionAtOffset } from '../lib/readingPosition';
-import { sourceAnchorForQuote } from '../lib/sourceAnchors';
+import { sourceAnchorForQuote, resolveSourceAnchor } from '../lib/sourceAnchors';
 import { readerTextMetrics, type ReaderSettingsChange } from '../lib/readerPreferences';
 import { HIGHLIGHT_COLORS, highlightTextStyle } from '../lib/highlights';
 import { findBookmarkPage } from '../lib/bookmarks';
@@ -27,6 +31,8 @@ import { BOOK_PAGES } from '../data/initialData';
 import { colors, F, readerFontFamily, readerPaper, type } from '../theme';
 import {
   Book,
+  InlineRun,
+  SourceAnchor,
   BookContentPage,
   Bookmark,
   HighlightEntry,
@@ -57,7 +63,7 @@ interface ReaderViewProps {
   settingsStatus?: 'loading' | 'ready' | 'error';
   settingsNotice?: string | null;
   onOpenSettingsSheet: () => void;
-  onOpenDictionary: (word: string, context?: string) => void;
+  onOpenDictionary: (word: string, context?: string, source?: { page: number; chapter: string; anchor?: SourceAnchor }) => void;
   highlights: HighlightEntry[];
   onAddHighlight: (hl: Omit<HighlightEntry, 'id' | 'dateAdded'>) => Promise<boolean>;
   onDeleteHighlight: (id: string) => Promise<boolean>;
@@ -120,6 +126,10 @@ function buildSegments(full: string, hls: HighlightEntry[]): Seg[] {
 interface ParagraphProps {
   full: string;
   hls: HighlightEntry[];
+  runs?: InlineRun[];
+  onLink?: (href: string) => void;
+  heading?: boolean;
+  onLines?: (lines: SourceLine[]) => void;
   dropCap?: boolean;
   indent?: boolean;
   textStyle: object;
@@ -129,9 +139,10 @@ interface ParagraphProps {
 }
 
 const Paragraph = React.memo<ParagraphProps>(
-  ({ full, hls, dropCap, indent, textStyle, dropStyle, onTap, onOpen }) => {
+  ({ full, hls, runs, onLink, heading, onLines, dropCap, indent, textStyle, dropStyle, onTap, onOpen }) => {
     const segs = useMemo(() => buildSegments(full, hls), [full, hls]);
 
+    const links = [...new Map((runs ?? []).filter(run => run.href).map(run => [run.href!, run])).values()];
     const pieces: React.ReactNode[] = [];
     let cursor = 0;
 
@@ -148,6 +159,12 @@ const Paragraph = React.memo<ParagraphProps>(
       markStyle: object | undefined,
       onPress?: () => void
     ): React.ReactNode[] => {
+      if (runs) return sliceRuns(runs, absStart, absStart + s.length).map((run, index) => <Text key={`${key}-${index}`}
+        accessibilityRole={run.href ? 'link' : undefined}
+        style={[{ fontWeight: run.strong ? '700' : undefined, fontStyle: run.emphasis ? 'italic' : undefined,
+          fontFamily: run.code ? 'monospace' : undefined, textDecorationLine: run.strike ? 'line-through' : run.href || run.underline ? 'underline' : undefined,
+          fontSize: run.superscript || run.subscript ? 13 : undefined }, markStyle]}
+        onPress={onPress || run.href ? (event) => { event?.stopPropagation?.(); if (onPress) onPress(); else if (run.href) onLink?.(run.href); } : undefined}>{run.text}</Text>);
       if (dropCap && absStart === 0 && s.length > 0) {
         return [
           <Text key={key + 'd'} style={[dropStyle, markStyle]} onPress={onPress}>
@@ -182,6 +199,14 @@ const Paragraph = React.memo<ParagraphProps>(
     return (
       <Text
         style={textStyle}
+        onTextLayout={onLines ? event => onLines(sourceTextLines(full, event.nativeEvent.lines)) : undefined}
+        accessibilityRole={heading ? 'header' : undefined}
+        accessibilityActions={[{ name: 'longpress', label: 'Passage actions' }, ...links.map((run, index) => ({ name: `reference-${index}`, label: `Open reference: ${run.text}` }))]}
+        onAccessibilityAction={event => {
+          const action = event.nativeEvent.actionName;
+          if (action === 'longpress') onOpen(full, null, undefined);
+          else if (action.startsWith('reference-')) { const run = links[Number(action.slice(10))]; if (run?.href) onLink?.(run.href); }
+        }}
         onPress={onTap}
         onLongPress={() => onOpen(full, null, undefined)}
         suppressHighlighting
@@ -205,11 +230,24 @@ interface PageBlockProps {
   fg: string;
   accent: string;
   onTap: (e: GestureResponderEvent) => void;
+  onLink: (href: string) => void;
+  onBlockLines?: (page: number, block: number, lines: SourceLine[]) => void;
   onOpen: (page: BookContentPage, full: string, existing?: HighlightEntry | null, initial?: string) => void;
 }
 
+function MeasuredSourceBlock({ page, block, start, onLines, children, margin = 0 }: {
+  page: number; block: number; start: number; margin?: number;
+  onLines?: PageBlockProps['onBlockLines']; children: (lines?: (lines: SourceLine[]) => void) => React.ReactNode;
+}) {
+  const measurement = useRef<{ y?: number; lines?: SourceLine[] }>({});
+  const publish = () => { const m = measurement.current; if (m.y !== undefined && m.lines) onLines?.(page, block, m.lines.map(line => ({ ...line, y: line.y + m.y!, word: line.word + start }))); };
+  return <View style={{ marginTop: margin }} onLayout={onLines ? event => { measurement.current.y = event.nativeEvent.layout.y; publish(); } : undefined}>
+    {children(onLines ? lines => { measurement.current.lines = lines; publish(); } : undefined)}
+  </View>;
+}
+
 const PageBlock = React.memo<PageBlockProps>(
-  ({ page, showChapterHeader, hls, textStyle, dropStyle, fg, accent, onTap, onOpen }) => {
+  ({ page, showChapterHeader, hls, textStyle, dropStyle, fg, accent, onTap, onLink, onBlockLines, onOpen }) => {
     const p1 = page.dropCap + page.paragraph1;
     const p2 = page.paragraph2Lead + page.highlightedText + page.paragraph2Rest;
 
@@ -224,33 +262,17 @@ const PageBlock = React.memo<PageBlockProps>(
         {showChapterHeader && (
           <View style={styles.chapterHead}>
             <Text style={[styles.chapterNo, { color: accent }]}>{page.chapterNumber}</Text>
-            <Text accessibilityRole="header" style={[styles.chapterTitle, { color: fg }]}>{page.chapterTitle}</Text>
+            {!page.rich?.some(block => block?.kind === 'heading' && block.text.toUpperCase() === page.chapterTitle) && <Text accessibilityRole="header" style={[styles.chapterTitle, { color: fg }]}>{page.chapterTitle}</Text>}
             <View style={[styles.rule, { backgroundColor: accent }]} />
           </View>
         )}
 
-        <Paragraph
-          full={p1}
-          hls={hls}
-          dropCap
-          textStyle={textStyle}
-          dropStyle={dropStyle}
-          onTap={onTap}
-          onOpen={open}
-        />
-        {p2.length > 0 && (
-          <View style={{ marginTop: 14 }}>
-            <Paragraph
-              full={p2}
-              hls={hls}
-              indent
-              textStyle={textStyle}
-              dropStyle={dropStyle}
-              onTap={onTap}
-              onOpen={open}
-            />
-          </View>
-        )}
+        {page.rich ? page.rich.map((block, index) => block ? <MeasuredSourceBlock key={index} page={page.pageNumber} block={index} start={index ? (p1.match(/\S+/gu) || []).length : 0} margin={index ? 14 : 0} onLines={block.kind === 'image' || block.kind === 'table' ? undefined : onBlockLines}>
+          {onLines => <StructuredBlock block={block} ink={fg} accent={accent} renderText={(text, runs, extra, heading) => <Paragraph full={text} runs={runs} hls={hls} textStyle={[textStyle, extra]} dropStyle={dropStyle} onTap={onTap} onOpen={open} onLink={onLink} heading={heading} onLines={onLines} />} />}
+        </MeasuredSourceBlock> : null) : <>
+          <MeasuredSourceBlock page={page.pageNumber} block={0} start={0} onLines={onBlockLines}>{onLines => <Paragraph full={p1} hls={hls} dropCap textStyle={textStyle} dropStyle={dropStyle} onTap={onTap} onOpen={open} onLines={onLines} />}</MeasuredSourceBlock>
+          {p2.length > 0 && <MeasuredSourceBlock page={page.pageNumber} block={1} start={(p1.match(/\S+/gu) || []).length} margin={14} onLines={onBlockLines}>{onLines => <Paragraph full={p2} hls={hls} indent textStyle={textStyle} dropStyle={dropStyle} onTap={onTap} onOpen={open} onLines={onLines} />}</MeasuredSourceBlock>}
+        </>}
 
       </View>
     );
@@ -269,6 +291,7 @@ interface ScrollSession {
   contentHeight: number;
   restore?: { pageNumber: number; offset: number; layout: string };
   restoredOffset?: number;
+  wordRestore?: { pageNumber: number; word: number };
 }
 
 export const ReaderView: React.FC<ReaderViewProps> = ({
@@ -330,12 +353,15 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const [listBase, setListBase] = useState(pageIndex);
   const [listKey, setListKey] = useState(0);
   const listData = useMemo(() => pages.slice(listBase), [pages, listBase]);
+  const measuredLines = useRef(new Map<string, SourceLine[]>());
   const scrollSession = useRef<ScrollSession>({ epoch: 0, rows: new Map(), tracking: false, y: 0, height: 0, contentHeight: 0 });
   const jumpList = useCallback((idx: number) => {
     const anchor = resumePosition.current;
+    measuredLines.current.clear();
     scrollSession.current = { epoch: scrollSession.current.epoch + 1, rows: new Map(), tracking: false,
       y: 0, height: 0, contentHeight: 0,
-      restore: anchor.scroll ? { ...anchor.scroll, pageNumber: anchor.pageNumber } : undefined };
+      restore: anchor.scroll ? { ...anchor.scroll, pageNumber: anchor.pageNumber } : undefined,
+      wordRestore: anchor.wordOffset !== undefined ? { pageNumber: anchor.pageNumber, word: anchor.wordOffset } : undefined };
     setListBase(idx);
     setListKey((k) => k + 1);
   }, []);
@@ -440,7 +466,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
     const grouped = new Map<number, HighlightEntry[]>();
     bookHighlights.forEach((highlight) => {
-      const index = pageIndexByLocation.get(`${highlight.chapter}\0${highlight.page}`);
+      const index = highlight.anchor ? resolveSourceAnchor(highlight.anchor, pages)?.index : pageIndexByLocation.get(`${highlight.chapter}\0${highlight.page}`);
       if (index === undefined) return;
       const group = grouped.get(index);
       if (group) group.push(highlight);
@@ -476,12 +502,17 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const recordScrollRef = useRef<(offset: number) => void>(() => {});
   restoreScrollRef.current = () => {
     const session = scrollSession.current;
-    const target = session.restore;
-    if (!target || session.tracking || !session.height || !session.contentHeight) return;
-    if (target.layout !== scrollLayout) { session.restore = undefined; return; }
+    if (session.tracking || !session.height || !session.contentHeight) return;
+    const exact = session.restore?.layout === scrollLayout ? session.restore : undefined;
+    const target = exact ?? session.wordRestore;
+    if (!target) return;
     const row = session.rows.get(target.pageNumber);
     if (!row) return;
-    const offset = Math.min(row.y + Math.min(target.offset, Math.max(0, row.height - 1)), Math.max(0, session.contentHeight - session.height));
+    const lines = [...measuredLines.current.entries()].filter(([key]) => key.startsWith(`${target.pageNumber}:`)).flatMap(([,value]) => value);
+    const line = !exact && session.wordRestore ? sourceLineForWord(lines, session.wordRestore.word) : undefined;
+    if (!exact && !line) return;
+    const inRow = exact?.offset ?? line!.y;
+    const offset = Math.min(row.y + Math.min(inRow, Math.max(0, row.height - 1)), Math.max(0, session.contentHeight - session.height));
     if (session.restoredOffset !== offset && listRef.current) {
       session.restoredOffset = offset;
       listRef.current.scrollToOffset({ offset, animated: false });
@@ -497,7 +528,10 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         const rows = scrollSession.current.rows;
         rows.delete(item.pageNumber);
         rows.set(item.pageNumber, { pageNumber: item.pageNumber, y, height });
-        if (rows.size > 128) rows.delete(rows.keys().next().value!);
+        if (rows.size > 128) {
+          const removed = rows.keys().next().value!; rows.delete(removed);
+          for (const key of measuredLines.current.keys()) if (key.startsWith(`${removed}:`)) measuredLines.current.delete(key);
+        }
         restoreScrollRef.current();
         if (scrollSession.current.tracking) recordScrollRef.current(scrollSession.current.y);
       }}>{children}</View>
@@ -511,7 +545,12 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     const position = scrollPositionAtOffset(session.rows.values(), offset, scrollLayout);
     if (!position) return;
     const index = pages.findIndex(source => source.pageNumber === position.pageNumber);
-    if (index >= 0) updatePageIndex(index, position);
+    if (index >= 0) {
+      const row = session.rows.get(position.pageNumber);
+      const lines = [...measuredLines.current.entries()].filter(([key]) => key.startsWith(`${position.pageNumber}:`)).flatMap(([,value]) => value);
+      const line = row ? sourceLineAt(lines, offset - row.y) : undefined;
+      updatePageIndex(index, { ...position, ...(line ? { wordOffset: line.word } : {}) });
+    }
   };
 
   recordScrollRef.current = recordScroll;
@@ -571,6 +610,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     if (target >= 0) setPaginatedIndex(target);
   }, [flowMode, pages, paginatedPages]);
 
+  const [referenceReturn, setReferenceReturn] = useState<{ index: number; word: number } | null>(null);
   // ---- fast navigation: chapters and scrubber ----
   const chapters = useMemo<ChapterInfo[]>(() => {
     const list: ChapterInfo[] = [];
@@ -604,6 +644,18 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     },
     [flowMode, jumpList, paginatedPages, pages.length, updatePageIndex]
   );
+
+  const followReference = useCallback((href: string) => {
+    if (/^https?:\/\//i.test(href)) { void Linking.openURL(href).catch(() => showToast('This link could not be opened.')); return; }
+    const [path, fragment] = href.split('#');
+    const target = pages.findIndex(p => p.source?.href === path && (!fragment || p.rich?.some(block => block?.targets.includes(fragment))));
+    if (target < 0) { showToast('This reference is unavailable in this copy.'); return; }
+    setReferenceReturn({ index: pageIndexRef.current, word: resumePosition.current.wordOffset ?? 0 });
+    const block = fragment ? pages[target].rich?.findIndex(block => block?.targets.includes(fragment)) : 0;
+    const word = block === 1 ? ((pages[target].dropCap + pages[target].paragraph1).match(/\S+/gu) || []).length : 0;
+    goToSource(target, word);
+  }, [pages, goToSource, showToast]);
+  useEffect(() => setReferenceReturn(null), [bookId]);
 
   const goPrevChapter = useCallback(() => {
     const ch = chapters[currentChapterIdx];
@@ -735,9 +787,10 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   };
 
   const handleDefine = (word: string, context: string) => {
+    const source = sheet ? { page: sheet.page.pageNumber, chapter: sheet.page.chapterTitle, anchor: baseHl(sheet.page, context).anchor } : undefined;
     closeSheet();
     // let the sheet finish dismissing before presenting another modal (iOS)
-    setTimeout(() => onOpenDictionary(word, context), 320);
+    setTimeout(() => onOpenDictionary(word, context, source), 320);
   };
 
   const handleCopy = async (text: string) => {
@@ -772,6 +825,10 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
     if (navVisibleRef.current || immersiveModeRef.current) toggleNavVisibilityRef.current();
     else setNavVisibilityRef.current(true);
   }, []);
+  const recordBlockLines = useCallback((page: number, block: number, lines: SourceLine[]) => {
+    if (scrollSession.current.epoch !== scrollEpoch) return;
+    measuredLines.current.set(`${page}:${block}`, lines); restoreScrollRef.current();
+  }, [listKey, scrollLayout, scrollEpoch]);
   const renderPage = useCallback(
     (p: BookContentPage, idx: number, showChapterHeader?: boolean) => (
       <PageBlock
@@ -783,6 +840,8 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             pages[idx - 1].chapterNumber !== p.chapterNumber)
         }
         hls={getPageHighlights(idx)}
+        onLink={followReference}
+        onBlockLines={flowMode === 'continuous' ? recordBlockLines : undefined}
         textStyle={textStyle}
         dropStyle={dropStyle}
         fg={paper.fg}
@@ -791,7 +850,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
         onOpen={openSheet}
       />
     ),
-    [accent, dropStyle, flowMode, getPageHighlights, handleTap, openSheet, pages, paper.fg, textStyle]
+    [accent, dropStyle, flowMode, recordBlockLines, followReference, getPageHighlights, handleTap, openSheet, pages, paper.fg, textStyle]
   );
   const renderListItem = useCallback(
     ({ item, index }: { item: BookContentPage; index: number }) =>
@@ -860,6 +919,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
   return (
     <View style={styles.root}>
+      {referenceReturn && <Pressable accessibilityRole="button" accessibilityLabel="Back to reference" onPress={() => { const target = referenceReturn; setReferenceReturn(null); goToSource(target.index, target.word); }} style={{ minHeight: 48, paddingHorizontal: 16, justifyContent: 'center', backgroundColor: paper.bg }}><Text style={{ color: paper.fg }}>← Back to reference</Text></Pressable>}
       {/* HUD */}
       {isNavVisible ? (
         <View style={styles.hud}>
@@ -1147,7 +1207,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             <ScrollView
               ref={scrollRef}
               style={{ flex: 1 }}
-              scrollEnabled={false}
+              scrollEnabled
               contentContainerStyle={{ flexGrow: 1 }}
               showsVerticalScrollIndicator={false}
             >

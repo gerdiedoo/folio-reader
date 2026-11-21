@@ -2,7 +2,10 @@ import { File } from 'expo-file-system';
 import { CryptoDigestAlgorithm, digest, randomUUID } from 'expo-crypto';
 import { XMLParser } from 'fast-xml-parser';
 import JSZip from 'jszip';
-import { HTMLElement as HtmlNode, Node as HtmlTreeNode, NodeType, parse as parseHtml } from 'node-html-parser';
+import { parse as parseHtml } from 'node-html-parser';
+import { extractEpubStructure, type StructuredBlock } from './epubStructure';
+import { validatedBookPages } from './bookPages';
+import { createEpubAssets } from './epubAssets';
 import { Book, BookContentPage } from '../types';
 import { ImportStorageError, ImportCollisionError } from './bookImport';
 import { coversDir as defaultCoversDir, persistBookFile as defaultPersistBookFile, removeBookFiles as defaultRemoveBookFiles } from './localStore';
@@ -58,58 +61,17 @@ function cleanText(s: string | undefined): string {
   return (s || '').replace(/\s+/g, ' ').trim();
 }
 
-// Keep block boundaries without reading both a wrapper's text and its children.
-// The reader still uses plain text: table cells and list items become blocks,
-// not a recreation of publisher layout. Inline elements stay in the same block.
-const TEXT_BLOCKS = new Set([
-  'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'CAPTION', 'DD', 'DIV', 'DL', 'DT',
-  'FIGCAPTION', 'FIGURE', 'FOOTER', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HEADER',
-  'HR', 'LI', 'MAIN', 'NAV', 'OL', 'P', 'PRE', 'SECTION', 'TABLE', 'TBODY', 'TD',
-  'TFOOT', 'TH', 'THEAD', 'TR', 'UL',
-]);
-const NON_READING_ELEMENTS = new Set(['HEAD', 'SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT']);
-
-function extractReadingBlocks(root: HtmlNode): { text: string; path: string }[] {
-  const blocks: { text: string; path: string }[] = [];
-  let buffer = '';
-  let firstPath = '';
-  const flush = () => {
-    const text = cleanText(buffer);
-    if (text) blocks.push({ text, path: firstPath });
-    buffer = '';
-    firstPath = '';
-  };
-  const visit = (node: HtmlTreeNode, path: string) => {
-    if (node.nodeType === NodeType.TEXT_NODE) {
-      if (!firstPath && cleanText(node.text)) firstPath = path;
-      buffer += node.text;
-      return;
-    }
-    if (node.nodeType !== NodeType.ELEMENT_NODE) return;
-    const tag = node.rawTagName?.toUpperCase().split(':').pop() ?? '';
-    if (NON_READING_ELEMENTS.has(tag)) return;
-    if (tag === 'BR') {
-      flush();
-      return;
-    }
-    const isBlock = TEXT_BLOCKS.has(tag);
-    if (isBlock) flush();
-    node.childNodes.forEach((child, index) => visit(child, `${path}/${index}`));
-    if (isBlock) flush();
-  };
-  visit(root, 'body');
-  flush();
-  return blocks;
-}
-
 export async function parseEpubFile(fileUri: string, fileName: string, storage?: Pick<LocalStore, 'coversDir' | 'persistBookFile' | 'removeBookFiles'>): Promise<ParsedEpub> {
   const { coversDir, persistBookFile, removeBookFiles } = storage ?? { coversDir: defaultCoversDir, persistBookFile: defaultPersistBookFile, removeBookFiles: defaultRemoveBookFiles };
+  if (new File(fileUri).size > 64 * 1024 * 1024) throw new Error('This EPUB exceeds the supported 64 MB file limit.');
   const bytes = await new File(fileUri).bytes();
+  if (bytes.length > 64 * 1024 * 1024) throw new Error('This EPUB exceeds the supported 64 MB file limit.');
   const documentFingerprint = Array.from(new Uint8Array(await digest(CryptoDigestAlgorithm.SHA256, bytes)), byte => byte.toString(16).padStart(2, '0')).join('');
   const zip = await JSZip.loadAsync(bytes);
+  const assets = createEpubAssets(zip);
 
   // 1. container.xml → root OPF
-  const containerXml = await zip.file('META-INF/container.xml')?.async('string');
+  const containerXml = await assets.readText('META-INF/container.xml');
   if (!containerXml) {
     throw new Error('Invalid EPUB file: META-INF/container.xml not found.');
   }
@@ -118,11 +80,12 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
   const opfPath: string = rootfile?.['@_full-path'] || 'OEBPS/content.opf';
 
   // 2. OPF
-  const opfStr = await zip.file(opfPath)?.async('string');
+  const opfStr = await assets.readText(opfPath);
   if (!opfStr) {
     throw new Error(`Invalid EPUB file: ${opfPath} not found.`);
   }
   const opf = xml.parse(opfStr)?.package ?? {};
+  if (asArray<any>(opf.metadata?.meta).some(meta => meta['@_property'] === 'rendition:layout' && textOf(meta) === 'pre-paginated')) throw new Error('Fixed-layout EPUBs are not supported yet. Choose a reflowable edition.');
   const basePath = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/') + 1) : '';
 
   const title = textOf(opf.metadata?.title) || fileName.replace(/\.epub$/i, '');
@@ -155,7 +118,7 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
 
   // Validate readable content before writing any imported files.
   // Spine → chapters
-  const rawChapters: { title: string; href: string; textParagraphs: { text: string; path: string }[] }[] = [];
+  const rawChapters: { title: string; href: string; textParagraphs: StructuredBlock[] }[] = [];
 
   for (const itemref of asArray<any>(opf.spine?.itemref)) {
     const idref = itemref['@_idref'];
@@ -169,7 +132,8 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
       throw new Error('This EPUB is missing a chapter file. Try another copy of the book.');
     }
 
-    const chapterHtml = await chapterZip.async('string');
+    const chapterHtml = await assets.readText(chapterZip.name);
+    if (!chapterHtml) throw new Error('This EPUB is missing a chapter.');
     const root = parseHtml(chapterHtml);
 
     const body = root.querySelector('body') ?? root;
@@ -177,7 +141,7 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
       cleanText(body.querySelector('h1, h2, h3, h4, h5, h6')?.text) ||
       cleanText(root.querySelector('title')?.text) ||
       `Chapter ${rawChapters.length + 1}`;
-    const paragraphs = extractReadingBlocks(body);
+    const paragraphs = await extractEpubStructure(body, chapterZip.name, element => assets.image(element, chapterZip.name));
 
     if (paragraphs.length > 0) {
       rawChapters.push({ title: heading, href: resolvePath(basePath, href), textParagraphs: paragraphs });
@@ -204,16 +168,8 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
       const dropCap = Array.from(p1)[0] || '';
       const p1Rest = p1.slice(dropCap.length);
 
-      let hlWords = '';
-      let restWords = '';
-      if (p2) {
-        const words = p2.split(' ');
-        const highlightCount = Math.min(12, Math.max(5, Math.floor(words.length / 3)));
-        hlWords = words.slice(0, highlightCount).join(' ');
-        restWords = words.slice(highlightCount).join(' ');
-      }
-
       pages.push({
+        rich: ch.textParagraphs.slice(pIdx, pIdx + 2).map(block => block.rich),
         source: { version: 1, edition: documentFingerprint, href: ch.href, paths: ch.textParagraphs.slice(pIdx, pIdx + 2).map(block => block.path) },
         chapterTitle: ch.title.toUpperCase(),
         chapterNumber: `CHAPTER ${chIdx + 1}`,
@@ -221,8 +177,8 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
         dropCap,
         paragraph1: p1Rest,
         paragraph2Lead: '',
-        highlightedText: hlWords,
-        paragraph2Rest: restWords ? ' ' + restWords : '',
+        highlightedText: p2,
+        paragraph2Rest: '',
         pageNumber: globalPageNum,
         totalBookPages: 0,
         locNumber: loc,
@@ -239,6 +195,14 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
     p.totalBookPages = pages.length;
     p.totalLoc = loc;
   });
+
+  validatedBookPages(pages);
+
+  // Bound the exact UTF-8 cache before any permanent import files are created.
+  const serialized = JSON.stringify(pages);
+  let cacheBytes = 0;
+  for (const char of serialized) { const cp = char.codePointAt(0)!; cacheBytes += cp < 128 ? 1 : cp < 2048 ? 2 : cp < 65536 ? 3 : 4; }
+  if (cacheBytes > 48 * 1024 * 1024) throw new Error('This EPUB needs more reading storage than the current reader supports. Its import was not completed.');
 
   // Cover (saved to permanent storage; blob: URLs don't exist on native)
   let coverUrl = '';
@@ -261,7 +225,7 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
       let coverPath = resolvePath(basePath, coverHref);
       let coverZipFile = zip.file(coverPath) || zip.file(coverHref);
       if (/\.svg$/i.test(coverHref) && coverZipFile) {
-        const svg = parseHtml(await coverZipFile.async('string'));
+        const svg = parseHtml((await assets.readText(coverZipFile.name)) ?? '');
         const image = svg.querySelector('image');
         const href = image?.getAttribute('href') || image?.getAttribute('xlink:href') || '';
         const folder = coverPath.includes('/') ? coverPath.slice(0, coverPath.lastIndexOf('/') + 1) : '';
@@ -272,7 +236,8 @@ export async function parseEpubFile(fileUri: string, fileName: string, storage?:
         } else coverZipFile = null;
       }
       if (coverZipFile && !/\.svg$/i.test(coverHref)) {
-        const coverBytes = await coverZipFile.async('uint8array');
+        const coverBytes = await assets.readBytes(coverZipFile.name, 6 * 1024 * 1024);
+        if (!coverBytes?.length) throw new Error('Empty cover');
         const ext = (coverHref.split('.').pop() || 'jpg').toLowerCase().slice(0, 4);
         const dest = new File(coversDir(), `${bookId}.${ext}`);
         if (dest.exists) throw new ImportCollisionError('A saved cover already uses this identifier. Its files have been kept. Import the EPUB again.');

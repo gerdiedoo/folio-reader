@@ -37,6 +37,11 @@ interface NotebookViewProps {
   bottomInset: number;
   deletionNotice?: string | null;
   onRetryDeletions?: () => void;
+  syncSummary?: string;
+  syncBusy?: boolean;
+  accountSignedIn?: boolean;
+  onSyncNow?: () => void;
+  onReviewConflicts?: () => void;
 }
 
 export const NotebookView: React.FC<NotebookViewProps> = ({
@@ -60,6 +65,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   showToast,
   bottomInset,
   deletionNotice, onRetryDeletions,
+  syncSummary, syncBusy, accountSignedIn, onSyncNow, onReviewConflicts,
 }) => {
   const colors = useAppTheme();
   const { upsertBookToSupabase, upsertHighlightToSupabase, upsertLexiconToSupabase } = cloud;
@@ -179,6 +185,8 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
   };
 
   const handleSyncCloud = async () => {
+    if (accountSignedIn === false) { showToast('Sign in from Account to synchronize saved work.'); return; }
+    if (onSyncNow) { onSyncNow(); return; }
     if (!mounted.current || archivesUnavailable || uploadPending.current) return;
     uploadPending.current = true; setIsSyncing(true);
     try {
@@ -510,12 +518,12 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
         <View style={styles.hubHead}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <Icon name="hub" size={22} color={colors.primary} />
-            <Text style={styles.hubTitle}>Export &amp; cloud upload</Text>
+            <Text style={styles.hubTitle}>Export &amp; account sync</Text>
           </View>
         </View>
         <Text style={styles.hubBody}>
           Export highlights and vocabulary for {selectedBookId === 'all' ? 'all books' : selectedBookLabel}. Search and entry filters do not limit the export.
-          {'\n'}Cloud upload sends all current records in this reading space. Last upload: {lastSyncTime}. Review changes from other devices before uploading.
+          {'\n'}{syncSummary || `Cloud upload sends all current records in this reading space. Last upload: ${lastSyncTime}. Review changes from other devices before uploading.`}
         </Text>
 
         <View style={{ flexDirection: 'row', gap: 10 }}>
@@ -525,26 +533,27 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
           </Pressable>
           <Pressable
             onPress={handleSyncCloud}
-            disabled={isSyncing || archivesUnavailable}
+            disabled={isSyncing || syncBusy || archivesUnavailable || accountSignedIn === false}
             accessibilityRole="button"
-            accessibilityLabel="Upload current records"
-            accessibilityState={{ disabled: isSyncing || archivesUnavailable, busy: isSyncing }}
+            accessibilityLabel={onSyncNow ? "Synchronize saved work" : "Upload current records"}
+            accessibilityState={{ disabled: isSyncing || Boolean(syncBusy) || archivesUnavailable || accountSignedIn === false, busy: isSyncing || Boolean(syncBusy) }}
             style={[styles.hubBtn, { backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border }]}
           >
             <Icon name="sync" size={18} color={colors.primary} spin={isSyncing} />
             <Text style={[styles.hubBtnText, { color: colors.onSurface }]}>
-              {isSyncing ? 'Uploading…' : 'Upload to account'}
+              {isSyncing || syncBusy ? 'Synchronizing…' : accountSignedIn === false ? 'Sign in to sync' : onSyncNow ? 'Sync now' : 'Upload to account'}
             </Text>
           </Pressable>
         </View>
       </View>
+      {onReviewConflicts && <Pressable accessibilityRole="button" accessibilityLabel="Review account conflicts" onPress={onReviewConflicts} style={{ minHeight: 48, padding: 16, justifyContent: 'center' }}><Text style={{ color: colors.primary }}>Review conflicting versions</Text></Pressable>}
 
       {/* New highlight dialog */}
       {isNewHighlightOpen && (
         <ModalShell onClose={() => setIsNewHighlightOpen(false)} maxWidth={420}>
           <View style={styles.dlgHead}>
             <Text style={styles.dlgTitle}>Record New Highlight</Text>
-            <Pressable onPress={() => setIsNewHighlightOpen(false)} hitSlop={8}>
+            <Pressable onPress={() => { if (!savingHighlight) setIsNewHighlightOpen(false); }} disabled={savingHighlight} accessibilityRole="button" accessibilityLabel="Close new quote" style={{ minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' }}>
               <Icon name="close" size={20} color={colors.muted} />
             </Pressable>
           </View>

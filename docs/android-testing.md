@@ -6,6 +6,21 @@ The default/production configuration remains Folio (`com.folio.reader`). Android
 keeps each package's local books, settings, and sign-in storage separate. Uninstalling
 Folio Dev deletes its local data; you do not need to uninstall the main app.
 
+## Current remaining-critique batch
+
+This update adds structured EPUB rendering, measured text-line resume, a smaller
+virtualized Library, matching-edition recovery, and durable revision sync.
+Apply the separate Dev project's [revision-sync migration](revision-sync.md)
+after installing the new APK on test devices. Earlier sections saying “no new
+SQL” refer only to those older numbered steps.
+
+The APK workflow also runs a disposable Android emulator journey. Its
+**folio-android-evidence** artifact includes screenshots, startup timings and
+results when execution reaches those checks. A green compile alone is not a
+native interaction result; inspect the smoke step and evidence separately.
+TalkBack, two-device synchronization, actual phone sharing and iOS remain manual
+checks. No public evidence should contain real reading data or credentials.
+
 ## Step 27 APK batch
 
 This APK includes steps 22–27, including the previously local-only UI, Notebook,

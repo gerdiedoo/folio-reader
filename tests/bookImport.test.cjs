@@ -15,7 +15,7 @@ const { createImportCommitter, ImportStorageError } = helper;
 const coverHelpers = {};
 vm.runInNewContext(compiled('bookCover'), { exports: coverHelpers, Error, URL });
 const book = id => ({ id, title: id, coverUrl: '', fileLocation: `file:///docs/folio/books/${id}.epub` });
-const pages = [{ paragraph1: 'Saved text' }];
+const pages = [{ paragraph1: 'Saved text', dropCap: '', paragraph2Lead: '', highlightedText: '', paragraph2Rest: '', chapterTitle: 'One', chapterNumber: '1', folioNumber: '1', pageNumber: 1, totalBookPages: 1, locNumber: 100, totalLoc: 200, minutesLeftInChapter: 1 }];
 function gate() {
   let resolve;
   const promise = new Promise(done => { resolve = done; });
@@ -61,6 +61,7 @@ function device({ fixedClock = false } = {}) {
     require(name) {
       if (name === '@react-native-async-storage/async-storage') return asyncStorage;
       if (name === 'expo-file-system') return { File, Directory, Paths: { document: 'file:///docs' } };
+      if (name === './bookPages') return require('./loadTypeScript.cjs').loadTypeScript(path.resolve(__dirname, '../src/lib/bookPages.ts'));
       if (name === './bookImport') return helper;
       if (name === './bookCover') return coverHelpers;
       throw Error('Unexpected dependency ' + name);
@@ -220,10 +221,10 @@ test('account A, B and Guest caches and reading files stay separate across switc
   const d = device();
   const a = d.store.createLocalStore('project:A'), b = d.store.createLocalStore('project:B'), guest = d.store.createLocalStore('project:guest');
   const list = [{ id: 'same', title: 'A private book' }];
-  await a.saveJSONStrict('books', list); a.savePages('same', [{ paragraph1: 'A private passage' }]);
+  await a.saveJSONStrict('books', list); a.savePages('same', [{ ...pages[0], paragraph1: 'A private passage' }]);
   assert.equal(await b.loadJSON('books'), null); assert.equal(await guest.loadJSON('books'), null);
   assert.equal(await b.loadPages('same'), null); assert.equal(await guest.loadPages('same'), null);
-  await b.saveJSONStrict('books', [{ id: 'same', title: 'B book' }]); b.savePages('same', [{ paragraph1: 'B passage' }]);
+  await b.saveJSONStrict('books', [{ id: 'same', title: 'B book' }]); b.savePages('same', [{ ...pages[0], paragraph1: 'B passage' }]);
   assert.equal((await a.loadPages('same'))[0].paragraph1, 'A private passage');
   assert.equal((await b.loadPages('same'))[0].paragraph1, 'B passage');
   b.removeBookFiles('same');

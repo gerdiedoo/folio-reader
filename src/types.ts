@@ -100,6 +100,8 @@ export interface LexiconEntry {
   contextPassage: string;
   chapter: string;
   masteryLevel: number; // 1 to 5
+  page?: number;
+  anchor?: SourceAnchor;
 }
 
 export interface ReadingGoal {
@@ -111,6 +113,7 @@ export interface ReadingGoal {
 }
 
 export interface BookContentPage {
+  rich?: (RichBlock | null)[];
   source?: { version: 1; edition: string; href: string; paths: string[] };
   chapterTitle: string;
   chapterNumber: string;
@@ -125,6 +128,30 @@ export interface BookContentPage {
   locNumber: number;
   totalLoc: number;
   minutesLeftInChapter: number;
+}
+
+export interface InlineRun {
+  text: string;
+  strong?: boolean;
+  emphasis?: boolean;
+  code?: boolean;
+  strike?: boolean;
+  underline?: boolean;
+  superscript?: boolean;
+  subscript?: boolean;
+  href?: string;
+}
+export interface RichBlock {
+  version: 1;
+  kind: 'paragraph' | 'heading' | 'list-item' | 'quote' | 'code' | 'caption' | 'image' | 'table';
+  text: string;
+  runs: InlineRun[];
+  targets: string[];
+  level?: number;
+  marker?: string;
+  quoteDepth?: number;
+  image?: { uri?: string; svg?: string; alt: string; width?: number; height?: number };
+  table?: { caption: string; rows: { text: string; runs: InlineRun[]; header: boolean }[][] };
 }
 
 export interface UserProfile {

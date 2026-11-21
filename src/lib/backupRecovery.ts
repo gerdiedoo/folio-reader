@@ -12,7 +12,7 @@ interface Storage {
   saveJSONStrict(key: string, value: unknown): Promise<void>;
 }
 export interface RestoreFiles {
-  write(id: string, kind: 'pages' | 'epub' | 'cover', bytes: Uint8Array, extension?: string): string;
+  write(id: string, kind: 'pages' | 'epub' | 'cover', bytes: Uint8Array, extension?: string, reuseIdentical?: boolean): string | Promise<string>;
   remove(id: string, cover?: string): boolean;
 }
 const KEY = 'restoreJournal';
@@ -77,16 +77,28 @@ export async function removeBookWithRecovery(storage: Storage, bookId: string): 
 }
 
 /** Add independently identified copies; existing books, annotations and deletion markers survive. */
-export async function restorePortableBackup(storage: Storage, backup: PreparedBackup, files: RestoreFiles, restorePreferences = false, nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`): Promise<void> {
+export async function restorePortableBackup(storage: Storage, backup: PreparedBackup, files: RestoreFiles, restorePreferences = false, nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`, recoverMatching = false): Promise<void> {
   if (!/^[a-zA-Z0-9_-]{1,100}$/.test(nonce)) throw Error('Invalid recovery identifier.');
   await recoverPortableRestore(storage);
   const [library, notes, words, preferences] = await Promise.all([
     createLibraryStore(storage).load(), createHighlightArchive(storage).load(), createLexiconArchive(storage).load(), createReaderSettingsStore(storage).load(),
   ]);
   const current = await readBackupSnapshot(storage);
-  const source = backup.manifest;
+  const blocked = recoverMatching ? new Set(library.removedBookIds) : new Set<string>();
+  const source = { ...backup.manifest, books: backup.manifest.books.filter(item => !blocked.has(item.book.id)),
+    highlights: backup.manifest.highlights.filter(item => !blocked.has(item.bookId)),
+    lexicon: backup.manifest.lexicon.filter(item => !blocked.has(item.bookId)), bookmarks: backup.manifest.bookmarks.filter(item => !blocked.has(item.bookId)) };
   const links = new Map<string, string>();
-  for (const [index, item] of source.books.entries()) links.set(item.book.id, `restore-${nonce}-${index}`);
+  const matched = new Set<string>(), preserved = new Set<string>();
+  for (const [index, item] of source.books.entries()) {
+    const existing = library.books.find(book => book.id === item.book.id);
+    const knownEdition = /^[a-f0-9]{64}$/i.test(item.book.documentFingerprint ?? '');
+    const canMatch = recoverMatching && knownEdition && !library.removedBookIds.includes(item.book.id) &&
+      (!existing || existing.documentFingerprint === item.book.documentFingerprint);
+    const id = canMatch ? item.book.id : `restore-${nonce}-${index}`;
+    links.set(item.book.id, id);
+    if (canMatch) { preserved.add(id); if (existing) matched.add(id); }
+  }
   const relatedId = (id: string) => {
     if (!links.has(id)) links.set(id, `restore-${nonce}-reference-${links.size}`);
     return links.get(id)!;
@@ -95,23 +107,26 @@ export async function restorePortableBackup(storage: Storage, backup: PreparedBa
   try {
     for (const item of source.books) {
       const id = relatedId(item.book.id);
-      if (library.books.some(book => book.id === id) || library.removedBookIds.includes(id)) throw Error('This recovery copy already exists. Choose the file again to make a new copy.');
-      const book = { ...portableBook(item.book), id, isDownloaded: Boolean(item.pages) };
+      if (!matched.has(id) && (library.books.some(book => book.id === id) || library.removedBookIds.includes(id))) throw Error('This recovery copy already exists. Choose the file again to make a new copy.');
+      const existing = matched.has(id) ? library.books.find(book => book.id === id) : undefined;
+      const book = { ...portableBook(item.book), ...existing, id, isDownloaded: existing?.isDownloaded || Boolean(item.pages) };
       created.push(book); // Track partial file writes for cleanup before the journal exists.
       for (const key of ['pages', 'epub', 'cover'] as const) {
         const path = item[key]; if (!path) continue;
         const bytes = backup.files.get(path); if (!bytes) throw Error('A recovery file is missing.');
-        const uri = files.write(id, key, bytes, key === 'cover' ? path.split('.').pop() : undefined);
+        // An existing device original/cover belongs to this device and remains untouched.
+        if (existing && (key === 'epub' && existing.fileLocation || key === 'cover' && existing.coverUrl.startsWith('file://'))) continue;
+        const uri = await files.write(id, key, bytes, key === 'cover' ? path.split('.').pop() : undefined, preserved.has(id));
         if (key === 'epub') book.fileLocation = uri;
         if (key === 'cover') book.coverUrl = uri;
       }
     }
-    const highlights = source.highlights.map((item, index) => ({ ...item, id: `restore-${nonce}-note-${index}`, bookId: relatedId(item.bookId) }));
-    const lexicon = source.lexicon.map((item, index) => ({ ...item, id: `restore-${nonce}-word-${index}`, bookId: relatedId(item.bookId),
-      phonetic: item.phonetic ?? '', partOfSpeech: item.partOfSpeech ?? '', contextPassage: item.contextPassage ?? '', chapter: item.chapter ?? '' }));
-    const bookmarks = source.bookmarks.map(item => { const bookId = relatedId(item.bookId); return { ...item, bookId, id: `${bookId}:${item.pageNumber}` }; });
+    const highlights = source.highlights.map((item, index) => ({ ...item, id: preserved.has(relatedId(item.bookId)) ? item.id : `restore-${nonce}-note-${index}`, bookId: relatedId(item.bookId) })).filter(item => !notes.items.some(current => current.id === item.id) && !notes.removedIds.includes(item.id) && !notes.removedBookIds.includes(item.bookId));
+    const lexicon = source.lexicon.map((item, index) => ({ ...item, id: preserved.has(relatedId(item.bookId)) ? item.id : `restore-${nonce}-word-${index}`, bookId: relatedId(item.bookId),
+      phonetic: item.phonetic ?? '', partOfSpeech: item.partOfSpeech ?? '', contextPassage: item.contextPassage ?? '', chapter: item.chapter ?? '' })).filter(item => !words.items.some(current => current.id === item.id) && !words.removedBookIds.includes(item.bookId));
+    const bookmarks = source.bookmarks.map(item => { const bookId = relatedId(item.bookId); return { ...item, bookId, id: `${bookId}:${item.pageNumber}` }; }).filter(item => !current.bookmarks.some(current => current.id === item.id) && !library.removedBookIds.includes(item.bookId));
     const journal: Journal = { version: 1, kind: 'portable-restore', values: {
-      libraryArchive: { ...library, books: [...created, ...library.books] },
+      libraryArchive: { ...library, books: [...created, ...library.books.filter(book => !matched.has(book.id))] },
       highlightArchive: { ...notes, items: [...highlights, ...notes.items] },
       lexiconArchive: { ...words, items: [...lexicon, ...words.items] },
       bookmarks: [...current.bookmarks, ...bookmarks],
@@ -127,7 +142,7 @@ export async function restorePortableBackup(storage: Storage, backup: PreparedBa
   } catch (error) {
     if (!journalAttempted) {
       let cleaned = true;
-      for (const book of created) { try { if (!files.remove(book.id, book.coverUrl)) cleaned = false; } catch { cleaned = false; } }
+      for (const book of created.filter(book => !preserved.has(book.id))) { try { if (!files.remove(book.id, book.coverUrl)) cleaned = false; } catch { cleaned = false; } }
       if (!cleaned) throw Error('Recovery stopped before changing your library. Some incomplete recovery files could not be removed.');
     }
     throw error;

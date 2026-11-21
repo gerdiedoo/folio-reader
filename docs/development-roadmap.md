@@ -73,3 +73,47 @@ Current library writes and recovery acknowledge filesystem/AsyncStorage APIs; th
 do not guarantee survival through power loss. A safety copy contains private
 reading work and is not encrypted. Durable upload queues, server tombstones,
 revision conflicts and multi-device reconciliation remain separate required work.
+
+## Remaining-critique implementation — 21 November 2026
+
+The earlier “still required” list above describes the previous milestone. This
+batch adds structured EPUB content, lazy loading and revision synchronization:
+
+- New reflowable EPUB imports preserve short dialogue, headings, ordered and
+  unordered list markers, emphasis, links, quotations, code whitespace, embedded
+  PNG/JPEG/GIF/WebP images, supported static SVG and simple tables. Chapter and
+  fragment references offer a return action. Unsupported fixed layout, MathML,
+  interactive media, merged/nested tables and remote images reject explicitly.
+  Publisher CSS is not a full browser layout engine. Existing imports retain
+  their original parsed model and anchors; they are not silently reparsed.
+- ZIP expansion, embedded image dimensions and serialized reading caches are
+  bounded before a successful import. Native cache and portable-restore inputs
+  validate structured content before rendering it.
+- Scroll now maps native text lines to source word ordinals. Same-layout reopening
+  retains measured pixels; reflow can locate the corresponding source line.
+  Images and tables retain block-level fallback. Device confirmation is pending.
+- Library parses only an opened book, keeps a two-book LRU, and virtualizes rows.
+  Continue reading and daily activity take less space. Search/filter/sort/view
+  preferences persist per reading space. Failed opens retain actionable details.
+- Dictionary cards retain their source anchor and offer **Read in book**. A failed
+  or uncertain new note/card save retries its identity without duplicating it.
+- Personal records and pending mutations share one local write. Foreground retry,
+  compare-and-swap revisions, persistent server tombstones, owner checks, explicit
+  conflict review and full source-anchor transport replace best-effort uploads.
+  The required Dev migration and exact deployment limits are in
+  [revision-sync.md](revision-sync.md). It is tested, but not deployed remotely.
+- Portable recovery can reuse matching edition identities on another device and
+  preserve newer existing work. Separate-copy restore remains available. Owned
+  files are never replaced with different bytes. Recovery may keep staged files
+  if an acknowledgement is uncertain, so a retry can finish safely.
+- The APK workflow now includes a disposable Android emulator journey with an
+  illustrated fixture, reopening/restart checks, bookmarks, reflection creation,
+  screenshots and startup timing. Evidence becomes available only after that
+  workflow actually executes; adding automation is not evidence it passed.
+
+Still needed outside implementation: deploy the Dev migration, run the two-device
+check, test TalkBack, real phone file sharing/OAuth, sustained reading comfort,
+large-book memory/energy measurements, and iOS/iPad native journeys. Emulator
+screenshots and Hermes exports cannot establish those outcomes. Streaming large
+archives, a complete publisher-CSS engine, and old orphan-file collection remain
+future work with explicit current limits.

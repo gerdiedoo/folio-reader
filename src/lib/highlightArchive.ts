@@ -1,8 +1,11 @@
+import { canonical as stableValue } from './stableValue';
+import { withArchiveLock } from './archiveQueue';
 import type { HighlightEntry } from '../types';
 import { validSourceAnchor } from './sourceAnchors';
 
 interface ArchiveStorage {
   storageKey(key: string): string;
+  subscribeArchive?(key: string, callback: () => void): () => void;
   loadJSONEntryStrict(key: string): Promise<{ present: boolean; value: unknown }>;
   saveJSONStrict(key: string, value: unknown): Promise<void>;
 }
@@ -13,7 +16,6 @@ interface Archive {
   removedBookIds: string[];
 }
 const KEY = 'highlightArchive';
-const queues = new Map<string, Promise<void>>();
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
 export function validHighlight(value: unknown): value is HighlightEntry {
@@ -43,13 +45,7 @@ function identifiers(value: unknown): value is string[] {
 /** One durable record holds notes and deletion markers, scoped by the caller's store. */
 export function createHighlightArchive(storage: ArchiveStorage) {
   const queueKey = storage.storageKey(KEY);
-  const enqueue = <T,>(work: () => Promise<T>): Promise<T> => {
-    const operation = (queues.get(queueKey) ?? Promise.resolve()).then(work);
-    const settled = operation.then(() => undefined, () => undefined);
-    queues.set(queueKey, settled);
-    void settled.then(() => { if (queues.get(queueKey) === settled) queues.delete(queueKey); });
-    return operation;
-  };
+  const enqueue = <T,>(work: () => Promise<T>): Promise<T> => withArchiveLock(queueKey, work);
   const read = async (): Promise<Archive> => {
     const entry = await storage.loadJSONEntryStrict(KEY);
     if (!entry.present) {
@@ -73,6 +69,8 @@ export function createHighlightArchive(storage: ArchiveStorage) {
   return {
     load: () => enqueue(read),
     add: (entry: HighlightEntry) => update(current => {
+      const existing = current.items.find(item => item.id === entry.id);
+      if (existing && stableValue(existing) === stableValue({ ...entry, note: entry.note ?? undefined, loc: entry.loc ?? undefined })) return current;
       if (!validHighlight(entry) || current.items.some(item => item.id === entry.id) || current.removedIds.includes(entry.id) || current.removedBookIds.includes(entry.bookId)) throw new Error('This highlight cannot be added.');
       return { ...current, items: [{ ...entry }, ...current.items] };
     }),
