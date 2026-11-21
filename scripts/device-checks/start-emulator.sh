@@ -2,6 +2,8 @@
 set -euo pipefail
 : "${ANDROID_HOME:?Android SDK is required}"
 : "${RUNNER_TEMP:?Disposable runner directory is required}"
+export ANDROID_AVD_HOME="$RUNNER_TEMP/folio-avd"
+mkdir -p "$ANDROID_AVD_HOME"
 export PATH="$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
 setup_log="$RUNNER_TEMP/folio-emulator-setup.log"
 emulator_log="$RUNNER_TEMP/folio-emulator.log"
@@ -27,7 +29,11 @@ sudo chmod a+rw /dev/kvm
 echo "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
 echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 timeout 480s sdkmanager 'emulator' 'platform-tools' 'system-images;android-36;google_apis;x86_64' > "$setup_log" 2>&1
-echo no | avdmanager create avd --force --name folio-smoke --package 'system-images;android-36;google_apis;x86_64' --device pixel_6 >> "$setup_log" 2>&1
+echo no | avdmanager create avd --force --name folio-smoke --package 'system-images;android-36;google_apis;x86_64' --device pixel_6 --path "$ANDROID_AVD_HOME/folio-smoke.avd" >> "$setup_log" 2>&1
+test -s "$ANDROID_AVD_HOME/folio-smoke.avd/config.ini"
+# New SDK tools and emulator releases may use different default user folders.
+# Give the emulator an explicit index to the device just created above.
+printf 'avd.ini.encoding=UTF-8\npath=%s\ntarget=android-36\n' "$ANDROID_AVD_HOME/folio-smoke.avd" > "$ANDROID_AVD_HOME/folio-smoke.ini"
 emulator -avd folio-smoke -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader -memory 2048 > "$emulator_log" 2>&1 &
 emulator_pid=$!
 boot_deadline=$((SECONDS+240))

@@ -14,6 +14,7 @@ on:
       - plugins/**
       - scripts/device-checks/**
       - scripts/report-eas-build-error.cjs
+      - scripts/compare-apk-inputs.cjs
       - supabase/**
       - assets/**
       - package.json
@@ -74,15 +75,13 @@ jobs:
         run: |
           baseline=43864d2939ee22926a3b4cd60a8ee40005d3ddb4
           if git fetch --no-tags --depth=1 origin "$baseline"; then
-            previous=$(git ls-tree -r "$baseline" -- App.tsx index.ts app.json app.config.js eas.json package.json package-lock.json src assets plugins | sha256sum | cut -d ' ' -f 1)
-            current=$(git ls-tree -r HEAD -- App.tsx index.ts app.json app.config.js eas.json package.json package-lock.json src assets plugins | sha256sum | cut -d ' ' -f 1)
-            if [ "$previous" = "$current" ]; then echo 'eligible=true' >> "$GITHUB_OUTPUT"; fi
+            if [ "$(node scripts/compare-apk-inputs.cjs "$baseline")" = true ]; then echo 'eligible=true' >> "$GITHUB_OUTPUT"; fi
           fi
       - name: Reuse the matching signed APK when still available
         id: reused-apk
         if: steps.matching-apk.outputs.eligible == 'true'
         continue-on-error: true
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7, Node 24
         with:
           name: folio-dev-apk
           run-id: 44958391360
@@ -217,7 +216,7 @@ jobs:
         with:
           node-version: 24.22.1
       - name: Download the built APK
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7, Node 24
         with:
           name: folio-dev-apk
           path: ${{ runner.temp }}
