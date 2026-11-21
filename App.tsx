@@ -985,7 +985,10 @@ function FolioApp({ user, scope, hasLegacyData }: { user: UserProfile | null; sc
 
       {flashcardItem && (
         <FlashcardModal
-          lexiconItem={flashcardItem}
+          key={flashcardItem.id}
+          lexiconItem={lexicon.find(entry => entry.id === flashcardItem.id) ?? flashcardItem}
+          cardAvailable={lexiconArchive.status !== 'ready' || lexicon.some(entry => entry.id === flashcardItem.id)}
+          onRetry={lexiconArchive.retry}
           onClose={() => setFlashcardItem(null)}
           onUpdateMastery={handleUpdateMastery}
           saveStatus={lexiconArchive.status}

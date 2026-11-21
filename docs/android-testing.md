@@ -906,3 +906,41 @@ APK is built for this step. When a later APK includes it:
    large result sets, TalkBack result/action names, loading/count announcements
    and focus when Search closes into Library, Reading or a flashcard. Unit tests
    do not validate native focus, keyboard behavior or scrolling performance.
+
+## Compact vocabulary review (step 26, awaiting an APK)
+
+This step remains local on development. No APK is built until requested. In a
+later APK, open a vocabulary card from Notebook and from global Search:
+
+1. The word/phonetic prompt should have a distinct Reveal definition action.
+   Ratings stay disabled until the definition is revealed. Show word again
+   returns to recall and disables rating until the next reveal. The saved level
+   determines the selected rating appearance; Mastered is no longer permanently
+   emphasized. Rating values remain Review=1, Good=3 and Mastered=5.
+2. Definition and context are selectable text, separate from the flip action.
+   Scrolling/long-pressing text should not flip the card. Empty context is omitted.
+   Check long words/definitions and that the full card, status and rating row can
+   scroll together in landscape or with large system text. Buttons wrap and use
+   the shared compact rectangles with at least 48-point touch targets.
+3. Rate a disposable card. While Saving mastery is shown, ratings, flip, close,
+   backdrop and Android back should wait for the result. Confirmed local save
+   should close the card and acknowledge the level. A failed save must retain
+   the revealed card, expose an error and permit another rating or dismissal.
+   Do not damage storage to force failures; tests inject them safely.
+4. When the vocabulary archive cannot be read, Try again uses the existing archive
+   retry without discarding the revealed view. The card reads the latest current
+   archive entry after reload. A card removed from the reading space remains
+   readable until dismissed but cannot be rated. Unrelated archive work should
+   disable rating while leaving Close available.
+5. Reopen another card: it should start at its own recall prompt. Late save results
+   from an unmounted card must not close or update a newly opened card. App keys
+   each review session by card ID; tests also cover late success/failure/errors
+   after forced unmounting. A local save already started is not rolled back by
+   unmounting or account changes.
+6. Check TalkBack reveal/return/rating names, saved selection, disabled/busy states,
+   error/status announcements and focus after revealing. Check Charcoal contrast,
+   largest system text, narrow screens and keyboard-free scrolling. Component
+   tests do not prove native focus, selection gestures or visual layout.
+
+No vocabulary storage format, cloud merge policy or rating values change in this
+step. Only confirmed storage acknowledgement can report a successful rating.

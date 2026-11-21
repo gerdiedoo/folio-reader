@@ -1,9 +1,10 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { colors, F, type } from '../theme';
+import { F, type } from '../theme';
 import { AppPalette, useAppTheme } from '../AppTheme';
 import { LexiconEntry } from '../types';
 import { Icon } from './ui/Icon';
+import { choiceAppearance, choiceStyles } from './ui/choiceStyles';
 import { ModalShell } from './ui/ModalShell';
 
 interface FlashcardModalProps {
@@ -12,16 +13,19 @@ interface FlashcardModalProps {
   onUpdateMastery: (id: string, newLevel: number) => Promise<boolean>;
   saveStatus?: 'loading' | 'ready' | 'error';
   saveBusy?: boolean;
+  cardAvailable?: boolean;
+  onRetry?: () => void;
   showToast: (msg: string) => void;
 }
+const RATINGS = [
+  { level: 1, label: 'Review', accessibilityLabel: 'Review: mastery 1 of 5' },
+  { level: 3, label: 'Good', accessibilityLabel: 'Good: mastery 3 of 5' },
+  { level: 5, label: 'Mastered', accessibilityLabel: 'Mastered: mastery 5 of 5' },
+];
 
 export const FlashcardModal: React.FC<FlashcardModalProps> = ({
-  lexiconItem,
-  onClose,
-  onUpdateMastery,
-  saveStatus = 'ready',
-  saveBusy = false,
-  showToast,
+  lexiconItem, onClose, onUpdateMastery, saveStatus = 'ready', saveBusy = false,
+  cardAvailable = true, onRetry, showToast,
 }) => {
   const colors = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -29,138 +33,125 @@ export const FlashcardModal: React.FC<FlashcardModalProps> = ({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const pending = useRef(false);
-  const unavailable = saving || saveBusy || saveStatus !== 'ready';
+  const mounted = useRef(true);
+  const activeId = useRef(lexiconItem.id);
+  activeId.current = lexiconItem.id;
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const unavailable = saving || saveBusy || saveStatus !== 'ready' || !cardAvailable || !isFlipped;
+  const close = () => { if (!pending.current) onClose(); };
+  const flip = (revealed: boolean) => { if (!pending.current) setIsFlipped(revealed); };
 
   const handleRate = async (level: number) => {
-    if (pending.current || unavailable) return;
+    if (!mounted.current || pending.current || unavailable) return;
+    const id = lexiconItem.id;
+    const isCurrent = () => mounted.current && activeId.current === id;
     pending.current = true; setSaving(true); setSaveError(null);
     try {
-      if (await onUpdateMastery(lexiconItem.id, level)) {
+      const saved = await onUpdateMastery(id, level);
+      if (!isCurrent()) return;
+      if (saved) {
         showToast(`Mastery level ${level}/5 saved on this device`);
         onClose();
-      } else setSaveError('Couldn’t save mastery on this device. The card is still open; try again.');
+      } else setSaveError('Couldn’t save mastery on this device. Your card is still open; try the rating again.');
     } catch {
-      setSaveError('Couldn’t save mastery on this device. Try again.');
-      showToast('Couldn’t save mastery on this device. Try again.');
-    } finally { pending.current = false; setSaving(false); }
+      if (isCurrent()) setSaveError('Couldn’t save mastery on this device. Your card is still open; try the rating again.');
+    } finally {
+      pending.current = false;
+      if (isCurrent()) setSaving(false);
+    }
   };
+  const status = saving ? 'Saving mastery…'
+    : saveStatus === 'loading' ? 'Loading saved vocabulary…'
+    : saveStatus === 'error' ? 'Saved vocabulary could not be read. Try loading it again before rating.'
+    : !cardAvailable ? 'This card is no longer in this reading space. Close it to return.'
+    : saveBusy ? 'Another vocabulary change is saving. Please wait.'
+    : `Saved mastery: ${lexiconItem.masteryLevel}/5`;
 
   return (
-    <ModalShell onClose={onClose} maxWidth={384}>
+    <ModalShell onClose={close} maxWidth={420}>
       <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <Icon name="style" size={20} color={colors.primary} />
-          <Text accessibilityRole="header" style={styles.headerTitle}>LEXICON FLASHCARD</Text>
-        </View>
-        <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close vocabulary card" style={styles.closeBtn}>
-          <Icon name="close" size={18} color={colors.muted} />
+        <Text accessibilityRole="header" style={styles.headerTitle}>Vocabulary card</Text>
+        <Pressable onPress={close} disabled={saving} accessibilityRole="button" accessibilityLabel="Close vocabulary card"
+          accessibilityState={{ disabled: saving }} style={styles.closeBtn}>
+          <Icon name="close" size={20} color={colors.muted} />
         </Pressable>
       </View>
-
-      <ScrollView style={{ maxHeight: 440, flexShrink: 1 }} contentContainerStyle={styles.cardBody}>
+      <ScrollView style={styles.scroller} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
         {!isFlipped ? (
-          <Pressable onPress={() => setIsFlipped(true)} accessibilityRole="button" accessibilityLabel={`Reveal definition for ${lexiconItem.word}`} style={styles.front}>
-            <View style={styles.promptTag}>
-              <Text style={styles.promptText}>PROMPT • WORD RECALL</Text>
-            </View>
-            <Text style={styles.word}>{lexiconItem.word}</Text>
-            <Text style={styles.phonetic}>{lexiconItem.phonetic}</Text>
-            <View style={styles.hintRow}>
-              <Icon name="touch_app" size={16} color={colors.muted} />
-              <Text style={styles.hint}>Tap anywhere to reveal definition</Text>
-            </View>
-          </Pressable>
+          <View style={styles.front}>
+            <Text style={styles.prompt}>Recall the meaning</Text>
+            <Text accessibilityRole="header" style={styles.word}>{lexiconItem.word}</Text>
+            {lexiconItem.phonetic ? <Text style={styles.phonetic}>{lexiconItem.phonetic}</Text> : null}
+            <Pressable onPress={() => flip(true)} disabled={saving} accessibilityRole="button"
+              accessibilityLabel={`Reveal definition for ${lexiconItem.word}`} accessibilityState={{ disabled: saving }} style={[choiceStyles.target, styles.choiceTarget]}>
+              <View style={[choiceStyles.face, choiceAppearance(colors, true)]} pointerEvents="none">
+                <Text style={styles.revealText}>Reveal definition</Text>
+              </View>
+            </Pressable>
+          </View>
         ) : (
-          <Pressable onPress={() => setIsFlipped(false)} accessibilityRole="button" accessibilityHint="Activate to show the word again." style={styles.back}>
+          <View style={styles.back}>
             <View style={styles.backHead}>
-              <Text style={styles.backWord}>{lexiconItem.word}</Text>
-              <Text style={styles.pos}>{lexiconItem.partOfSpeech}</Text>
+              <Text accessibilityRole="header" style={styles.backWord}>{lexiconItem.word}</Text>
+              {lexiconItem.partOfSpeech ? <Text style={styles.phonetic}>{lexiconItem.partOfSpeech}</Text> : null}
             </View>
-            <Text style={styles.definition}>{lexiconItem.definition}</Text>
-            <View style={styles.contextBox}>
-              <Text style={styles.contextLabel}>CONTEXT PASSAGE</Text>
-              <Text style={styles.context}>{lexiconItem.contextPassage}</Text>
-            </View>
-            <Text style={styles.flipBack}>Tap card to flip back</Text>
-          </Pressable>
+            <Text selectable style={styles.definition}>{lexiconItem.definition}</Text>
+            {lexiconItem.contextPassage?.trim() ? <View style={styles.contextBox}>
+              <Text accessibilityRole="header" style={styles.contextLabel}>In context</Text>
+              <Text selectable style={styles.context}>{lexiconItem.contextPassage}</Text>
+            </View> : null}
+            {lexiconItem.chapter ? <Text style={styles.status}>{lexiconItem.chapter}</Text> : null}
+            <Pressable onPress={() => flip(false)} disabled={saving} accessibilityRole="button"
+              accessibilityLabel={`Show word again for ${lexiconItem.word}`} accessibilityState={{ disabled: saving }} style={[choiceStyles.target, styles.choiceTarget]}>
+              <View style={[choiceStyles.face, choiceAppearance(colors, false)]} pointerEvents="none">
+                <Text style={styles.returnText}>Show word again</Text>
+              </View>
+            </Pressable>
+          </View>
         )}
-      </ScrollView>
-
-      <View style={styles.footer}>
-        {saveError ? <Text style={styles.ask}>{saveError}</Text> : null}
-        <Text style={styles.ask}>How well did you know this?</Text>
-        <Text accessibilityLiveRegion="polite" style={styles.ask}>{saving ? 'Saving mastery…' : saveStatus === 'error' ? 'Saved vocabulary could not be read. Retry in Notebook.' : saveStatus === 'loading' ? 'Loading saved vocabulary…' : `Saved mastery: ${lexiconItem.masteryLevel}/5`}</Text>
-        <View style={styles.rateRow}>
-          <Pressable onPress={() => handleRate(1)} disabled={unavailable} accessibilityRole="button" accessibilityLabel="Review: mastery 1 of 5" accessibilityState={{ disabled: unavailable, selected: lexiconItem.masteryLevel === 1, busy: saving }} style={styles.rateBtn}>
-            <Text style={[styles.rateText, { color: colors.primary }]}>Review (1)</Text>
-          </Pressable>
-          <Pressable onPress={() => handleRate(3)} disabled={unavailable} accessibilityRole="button" accessibilityLabel="Good: mastery 3 of 5" accessibilityState={{ disabled: unavailable, selected: lexiconItem.masteryLevel === 3, busy: saving }} style={styles.rateBtn}>
-            <Text style={[styles.rateText, { color: colors.tertiary }]}>Good (3)</Text>
-          </Pressable>
-          <Pressable onPress={() => handleRate(5)} disabled={unavailable} accessibilityRole="button" accessibilityLabel="Mastered: mastery 5 of 5" accessibilityState={{ disabled: unavailable, selected: lexiconItem.masteryLevel === 5, busy: saving }} style={[styles.rateBtn, { backgroundColor: colors.primaryContainer }]}>
-            <Text style={[styles.rateText, { color: '#fff' }]}>Mastered (5)</Text>
-          </Pressable>
+        <View style={styles.review}>
+          <Text accessibilityLiveRegion="polite" style={styles.status}>{status}</Text>
+          {saveError ? <Text accessibilityRole="alert" style={styles.error}>{saveError}</Text> : null}
+          {saveStatus === 'error' && onRetry ? <Pressable onPress={() => { if (!pending.current) onRetry(); }}
+            accessibilityRole="button" accessibilityLabel="Retry loading vocabulary for this card" style={[choiceStyles.target, styles.choiceTarget]}>
+            <View style={[choiceStyles.face, choiceAppearance(colors, false)]} pointerEvents="none"><Text style={styles.returnText}>Try again</Text></View>
+          </Pressable> : null}
+          <Text style={styles.ask}>{isFlipped ? 'How well did you recall it?' : 'Reveal the definition before rating.'}</Text>
+          <View style={styles.rateRow}>
+            {RATINGS.map(rating => <Pressable key={rating.level} onPress={() => handleRate(rating.level)} disabled={unavailable}
+              accessibilityRole="button" accessibilityLabel={rating.accessibilityLabel}
+              accessibilityState={{ disabled: unavailable, selected: lexiconItem.masteryLevel === rating.level, busy: saving }} style={[choiceStyles.target, styles.choiceTarget]}>
+              <View style={[choiceStyles.face, choiceAppearance(colors, lexiconItem.masteryLevel === rating.level)]} pointerEvents="none">
+                <Text style={[styles.rateText, { color: lexiconItem.masteryLevel === rating.level ? colors.onPrimaryContainer : colors.onSurface }]}>{rating.label}</Text>
+              </View>
+            </Pressable>)}
+          </View>
         </View>
-      </View>
+      </ScrollView>
     </ModalShell>
   );
 };
 
 const createStyles = (colors: AppPalette) => StyleSheet.create({
-  header: {
-    padding: 14,
-    backgroundColor: colors.surfaceLow,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.borderMid,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  headerLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
-  headerTitle: { ...type.labelSm, flexShrink: 1, color: colors.muted, letterSpacing: 1 },
-  closeBtn: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
-  cardBody: { padding: 24, minHeight: 260, justifyContent: 'center' },
-  front: { alignItems: 'center', gap: 12 },
-  promptTag: { backgroundColor: colors.primaryFixed, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
-  promptText: { fontFamily: F.sansSemi, fontSize: 11, letterSpacing: 1.4, color: colors.primary },
-  word: { fontFamily: F.serifMedium, fontSize: 32, lineHeight: 40, color: colors.onSurface, textAlign: 'center' },
-  phonetic: { fontFamily: F.sans, fontSize: 14, color: colors.muted, fontStyle: 'italic' },
-  hintRow: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingTop: 12 },
-  hint: { fontFamily: F.sans, fontSize: 12, color: colors.muted },
-  back: { gap: 12 },
-  backHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  backWord: { fontFamily: F.serifSemi, fontSize: 16, color: colors.primary },
-  pos: { fontFamily: F.sans, fontSize: 12, color: colors.muted, fontStyle: 'italic' },
-  definition: { ...type.bodyMd, color: colors.onSurface, lineHeight: 21 },
-  contextBox: {
-    backgroundColor: colors.surfaceLow,
-    padding: 10,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.borderSoft,
-  },
-  contextLabel: { fontFamily: F.sansSemi, fontSize: 10, color: colors.muted, marginBottom: 2 },
-  context: { fontFamily: F.serifItalic, fontSize: 14, lineHeight: 19, color: colors.onSurface },
-  flipBack: { fontFamily: F.sans, fontSize: 10, color: colors.muted, textAlign: 'center' },
-  footer: {
-    padding: 12,
-    gap: 8,
-    backgroundColor: colors.surfaceLow,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.borderMid,
-  },
-  ask: { fontFamily: F.sans, fontSize: 11, color: colors.muted, textAlign: 'center' },
-  rateRow: { flexDirection: 'row', gap: 8 },
-  rateBtn: {
-    minHeight: 48,
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: colors.white,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  rateText: { fontFamily: F.sansSemi, fontSize: 12 },
+  header: { paddingLeft: 16, paddingRight: 8, backgroundColor: colors.surfaceLow, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.borderMid, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  headerTitle: { ...type.bodyMd, color: colors.onSurface, flexShrink: 1 },
+  closeBtn: { width: 48, height: 48, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  scroller: { flexShrink: 1, minHeight: 0 }, body: { padding: 16, gap: 16 },
+  front: { alignItems: 'center', gap: 8, paddingVertical: 12 },
+  prompt: { ...type.labelMd, color: colors.muted },
+  word: { fontFamily: F.serifMedium, fontSize: 30, lineHeight: 38, color: colors.onSurface, textAlign: 'center' },
+  phonetic: { ...type.bodySm, color: colors.muted, fontStyle: 'italic' },
+  choiceTarget: { maxWidth: '100%' },
+  revealText: { ...type.labelMd, color: colors.onPrimaryContainer, flexShrink: 1 },
+  returnText: { ...type.labelMd, color: colors.onSurface, flexShrink: 1 },
+  back: { gap: 10 }, backHead: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'space-between', alignItems: 'center' },
+  backWord: { ...type.headlineSm, color: colors.onSurface, flexShrink: 1 },
+  definition: { ...type.bodyMd, color: colors.onSurface },
+  contextBox: { backgroundColor: colors.surfaceLow, padding: 12, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.borderSoft },
+  contextLabel: { ...type.labelSm, color: colors.muted, marginBottom: 4 },
+  context: { fontFamily: F.serifItalic, fontSize: 15, lineHeight: 21, color: colors.onSurface },
+  review: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.borderMid, paddingTop: 12, gap: 6 },
+  ask: { ...type.bodySm, color: colors.onSurface }, status: { ...type.bodySm, color: colors.muted },
+  error: { ...type.bodySm, color: colors.onSurface },
+  rateRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 }, rateText: { ...type.labelMd, flexShrink: 1 },
 });

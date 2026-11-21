@@ -2307,3 +2307,72 @@ test('global search reports partial loading/errors with archive retry instead of
   archiveFilter(root, 'Books'); root = f.render(); assert.match(renderedText(archiveList(root).ListEmptyComponent), /No matches/); assert.doesNotMatch(renderedText(archiveList(root).ListHeaderComponent), /Quotes and notes could not be loaded/);
   labelled(root, 'Close archive search').onPress(); assert.deepEqual(f.events, ['close']);
 });
+
+function flashcardReview(overrides = {}) {
+  const h = harness({ runEffects: true });
+  const { FlashcardModal } = h.load('../src/components/FlashcardModal.tsx');
+  const events = [], messages = [];
+  const props = { lexiconItem: vocabularyCard('word'), onClose: () => events.push('close'), showToast: message => messages.push(message),
+    onUpdateMastery: async (id, level) => { events.push([id, level]); return true; }, ...overrides };
+  return { h, props, events, messages, render: () => h.render(FlashcardModal, props) };
+}
+
+test('flashcard ratings require recall/reveal and show the saved mastery rather than a fixed preferred rating', async () => {
+  const f = flashcardReview(); let root = f.render();
+  assert.equal(labelled(root, 'Review: mastery 1 of 5').accessibilityState.selected, true);
+  assert.equal(labelled(root, 'Mastered: mastery 5 of 5').accessibilityState.selected, false);
+  assert.equal(labelled(root, 'Mastered: mastery 5 of 5').disabled, true);
+  await labelled(root, 'Mastered: mastery 5 of 5').onPress(); assert.deepEqual(f.events, []);
+  labelled(root, 'Reveal definition for Quietude').onPress(); root = f.render();
+  assert.equal(labelled(root, 'Mastered: mastery 5 of 5').disabled, false);
+  const definition = elements(root).find(node => node.props?.children === 'Calmness.'); assert.equal(definition.props.selectable, true);
+  labelled(root, 'Show word again for Quietude').onPress(); root = f.render(); assert.equal(labelled(root, 'Good: mastery 3 of 5').disabled, true);
+  assert.equal(elements(root).some(node => node.props?.children === 'Calmness.'), false); f.h.unmount();
+});
+
+test('pending flashcard rating blocks close, backdrop/back dismissal and flipping until acknowledgement', async () => {
+  let resolve, calls = 0;
+  const f = flashcardReview({ onUpdateMastery: () => { calls++; return new Promise(done => { resolve = done; }); } });
+  let root = f.render(); labelled(root, 'Reveal definition for Quietude').onPress(); root = f.render();
+  const flip = labelled(root, 'Show word again for Quietude');
+  const pending = labelled(root, 'Good: mastery 3 of 5').onPress(); root = f.render();
+  assert.equal(labelled(root, 'Close vocabulary card').disabled, true); labelled(root, 'Close vocabulary card').onPress(); root.props.onClose(); flip.onPress();
+  await labelled(root, 'Mastered: mastery 5 of 5').onPress(); root = f.render();
+  assert.equal(calls, 1); assert.deepEqual(f.events, []); assert.ok(elements(root).some(node => node.props?.children === 'Calmness.'));
+  resolve(false); await pending; root = f.render(); assert.equal(labelled(root, 'Close vocabulary card').disabled, false);
+  assert.ok(elements(root).some(node => node.props?.accessibilityRole === 'alert' && /Couldn’t save mastery/.test(node.props.children)));
+  labelled(root, 'Close vocabulary card').onPress(); assert.deepEqual(f.events, ['close']); f.h.unmount();
+});
+
+test('late flashcard rating success, rejection and errors cannot close another card or update an unmounted view', async () => {
+  for (const outcome of ['success', 'failure', 'error']) {
+    let resolve, reject;
+    const f = flashcardReview({ onUpdateMastery: () => new Promise((done, fail) => { resolve = done; reject = fail; }) });
+    let root = f.render(); labelled(root, 'Reveal definition for Quietude').onPress(); root = f.render();
+    const pending = labelled(root, 'Mastered: mastery 5 of 5').onPress(); f.h.unmount(); const writes = f.h.stateWrites();
+    if (outcome === 'error') reject(Error('Storage error')); else resolve(outcome === 'success');
+    await pending; assert.deepEqual(f.events, []); assert.deepEqual(f.messages, []); assert.equal(f.h.stateWrites(), writes);
+  }
+});
+
+test('flashcard archive retry keeps the revealed content and uses updated saved mastery once loaded', () => {
+  let retries = 0;
+  const f = flashcardReview({ saveStatus: 'error', onRetry: () => retries++ }); let root = f.render();
+  labelled(root, 'Reveal definition for Quietude').onPress(); root = f.render();
+  assert.equal(labelled(root, 'Good: mastery 3 of 5').disabled, true);
+  labelled(root, 'Retry loading vocabulary for this card').onPress(); assert.equal(retries, 1);
+  f.props.saveStatus = 'loading'; root = f.render(); assert.match(renderedText(root), /Loading saved vocabulary/);
+  f.props.saveStatus = 'ready'; f.props.lexiconItem = { ...f.props.lexiconItem, masteryLevel: 3 }; root = f.render();
+  assert.ok(elements(root).some(node => node.props?.children === 'Calmness.'));
+  assert.equal(labelled(root, 'Good: mastery 3 of 5').accessibilityState.selected, true); assert.equal(labelled(root, 'Good: mastery 3 of 5').disabled, false); f.h.unmount();
+});
+
+test('a removed flashcard remains readable but cannot be rated; unrelated archive work does not trap dismissal', async () => {
+  const f = flashcardReview({ cardAvailable: false, lexiconItem: vocabularyCard('word', { contextPassage: '' }) });
+  let root = f.render(); labelled(root, 'Reveal definition for Quietude').onPress(); root = f.render();
+  assert.match(renderedText(root), /no longer in this reading space/); assert.doesNotMatch(renderedText(root), /In context/);
+  await labelled(root, 'Good: mastery 3 of 5').onPress(); assert.deepEqual(f.events, []);
+  labelled(root, 'Close vocabulary card').onPress(); assert.deepEqual(f.events, ['close']); f.h.unmount();
+  const other = flashcardReview({ saveBusy: true }); root = other.render();
+  assert.equal(labelled(root, 'Close vocabulary card').disabled, false); labelled(root, 'Close vocabulary card').onPress(); assert.deepEqual(other.events, ['close']); other.h.unmount();
+});
