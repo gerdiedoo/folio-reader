@@ -93,3 +93,19 @@ ZIP and install `folio.apk` over the installed main Folio app. Keep Folio Dev
 installed. If Android rejects the update's signature, keep the installed app and
 its data while the signing mismatch is investigated; do not uninstall it to
 force installation. The artifact is retained for seven days.
+
+### Completed main APK — 22 November 2026
+
+[Run 45013967497](https://github.com/gerdiedoo/folio-reader/actions/runs/45013967497)
+successfully compiled source `f21bed7`, verified the `com.folio.reader` package
+and APK signature, and uploaded **folio-main-apk** containing **folio.apk**.
+The build reused an existing eligible main-project client configuration after
+the initial production-only lookup reported missing values. No Expo environment
+or remote database was modified. All 515 regression tests and TypeScript passed.
+
+The signed main APK installed and passed the disposable Android Guest journey:
+illustrated EPUB import/rendering, bookmark persistence, unchanged source position
+after book reopen and process restart, reflection creation/persistence, and a
+large-text capture. Evidence is in **folio-main-android-evidence** on the same run.
+Screenshots were captured by automation; this record does not claim a visual
+review, TalkBack verification, real Google consent or signed-in cloud backup.
