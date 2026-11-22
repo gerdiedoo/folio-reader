@@ -28,7 +28,9 @@ export function gutenbergBook(value: unknown): CatalogBook | null {
   return { id: `gutenberg-${value.id}`, source: 'gutenberg', title: text(value.title), author: parts.length === 2 ? `${parts[1]} ${parts[0]}` : rawAuthor || 'Unknown Author',
     coverUrl: sourceUrl(value.formats['image/jpeg'], ['www.gutenberg.org', 'gutenberg.org']), epubUrl: epub,
     downloads: typeof value.download_count === 'number' && Number.isFinite(value.download_count) ? Math.max(0, value.download_count) : 0,
-    subjects: Array.isArray(value.subjects) ? value.subjects.map(text).filter(Boolean) : [] };
+    subjects: Array.isArray(value.subjects) ? value.subjects.map(text).filter(Boolean) : [],
+    description: Array.isArray(value.summaries) ? value.summaries.filter((item): item is string => typeof item === 'string').map(item => item.trim()).filter(Boolean).join('\n\n') : '',
+    languages: Array.isArray(value.languages) ? value.languages.map(text).filter(Boolean) : [] };
 }
 export function parseGutenbergPage(value: unknown): CatalogPage {
   if (!record(value) || !Array.isArray(value.results) || typeof value.count !== 'number' || !Number.isFinite(value.count) || value.count < 0 || !(value.next === null || typeof value.next === 'string')) throw Error('unreadable');

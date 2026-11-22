@@ -5,6 +5,7 @@ import type { LocalStore } from './localStore';
 import { starterBooks } from '../data/freeBooks';
 import { archiveEpubLinks, archiveSearchUrl, gutenbergBook, parseArchivePage, parseGutenbergPage, parseStandardPage, standardEpubLinks, standardSearchUrl, sourceUrl } from './catalogProviders';
 import { CatalogError, catalogCancelled, catalogRequest } from './catalogRequest';
+import { archiveBookDetails, standardBookDetails } from './catalogDetails';
 export { CATALOG_SOURCES } from './catalogProviders';
 
 const API = 'https://gutendex.com/books/';
@@ -25,6 +26,8 @@ export interface CatalogBook {
   epubUrl: string;
   downloads: number;
   subjects: string[];
+  description?: string;
+  languages?: string[];
 }
 
 export interface LibraryBackupEntry {
@@ -146,6 +149,33 @@ export async function getCatalogBook(gutenbergId: number): Promise<CatalogBook |
     if (error instanceof CatalogError && error.kind === 'unavailable') return null;
     throw error;
   }
+}
+
+const detailCache = new Map<string, { book: CatalogBook; cachedAt: number }>();
+export async function loadCatalogBookDetails(book: CatalogBook, signal?: AbortSignal): Promise<CatalogBook> {
+  if (signal?.aborted) throw catalogCancelled();
+  const cached = detailCache.get(book.id);
+  if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return cached.book;
+  let details: CatalogBook;
+  if (book.source === 'standard') {
+    const url = sourceUrl(book.detailUrl, ['standardebooks.org']);
+    if (!url || !/^\/ebooks\/[a-z0-9-]+\/[a-z0-9_/-]+$/.test(new URL(url).pathname)) throw new CatalogError('invalid');
+    details = standardBookDetails(await catalogRequest(url, 'text', signal) as string, book);
+  } else if (book.source === 'archive') {
+    const id = book.id.replace(/^archive-/, '');
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$/.test(id)) throw new CatalogError('invalid');
+    details = archiveBookDetails(await catalogRequest(`https://archive.org/metadata/${encodeURIComponent(id)}`, 'json', signal), book);
+  } else {
+    const id = /^gutenberg-(\d+)$/.exec(book.id)?.[1];
+    if (!id) throw new CatalogError('invalid');
+    const result = gutenbergBook(await catalogRequest(`${API}${id}/`, 'json', signal));
+    if (!result || result.id !== book.id) throw new CatalogError('invalid');
+    details = result;
+  }
+  if (signal?.aborted) throw catalogCancelled();
+  detailCache.set(book.id, { book: details, cachedAt: Date.now() });
+  if (detailCache.size > MAX_CACHED_PAGES) detailCache.delete(detailCache.keys().next().value!);
+  return details;
 }
 
 function normalizeCatalogText(value: string): string {

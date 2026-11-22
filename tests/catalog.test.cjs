@@ -64,6 +64,36 @@ test('Gutenberg validates records, uses HTTPS, preserves author names and reject
   assert.deepEqual(p.parseGutenbergPage({ results: [], count: 0, next: null }).books, []);
 });
 
+test('Gutenberg detail descriptions and languages survive source normalization', async () => {
+  const f = fixture({ fetcher: async () => response({ ...gutBook(), summaries: ['<p>A <i>classic</i>.</p>'], languages: ['en'] }) });
+  const details = await f.loadCatalogBookDetails({ ...catalogBook(), title: 'Pride and Prejudice' });
+  assert.equal(details.description, '<p>A <i>classic</i>.</p>'); assert.deepEqual(details.languages, ['en']);
+});
+
+test('Standard Ebooks details prefer the full description and never request an untrusted page', async () => {
+  const urls = [], html = '<html lang="en"><head><meta name="description" content="Short preview"></head><section id="description"><p>Full <i>description</i>.</p><p>Second paragraph.</p></section></html>';
+  const f = fixture({ fetcher: async url => { urls.push(url); return response(html); } });
+  const item = { id: 'standard-author--book', source: 'standard', detailUrl: 'https://standardebooks.org/ebooks/author/book' };
+  const details = await f.loadCatalogBookDetails(item);
+  assert.equal(details.description, '<p>Full <i>description</i>.</p><p>Second paragraph.</p>'); assert.deepEqual(details.languages, ['en']);
+  await f.loadCatalogBookDetails(item); assert.equal(urls.length, 1);
+  await assert.rejects(f.loadCatalogBookDetails({ ...item, id: 'evil', detailUrl: 'https://attacker.test/ebooks/author/book' }));
+  assert.equal(urls.length, 1);
+});
+
+test('Archive details preserve multi-part descriptions and optional metadata; cancelled results are not cached', async () => {
+  let finish, calls = 0;
+  const f = fixture({ fetcher: async () => { calls++; return new Promise(done => { finish = done; }); } });
+  const item = { id: 'archive-book_123', source: 'archive', subjects: [] }, ctrl = new AbortController();
+  const pending = f.loadCatalogBookDetails(item, ctrl.signal); await flush(); ctrl.abort();
+  await assert.rejects(pending, { name: 'AbortError' });
+  finish(response({ metadata: { description: 'Old' } })); await flush();
+  const retry = f.loadCatalogBookDetails(item); await flush();
+  finish(response({ metadata: { description: ['<p>First</p>', 'Second'], language: 'eng', subject: ['Fiction'] } }));
+  const details = await retry; assert.equal(calls, 2); assert.equal(details.description, '<p>First</p>\n\nSecond');
+  assert.deepEqual(details.languages, ['eng']); assert.deepEqual(details.subjects, ['Fiction']);
+});
+
 test('Standard Ebooks parses the public grid, skips unreleased books and resolves compatible EPUB download links', () => {
   const p = fixture().providers, page = p.parseStandardPage(standardHtml);
   assert.equal(page.books.length, 1); assert.equal(page.books[0].title, 'Pride & Prejudice'); assert.equal(page.books[0].author, 'Jane Austen'); assert.equal(page.hasMore, true); assert.equal(page.total, null);

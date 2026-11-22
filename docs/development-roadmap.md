@@ -148,3 +148,26 @@ bundled logo. Bookmarks can be browsed across books and retain their source IDs.
 480 regression tests, TypeScript and Android/iOS Hermes exports passed locally.
 Native screenshots and execution for this layout are produced by its APK run;
 the earlier verification record describes the previous layout.
+
+## Formatted descriptions and free-book details — 22 November 2026
+
+Stored EPUB annotations/descriptions now render as native paragraphs with emphasis,
+bold text, headings, line breaks and lists. HTML entities and escaped fragments
+are decoded for display; link labels remain readable and embedded scripts or
+frames are omitted. Existing Library records work without re-import or changes
+to the stored source description.
+
+Free-book covers and titles open edition details before downloading. The view
+shows source, cover, description and available language/subject metadata, with
+the existing confirmed-save, download retry and Read actions. Details requests
+are cancellable, cached briefly and retryable independently of downloads. Back
+returns to the mounted catalog with its query, sorting and scroll state intact.
+Gutenberg, Standard Ebooks and Internet Archive have separate metadata adapters;
+an absent description is reported honestly. An EPUB's own description is kept;
+the catalog description fills an absent annotation when importing from details.
+
+Regression checks cover old Library descriptions, literal/escaped markup, source
+metadata, cancellation/retry, catalog Back state and downloading/reading from
+details. Native phone appearance and live provider availability still need the
+APK check. The emulator harness also chooses the exposed part of a partially
+visible book card rather than requiring a full card to fit above floating tabs.

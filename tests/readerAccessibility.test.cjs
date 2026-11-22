@@ -2001,13 +2001,14 @@ test('Library and Notebook filter chips expose a named button and its selected s
   assert.equal(presses, 2);
 });
 
-function catalogHarness({ search, download, parse, save, remember } = {}) {
-  const calls = { searches: [], downloads: [], saved: [], deleted: [], closed: 0, toasts: [] };
+function catalogHarness({ search, download, parse, save, remember, details } = {}) {
+  const calls = { searches: [], downloads: [], details: [], opened: [], saved: [], deleted: [], closed: 0, toasts: [] };
   const h = harness({ runEffects: true, moduleMocks: {
     '../lib/catalog': {
       CATALOG_SOURCES: [{ id: 'gutenberg', label: 'Project Gutenberg' }, { id: 'standard', label: 'Standard Ebooks' }, { id: 'archive', label: 'Internet Archive' }],
       TOPICS: [{ id: 'popular', label: 'Popular', topic: '' }],
       searchCatalog: (opts, signal) => { calls.searches.push({ opts, signal }); return search ? search(opts, signal) : Promise.resolve({ books: [item], total: 1, hasMore: false }); },
+      loadCatalogBookDetails: (book, signal) => { calls.details.push({ book, signal }); return details ? details(book, signal) : Promise.resolve({ ...book, description: '<p>A classic.</p>', languages: ['en'] }); },
       downloadEpub: async (...args) => { calls.downloads.push(args); return download ? download(...args) : 'file:///cache/book.epub'; },
       deleteDownloaded: uri => calls.deleted.push(uri), loadAdded: async () => ({}),
       rememberAdded: remember ?? (async current => current),
@@ -2015,11 +2016,11 @@ function catalogHarness({ search, download, parse, save, remember } = {}) {
     '../lib/epubParser': { parseEpubFile: parse ?? (async () => ({ book: { id: 'epub-new', title: 'A Book', coverUrl: 'file:///embedded/cover.jpg' }, pages: [{ pageNumber: 1 }] })) },
     './BookCover': { BookCover: 'BookCover' }, './ui/Chip': { Chip: 'Chip' }, './ui/ProgressBar': { ProgressBar: 'ProgressBar' },
   } });
-  const item = { id: 'gutenberg-1', title: 'A Book', author: 'An Author', source: 'gutenberg', coverUrl: 'https://www.gutenberg.org/cover.jpg', downloads: 10 };
+  const item = { id: 'gutenberg-1', title: 'A Book', author: 'An Author', source: 'gutenberg', coverUrl: 'https://www.gutenberg.org/cover.jpg', downloads: 10, subjects: [] };
   const { BrowseBooksScreen, BookRow } = h.load('../src/components/BrowseBooksScreen.tsx');
   const props = { storage: { removeBookFiles: id => calls.deleted.push(id) }, books: [], availableBookIds: [], viewMode: 'grid', onViewModeChange() {},
     onAddEpubBook: async (book, pages) => { calls.saved.push({ book, pages }); if (save) await save(book, pages); props.books = [...props.books, book]; props.availableBookIds = [...props.availableBookIds, book.id]; },
-    onOpenBook() {}, onClose: () => calls.closed++, showToast: message => calls.toasts.push(message) };
+    onOpenBook: id => calls.opened.push(id), onClose: () => calls.closed++, showToast: message => calls.toasts.push(message) };
   return { h, calls, props, item, BookRow, render: () => h.render(BrowseBooksScreen, props) };
 }
 const freeBookList = root => elements(root).find(node => node.type === 'FlatList').props;
@@ -2029,6 +2030,73 @@ function fireNativeTimer(h, ms) {
   const entry = [...h.timers].find(([, timer]) => timer.ms === ms); assert.ok(entry, `Missing ${ms} ms timer`);
   h.timers.delete(entry[0]); entry[1].fn();
 }
+
+test('Book descriptions render native paragraphs and emphasis rather than source HTML', () => {
+  const h = harness(); const { BookDescription } = h.load('../src/components/BookDescription.tsx');
+  const root = h.render(BookDescription, { value: '<p>Mary wrote <i>Frankenstein</i>.</p><p>Another paragraph.</p>' });
+  const paragraphs = elements(root).filter(node => node.type === 'Text' && node.props.selectable);
+  assert.equal(paragraphs.length, 2);
+  assert.doesNotMatch(renderedText(root), /<p>|<i>/);
+  assert.ok(elements(root).some(node => node.props?.children === 'Frankenstein' && node.props.style.some(style => style?.fontStyle === 'italic')));
+});
+
+test('already-imported Library descriptions use the formatter without rewriting the stored book', () => {
+  const f = libraryHarness({ selectedBookId: 'Amber' });
+  f.props.books[0].annotation = '<p>An existing <i>description</i>.</p>';
+  const root = f.render();
+  const description = elements(root).find(node => node.type?.name === 'BookDescription');
+  assert.equal(description.props.value, f.props.books[0].annotation);
+  assert.equal(f.props.books[0].annotation, '<p>An existing <i>description</i>.</p>');
+  f.h.unmount();
+});
+
+test('free-book covers and titles open details without downloading; Back retains catalog search and sort', async () => {
+  const f = catalogHarness(); f.render(); await flushNative(); let root = f.render();
+  labelled(root, 'Sort free books by Title').onPress();
+  labelled(root, 'Search free books by title or author').onChangeText('A Book');
+  root = f.render(); fireNativeTimer(f.h, 450); f.render(); await flushNative(); root = f.render();
+  const rowProps = freeBookRow(f, root), rowHarness = harness();
+  const row = rowHarness.render(f.BookRow.type, rowProps);
+  labelled(row, 'View details for A Book by An Author').onPress();
+  assert.equal(f.calls.downloads.length, 0);
+  root = f.render(); await flushNative(); root = f.render();
+  assert.equal(f.calls.details.length, 1); assert.ok(labelled(root, 'Add A Book to library'));
+  assert.match(renderedText(root), /About this book/);
+  const catalogList = freeBookList(root);
+  labelled(root, 'Back to free books').onPress(); root = f.render();
+  assert.equal(f.calls.closed, 0); assert.equal(freeBookList(root).data, catalogList.data);
+  assert.equal(f.calls.searches.length, 2); assert.ok(labelled(root, 'Back to library'));
+  assert.equal(labelled(root, 'Search free books by title or author').value, 'A Book');
+  assert.equal(labelled(root, 'Sort free books by Title').accessibilityState.selected, true);
+  f.h.unmount(); rowHarness.unmount();
+});
+
+test('details requests are cancelled on Back; failures offer retry while keeping download available', async () => {
+  let late;
+  const f = catalogHarness({ details: () => new Promise(done => { late = done; }) });
+  f.render(); await flushNative(); let root = f.render(); freeBookRow(f, root).onDetails(f.item); root = f.render();
+  labelled(root, 'Back to free books').onPress(); f.render();
+  assert.equal(f.calls.details[0].signal.aborted, true);
+  const writes = f.h.stateWrites(); late({ ...f.item, description: 'Late description' }); await flushNative();
+  assert.equal(f.h.stateWrites(), writes); f.h.unmount();
+  let attempts = 0;
+  const retry = catalogHarness({ details: async book => { if (++attempts === 1) throw Error('Offline'); return { ...book, description: 'Recovered' }; } });
+  retry.render(); await flushNative(); root = retry.render(); freeBookRow(retry, root).onDetails(retry.item);
+  retry.render(); await flushNative(); root = retry.render();
+  assert.ok(labelled(root, 'Add A Book to library'));
+  labelled(root, 'Retry book details').onPress(); retry.render(); await flushNative(); root = retry.render();
+  assert.equal(retry.calls.details.length, 2);
+  assert.equal(elements(root).some(node => node.props?.accessibilityLabel === 'Retry book details'), false); retry.h.unmount();
+});
+
+test('downloading from free-book details keeps confirmed save, retry and Read behavior', async () => {
+  const f = catalogHarness(); f.render(); await flushNative(); let root = f.render();
+  freeBookRow(f, root).onDetails(f.item); f.render(); await flushNative(); root = f.render();
+  labelled(root, 'Add A Book to library').onPress(); await flushNative(); fireNativeTimer(f.h, 60); await flushNative(); root = f.render();
+  assert.equal(f.calls.saved.length, 1); assert.equal(f.calls.saved[0].book.annotation, '<p>A classic.</p>');
+  labelled(root, 'Read A Book').onPress(); assert.equal(f.calls.closed, 1); assert.deepEqual(f.calls.opened, ['epub-new']);
+  f.h.unmount();
+});
 
 test('free-book source changes cancel old results; provider errors keep retry and other sources available', async () => {
   let first;

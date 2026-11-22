@@ -26,6 +26,7 @@ import { LibraryRecoveryBook } from '../lib/catalog';
 import { BookRemovalDialog } from './BookRemovalDialog';
 import { BookCover, CLOTH, ClothTint } from './BookCover';
 import { BrowseBooksScreen } from './BrowseBooksScreen';
+import { BookDescription } from './BookDescription';
 import { Icon } from './ui/Icon';
 import { choiceAppearance, choiceStyles } from './ui/choiceStyles';
 import { ModalShell } from './ui/ModalShell';
@@ -359,9 +360,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
         <View style={styles.detailsPageSection}>
           <Text style={styles.detailsSectionTitle}>Annotation / description</Text>
-          <Text style={styles.detailsAnnotation}>
-            {selectedBook.annotation || 'No annotation or description was included in this document.'}
-          </Text>
+          <BookDescription value={selectedBook.annotation} textStyle={styles.detailsAnnotation}
+            emptyText="No annotation or description was included in this document." />
         </View>
 
         <Pressable

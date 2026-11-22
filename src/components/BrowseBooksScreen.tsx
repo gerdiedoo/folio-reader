@@ -11,6 +11,7 @@ import {
   deleteDownloaded,
   downloadEpub,
   loadAdded,
+  loadCatalogBookDetails,
   rememberAdded,
   searchCatalog,
   TOPICS,
@@ -21,6 +22,7 @@ import { parseEpubFile } from '../lib/epubParser';
 import { F, type } from '../theme';
 import { Book, BookContentPage } from '../types';
 import { BookCover } from './BookCover';
+import { BookDescription } from './BookDescription';
 import { Chip } from './ui/Chip';
 import { Icon } from './ui/Icon';
 import { choiceAppearance, choiceStyles } from './ui/choiceStyles';
@@ -71,26 +73,30 @@ interface RowProps {
   progressPercent: number | null;
   onGet: (item: CatalogBook) => void;
   onRead: (item: CatalogBook) => void;
+  onDetails: (item: CatalogBook) => void;
   viewMode: BrowseViewMode;
   cardWidth: number;
   error?: string;
 }
 
-export const BookRow = React.memo<RowProps>(({ item, status, disabled, progressPercent, onGet, onRead, viewMode, cardWidth, error }) => {
+export const BookRow = React.memo<RowProps>(({ item, status, disabled, progressPercent, onGet, onRead, onDetails, viewMode, cardWidth, error }) => {
   const palette = useAppTheme();
   const styles = useMemo(() => createStyles(palette), [palette]);
   const busy = status === 'downloading' || status === 'preparing';
 
   return (
     <View style={[styles.row, viewMode === 'grid' && styles.gridCard, viewMode === 'grid' && { width: cardWidth }]}>
+      <Pressable onPress={() => onDetails(item)} accessibilityRole="button" accessibilityLabel={`View details for ${item.title} by ${item.author}`}
+        style={viewMode === 'grid' ? { width: '100%' } : { width: 64 }}>
       <BookCover
         book={{ title: item.title, author: item.author, coverUrl: item.coverUrl, coverAlt: `Cover for ${item.title}` }}
         style="image"
         size={viewMode === 'list' ? 'compact' : 'regular'}
         containerStyle={viewMode === 'list' ? { width: 64, aspectRatio: 2 / 3 } : { width: '100%', aspectRatio: 2 / 3 }}
       />
+      </Pressable>
       <View style={[{ flex: 1, justifyContent: 'space-between', minHeight: 96 }, viewMode === 'grid' && styles.gridCardCopy]}>
-        <View>
+        <Pressable onPress={() => onDetails(item)} accessibilityRole="button" accessibilityLabel={`About ${item.title}`} style={{ minHeight: 48 }}>
           <Text style={styles.rowTitle} numberOfLines={viewMode === 'grid' ? 3 : 2}>
             {item.title}
           </Text>
@@ -98,7 +104,7 @@ export const BookRow = React.memo<RowProps>(({ item, status, disabled, progressP
             {item.author}
           </Text>
           <Text style={styles.rowMeta}>EPUB{item.downloads > 0 ? ` · ${compact(item.downloads)} downloads` : ''}</Text>
-        </View>
+        </Pressable>
         <View style={styles.rowAction}>
           {status === 'added' ? (
             <Pressable onPress={() => onRead(item)} accessibilityRole="button" accessibilityLabel={`Read ${item.title}`} style={[styles.btn, styles.btnOutline]}>
@@ -183,6 +189,21 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     phase: 'downloading' | 'preparing';
     progressPercent: number | null;
   } | null>(null);
+  const [selectedBook, setSelectedBook] = useState<CatalogBook | null>(null);
+  const [detailState, setDetailState] = useState<{ id: string; book?: CatalogBook; error?: string; loading: boolean } | null>(null);
+  const [detailRetry, setDetailRetry] = useState(0);
+  useEffect(() => {
+    if (!selectedBook) return;
+    const controller = new AbortController();
+    setDetailState({ id: selectedBook.id, loading: true });
+    loadCatalogBookDetails(selectedBook, controller.signal).then(book => {
+      if (!controller.signal.aborted) setDetailState({ id: selectedBook.id, book, loading: false });
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setDetailState({ id: selectedBook.id, loading: false,
+        error: error instanceof Error ? error.message : 'Could not load book details.' });
+    });
+    return () => controller.abort();
+  }, [selectedBook, detailRetry]);
   const pendingGet = useRef(false);
   const alive = useRef(true);
   const transfer = useRef<AbortController | null>(null);
@@ -316,6 +337,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       }
       // Prefer the EPUB's permanent embedded art; the catalog is a remote fallback.
       if (!book.coverUrl && item.coverUrl) book.coverUrl = item.coverUrl;
+      if (!book.annotation && item.description) book.annotation = item.description;
       book.coverStyle = 'image';
       await onAddEpubBook(book, pages);
       if (!alive.current) return;
@@ -378,6 +400,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       progressPercent={active?.id === item.id ? active.progressPercent : null}
       onGet={onGet}
       onRead={onRead}
+      onDetails={setSelectedBook}
       viewMode={viewMode}
       cardWidth={cardWidth}
       error={downloadErrors[item.id]}
@@ -385,6 +408,10 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   );
 
   const topicLabel = TOPICS.find((t) => t.id === topicId)?.label ?? 'Popular';
+  const detail = selectedBook && detailState?.id === selectedBook.id ? detailState : null;
+  const detailBook = detail?.book ?? selectedBook;
+  const detailStatus = detailBook ? statusOf(detailBook) : 'get';
+  const detailBusy = detailStatus === 'downloading' || detailStatus === 'preparing';
 
   const empty = loading ? (
     <View style={{ gap: 14 }}>
@@ -549,6 +576,8 @@ export const BrowseBooksScreen: React.FC<Props> = ({
         if (duplicateBook) {
           setDuplicateBook(null);
           pendingGet.current = false;
+        } else if (selectedBook) {
+          setSelectedBook(null);
         } else {
           close();
         }
@@ -558,12 +587,12 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       <View style={[styles.screen, { paddingTop: insets.top }]}>
         {/* Header */}
         <View style={styles.header}>
-          <Pressable onPress={close} disabled={active?.phase === 'preparing'} accessibilityState={{ disabled: active?.phase === 'preparing' }} accessibilityRole="button" style={styles.backBtn} accessibilityLabel="Back to library">
+          <Pressable onPress={() => selectedBook ? setSelectedBook(null) : close()} disabled={!selectedBook && active?.phase === 'preparing'} accessibilityState={{ disabled: !selectedBook && active?.phase === 'preparing' }} accessibilityRole="button" style={styles.backBtn} accessibilityLabel={selectedBook ? 'Back to free books' : 'Back to library'}>
             <Icon name="arrow_back" size={22} color={palette.onSurface} />
           </Pressable>
           <View style={{ flex: 1 }}>
-            <Text style={styles.title}>Free books</Text>
-            <Text style={styles.subtitle}>{CATALOG_SOURCES.find(item => item.id === source)?.description}</Text>
+            <Text accessibilityRole="header" style={styles.title}>{selectedBook ? 'Book details' : 'Free books'}</Text>
+            <Text style={styles.subtitle}>{CATALOG_SOURCES.find(item => item.id === (selectedBook?.source ?? source))?.[selectedBook ? 'label' : 'description']}</Text>
           </View>
         </View>
 
@@ -572,6 +601,9 @@ export const BrowseBooksScreen: React.FC<Props> = ({
           {active.phase === 'downloading' && <Pressable accessibilityRole="button" accessibilityLabel="Cancel book download" onPress={() => transfer.current?.abort()} style={styles.smallAction}><Text style={styles.sortActive}>Cancel download</Text></Pressable>}
         </View>}
         {/* Results */}
+        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1 }} pointerEvents={selectedBook ? 'none' : 'auto'}
+          accessibilityElementsHidden={!!selectedBook} importantForAccessibility={selectedBook ? 'no-hide-descendants' : 'auto'}>
         <FlatList
           key={`${viewMode}-${columns}`}
           accessibilityLabel={`${CATALOG_SOURCES.find(item => item.id === source)?.label} books`}
@@ -608,6 +640,53 @@ export const BrowseBooksScreen: React.FC<Props> = ({
           initialNumToRender={8}
           windowSize={7}
         />
+        </View>
+        {detailBook && <ScrollView key={detailBook.id} style={[StyleSheet.absoluteFill, { backgroundColor: palette.background }]}
+          contentContainerStyle={[styles.detailsContent, { paddingBottom: insets.bottom + 28 }]}>
+          <View style={styles.detailsCover}>
+            <BookCover book={{ title: detailBook.title, author: detailBook.author, coverUrl: detailBook.coverUrl, coverAlt: `Cover for ${detailBook.title}` }} style="image"
+              containerStyle={{ width: 144, aspectRatio: 2 / 3 }} />
+          </View>
+          <Text accessibilityRole="header" selectable style={styles.detailsTitle}>{detailBook.title}</Text>
+          <Text selectable style={styles.detailsAuthor}>{detailBook.author}</Text>
+          <Text style={styles.rowMeta}>{CATALOG_SOURCES.find(item => item.id === (detailBook.source ?? 'gutenberg'))?.label} · EPUB</Text>
+          {detailStatus === 'added' ? (
+            <Pressable onPress={() => handleRead(detailBook)} accessibilityRole="button" accessibilityLabel={`Read ${detailBook.title}`} style={[styles.btn, styles.btnFilled]}>
+              <Text style={[styles.btnText, { color: palette.white }]}>Read book</Text>
+            </Pressable>
+          ) : (
+            <Pressable onPress={() => handleGet(detailBook)} disabled={!!active || detailBusy} accessibilityRole="button"
+              accessibilityLabel={`${downloadErrors[detailBook.id] ? 'Retry downloading' : 'Add'} ${detailBook.title}${downloadErrors[detailBook.id] ? '' : ' to library'}`}
+              accessibilityState={{ disabled: !!active || detailBusy, busy: detailBusy }} style={[styles.btn, styles.btnFilled, !!active && { opacity: 0.6 }]}>
+              <Icon name={detailBusy ? 'sync' : 'download'} size={18} color={palette.white} spin={detailBusy} />
+              <Text style={[styles.btnText, { color: palette.white }]}>{detailStatus === 'preparing' ? 'Preparing…' : detailStatus === 'downloading' ? 'Downloading…' : downloadErrors[detailBook.id] ? 'Retry download' : 'Add to Library'}</Text>
+            </Pressable>
+          )}
+          {detailBusy && <View style={styles.downloadProgress}>
+            <ProgressBar percent={active?.progressPercent ?? 0} height={3} />
+            <Text accessibilityLiveRegion="polite" style={styles.rowMeta}>{detailStatus === 'preparing' ? 'Preparing book…' : `${active?.progressPercent ?? 0}% downloaded`}</Text>
+          </View>}
+          {downloadErrors[detailBook.id] && <Text accessibilityRole="alert" style={styles.rowError}>{downloadErrors[detailBook.id]}</Text>}
+          <View style={styles.detailsSection}>
+            <Text accessibilityRole="header" style={styles.detailsSectionTitle}>About this book</Text>
+            <BookDescription value={detailBook.description} emptyText={detail?.loading !== false ? 'Loading description…' : detail.error ? 'Description could not be loaded.' : 'This source has not provided a description for this edition.'} />
+            {(!detail || detail.loading) && !!detailBook.description && <Text accessibilityLiveRegion="polite" style={styles.rowMeta}>Loading edition details…</Text>}
+            {detail?.error && <View style={{ gap: 8 }}>
+              <Text accessibilityRole="alert" style={styles.rowMeta}>{detail.error}</Text>
+              <Pressable onPress={() => setDetailRetry(value => value + 1)} accessibilityRole="button" accessibilityLabel="Retry book details" style={[styles.btn, styles.btnOutline]}>
+                <Text style={[styles.btnText, { color: palette.primary }]}>Retry details</Text>
+              </Pressable>
+            </View>}
+          </View>
+          {!!detailBook.languages?.length && <View style={styles.detailsSection}>
+            <Text style={styles.detailsSectionTitle}>Language</Text><Text selectable style={styles.subtitle}>{detailBook.languages.join(', ')}</Text>
+          </View>}
+          {!!detailBook.subjects.length && <View style={styles.detailsSection}>
+            <Text style={styles.detailsSectionTitle}>Subjects</Text><Text selectable style={styles.subtitle}>{detailBook.subjects.join(' · ')}</Text>
+          </View>}
+          {detailBook.downloads > 0 && <Text style={styles.rowMeta}>{detailBook.downloads.toLocaleString()} downloads from this source</Text>}
+        </ScrollView>}
+        </View>
         {duplicateBook ? (
           <View style={styles.confirmationOverlay}>
             <Pressable
@@ -669,6 +748,12 @@ export const BrowseBooksScreen: React.FC<Props> = ({
 const createStyles = (p: AppPalette) =>
   StyleSheet.create({
     screen: { flex: 1, backgroundColor: p.background, gap: 8 },
+    detailsContent: { padding: 20, gap: 12 },
+    detailsCover: { alignItems: 'center', paddingVertical: 8 },
+    detailsTitle: { ...type.headlineSm, color: p.onSurface, textAlign: 'center' },
+    detailsAuthor: { ...type.bodyMd, color: p.muted, textAlign: 'center' },
+    detailsSection: { gap: 10, padding: 16, borderRadius: 12, backgroundColor: p.surfaceLow },
+    detailsSectionTitle: { ...type.labelLg, color: p.onSurface },
     header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 8 },
     backBtn: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
     title: { ...type.headlineSm, color: p.onSurface },
