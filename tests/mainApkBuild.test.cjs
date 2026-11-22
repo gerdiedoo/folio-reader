@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { test } = require('node:test');
 const yaml = require('yaml');
-const { mainBuildConfiguration } = require('../scripts/build-main-apk.cjs');
+const { mainBuildConfiguration, findExistingMainSettings, KNOWN_MAIN_HOST } = require('../scripts/build-main-apk.cjs');
 const profiles = require('../eas.json').build;
 const env = {
   RUNNER_TEMP: '/tmp/folio-main-test', EXPO_PUBLIC_APP_VARIANT: 'development',
@@ -50,4 +50,28 @@ test('main workflow loads Expo production values before enabling the guarded bui
   assert.match(compile.run, /eas env:exec production 'node scripts\/build-main-apk.cjs' --non-interactive/);
   assert.match(steps.find(step => step.name === 'Verify main package and APK signature').run, /com\.folio\.reader/);
   assert.equal(workflow.jobs['android-smoke'].env.FOLIO_ANDROID_PACKAGE, 'com.folio.reader');
+});
+
+test('missing production settings can reuse only an existing public client pair for the known main project', () => {
+  const calls = [], missing = { RUNNER_TEMP: '/tmp/folio-main-test' };
+  const candidate = { url: `https://${KNOWN_MAIN_HOST}`, key: env.EXPO_PUBLIC_SUPABASE_KEY };
+  const execute = (_command, args) => {
+    calls.push(args);
+    return { status: 0, stdout: 'FOLIO_MAIN_CLIENT=' + JSON.stringify(candidate) };
+  };
+  const actual = findExistingMainSettings(missing, execute);
+  assert.equal(actual.EXPO_PUBLIC_SUPABASE_URL, candidate.url);
+  assert.equal(actual.EXPO_PUBLIC_SUPABASE_KEY, candidate.key);
+  assert.equal(calls[0][1], 'preview');
+  assert.equal(findExistingMainSettings(env, () => assert.fail('No lookup required')), env);
+});
+
+test('other projects, Dev client values, unreadable settings and conflicting production values are never substituted', () => {
+  const missing = { RUNNER_TEMP: '/tmp/folio-main-test' };
+  for (const candidate of [null, { url: 'https://other-project.supabase.co', key: env.EXPO_PUBLIC_SUPABASE_KEY },
+    { url: `https://${KNOWN_MAIN_HOST}`, key: 'sb_secret_do_not_bundle' }]) {
+    assert.equal(findExistingMainSettings(missing, () => ({ status: 0, stdout: 'FOLIO_MAIN_CLIENT=' + JSON.stringify(candidate) })), missing);
+  }
+  const partial = { ...missing, EXPO_PUBLIC_SUPABASE_URL: 'https://different-main.supabase.co' };
+  assert.equal(findExistingMainSettings(partial, () => ({ status: 0, stdout: 'FOLIO_MAIN_CLIENT=' + JSON.stringify({ url: `https://${KNOWN_MAIN_HOST}`, key: env.EXPO_PUBLIC_SUPABASE_KEY }) })), partial);
 });

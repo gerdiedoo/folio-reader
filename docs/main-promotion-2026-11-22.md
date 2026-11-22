@@ -82,6 +82,11 @@ guarded build profile is evaluated. They must have **Plain text** or **Sensitive
 visibility on Expo, because EAS local builds cannot download variables marked
 **Secret**. Only a publishable or legacy anon client key may enter the bundle.
 This workflow never substitutes the Dev backend or uploads signing files.
+If production values are absent, it can reuse an existing complete client pair
+from Expo preview/development only when it matches Folio's known original main
+project, uses a public client key and does not conflict with a configured
+production value. These lookups are captured without printing values; no Expo
+environment is modified. Missing or unrelated settings still stop compilation.
 
 Download **folio-main-apk** from the successful main workflow run, extract the
 ZIP and install `folio.apk` over the installed main Folio app. Keep Folio Dev

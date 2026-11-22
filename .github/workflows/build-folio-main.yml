@@ -13,6 +13,7 @@ on:
       - src/**
       - plugins/**
       - scripts/build-main-apk.cjs
+      - scripts/read-main-client-settings.cjs
       - scripts/report-eas-build-error.cjs
       - scripts/device-checks/**
       - assets/**
