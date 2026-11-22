@@ -13,6 +13,7 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 from adb_session import ensure_emulator_root
+from tap_geometry import exposed_book_point
 PACKAGE='com.folio.reader.dev'
 OUT=pathlib.Path(os.environ.get('FOLIO_ANDROID_EVIDENCE','/tmp/folio-android-evidence'));OUT.mkdir(parents=True,exist_ok=True)
 def adb(*args,check=True):
@@ -50,12 +51,16 @@ def reveal_library_book(label):
     for _ in range(5):
         node=find(label,contains=True)
         box=list(map(int,re.findall(r'\d+',node.get('bounds',''))))
-        if len(box)==4 and height*.25<=(box[1]+box[3])/2<=height*.65:
-            return node
+        tabs=[list(map(int,re.findall(r'\d+',item.get('bounds','')))) for item in nodes()
+              if item.get('content-desc') in ['Library','Reading','Notebook','Settings']]
+        tab_top=min((bounds[1] for bounds in tabs if len(bounds)==4 and bounds[1]>height*.5),default=None)
+        point=exposed_book_point(box,width,height,tab_top) if len(box)==4 else None
+        if point:
+            return point
         adb('shell','input','swipe',str(width//2),str(int(height*.70)),
             str(width//2),str(int(height*.35)),'500')
         time.sleep(.5)
-    raise AssertionError('Imported Library book could not be scrolled clear of navigation')
+    raise AssertionError(f'Imported Library book has no exposed tap point: bounds={box}, tabs={tab_top}, screen={width}x{height}')
 def screenshot(name): (OUT/(name+'.png')).write_bytes(adb('exec-out','screencap','-p'))
 def launch():
     result=adb('shell','am','start','-W','-n',PACKAGE+'/.MainActivity')
@@ -101,9 +106,9 @@ def run():
         tap('Downloads')
         tap('folio-device-journey.epub')
     find('Folio device journey by Folio test fixture.',contains=True,timeout=45)
-    book_node=reveal_library_book('Folio device journey by Folio test fixture.')
+    book_point=reveal_library_book('Folio device journey by Folio test fixture.')
     screenshot('02-imported-library')
-    tap_node(book_node)
+    adb('shell','input','tap',*map(str,book_point));time.sleep(.4)
     tap('Read Folio device journey')
     find('Scroll reading mode');find('Circle on warm paper');screenshot('03-rich-reader')
     tap('Save bookmark for this passage')
