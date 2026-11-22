@@ -103,8 +103,8 @@ export const Header: React.FC<HeaderProps> = ({
           ) : null}
 
           {!detailsTitle ? (
-            <Pressable onPress={() => onTabChange('library')} accessibilityRole="button" accessibilityLabel="Folio Library" style={[styles.brand, activeTab === 'library' && styles.libraryWordmark]}>
-              {activeTab !== 'library' && <Image testID="folio-header-mark" source={FOLIO_LOGO} accessible={false} style={styles.logo} resizeMode="contain" />}
+            <Pressable onPress={() => onTabChange('library')} accessibilityRole="button" accessibilityLabel="Folio Library" style={styles.brand}>
+              <Image testID="folio-header-mark" source={FOLIO_LOGO} accessible={false} style={styles.logo} resizeMode="contain" />
               <View style={{ flexShrink: 1 }}>
                 <Text style={[styles.brandLabel, { color: palette.muted }]}>FOLIO</Text>
                 <Text style={[styles.title, { color: palette.onSurface }]} numberOfLines={1}>
@@ -168,7 +168,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minHeight: 48 },
-  libraryWordmark: { paddingLeft: 40 },
   logo: { height: 32, width: 32, backgroundColor: '#F7F2E9', borderRadius: 7 },
   brandLabel: { ...type.labelSm, color: colors.muted, lineHeight: 12, letterSpacing: 1.2 },
   title: { ...type.headlineSm, color: colors.onSurface, lineHeight: 24, marginTop: 2 },

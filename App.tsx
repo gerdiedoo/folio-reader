@@ -66,7 +66,9 @@ import {
   rememberAdded as rememberAddedForStore,
   LibraryBackupEntry,
 } from './src/lib/catalog';
-import { signInWithGoogle, signOutSupabase, supabase, toUserProfile, SUPABASE_URL } from './src/lib/supabase';
+import { handleAuthCallback, signInWithGoogle, signOutSupabase, supabase, toUserProfile, SUPABASE_URL } from './src/lib/supabase';
+import * as Linking from 'expo-linking';
+import { watchNativeAuth } from './src/lib/nativeAuth';
 import { colors, NAV_SPACE } from './src/theme';
 import { AppThemeProvider, createPalette } from './src/AppTheme';
 import { MotionPreferencesProvider } from './src/MotionPreferences';
@@ -120,8 +122,8 @@ function applySavedReadingProgress(book: Book, entry: LibraryBackupEntry): Book 
 }
 
 type PortableJob = { kind: 'export'; includeOriginals: boolean } | { kind: 'restore'; backup: PreparedBackup; preferences: boolean; recoverMatching?: boolean } | { kind: 'remove'; bookId: string };
-interface ReadingSpaceProps { user: UserProfile | null; scope: string; hasLegacyData: boolean }
-function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: ReadingSpaceProps & { onPortableJob: (job: PortableJob) => void; onRemovalJob: (bookId: string) => Promise<BookRemovalResult> }) {
+interface ReadingSpaceProps { user: UserProfile | null; scope: string; hasLegacyData: boolean; authError?: string; onClearAuthError?: () => void }
+function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onPortableJob, onRemovalJob }: ReadingSpaceProps & { onPortableJob: (job: PortableJob) => void; onRemovalJob: (bookId: string) => Promise<BookRemovalResult> }) {
   const storage = useMemo(() => createReplicatedStore(createLocalStore(scope), randomUUID, Boolean(user)), [scope]);
   const { loadJSON, removeBookFiles, saveJSON, savePages } = storage;
   const pageCache = useMemo(() => createBookPageCache(storage.loadPages, 2), [storage]);
@@ -242,6 +244,7 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
   const [isSettingsSheetOpen, setIsSettingsSheetOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  useEffect(() => { if (authError) setIsProfileOpen(true); }, [authError]);
   const [libraryBookmarksOpen, setLibraryBookmarksOpen] = useState(false);
   const [syncReviewOpen, setSyncReviewOpen] = useState(false);
   const [dictionaryState, setDictionaryState] = useState<{ isOpen: boolean; word: string; context?: string; bookId?: string; source?: { page: number; chapter: string; anchor?: SourceAnchor } }>({
@@ -443,6 +446,7 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
 
   // ---- Auth ----
   const handleGoogleSignIn = async () => {
+    onClearAuthError?.();
     await signInWithGoogle();
   };
   const handleSignOut = async () => {
@@ -1027,6 +1031,7 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
         <ProfileModal
           goal={readingGoal}
           hasLegacyData={hasLegacyData}
+          authError={authError}
           libraryStatus={libraryStatus}
           bookCount={books.length}
           user={user}
@@ -1175,6 +1180,9 @@ function AccountBoundary() {
   const [error, setError] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [hasLegacyData, setHasLegacyData] = useState(false);
+  const [authError, setAuthError] = useState<string | undefined>();
+  useEffect(() => watchNativeAuth(supabase.auth, { appState: AppState, linking: Linking }, handleAuthCallback,
+    error => setAuthError(error instanceof Error ? error.message : 'Your sign-in could not be completed. Please try again.')), []);
   useEffect(() => {
     let active = true;
     void Promise.all(['books', 'highlights', 'lexicon', 'bookmarks'].map(key => AsyncStorage.getItem(`folio.v1.${key}`)))
@@ -1197,7 +1205,7 @@ function AccountBoundary() {
     </View>
   );
   const scope = `${new URL(SUPABASE_URL || 'https://unconfigured.invalid').hostname}:${identity.user?.id ?? 'guest'}`;
-  return <ReadingSpace key={scope} scope={scope} user={identity.user} hasLegacyData={hasLegacyData} />;
+  return <ReadingSpace key={scope} scope={scope} user={identity.user} hasLegacyData={hasLegacyData} authError={authError} onClearAuthError={() => setAuthError(undefined)} />;
 }
 
 export default function App() {

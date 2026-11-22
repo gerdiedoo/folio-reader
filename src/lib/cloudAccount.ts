@@ -21,14 +21,15 @@ export function createAccountRepository(supabase: SupabaseClient, ownerId: strin
   }
   async function saveLibraryBackup(userId: string, books: LibraryBackupEntry[]): Promise<void> {
     if (userId !== ownerId || !await ownsSession()) { throw new Error('Sign in to this account before backing up.'); }
-    const { error } = await supabase.from('library_backups').upsert(
+    const { data, error } = await supabase.from('library_backups').upsert(
       { user_id: userId, books, updated_at: new Date().toISOString() },
       { onConflict: 'user_id' }
-    );
+    ).select('user_id').single();
     if (error) {
       console.warn('Supabase library backup failed:', error.message);
       throw new Error(`Could not back up your library: ${error.message}`);
     }
+    if (data?.user_id !== ownerId) throw new Error('The server did not confirm your library backup. Please try again.');
   }
 
   async function fetchLibraryBackup(userId: string): Promise<LibraryBackupEntry[] | null> {
@@ -42,13 +43,14 @@ export function createAccountRepository(supabase: SupabaseClient, ownerId: strin
       console.warn('Supabase library restore lookup failed:', error.message);
       throw new Error(`Could not load your library backup: ${error.message}`);
     }
-    if (!data || !Array.isArray(data.books)) return null;
-
-    return data.books.filter((entry): entry is LibraryBackupEntry => {
+    if (!data) return null;
+    if (!Array.isArray(data.books) || !data.books.every((entry: unknown) => {
       if (!entry || typeof entry !== 'object') return false;
       const candidate = entry as Partial<LibraryBackupEntry>;
       return typeof candidate.title === 'string' && typeof candidate.author === 'string';
-    }).map((entry) => ({
+    })) throw new Error('Your account backup could not be read safely. It has been kept unchanged; try again or use a portable safety copy.');
+
+    return (data.books as LibraryBackupEntry[]).map((entry) => ({
       title: entry.title,
       author: entry.author,
       ...(typeof entry.gutenbergId === 'number' && Number.isInteger(entry.gutenbergId)

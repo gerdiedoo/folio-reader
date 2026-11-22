@@ -13,6 +13,7 @@ import { ProgressBar } from './ui/ProgressBar';
 interface ProfileModalProps {
   goal: ReadingGoal;
   hasLegacyData?: boolean;
+  authError?: string;
   libraryStatus: 'loading' | 'ready' | 'error';
   bookCount: number;
   user: UserProfile | null;
@@ -51,7 +52,7 @@ const GoogleG: React.FC = () => (
 );
 
 export const ProfileModal: React.FC<ProfileModalProps> = ({
-  goal, hasLegacyData = false,
+  goal, hasLegacyData = false, authError,
   libraryStatus,
   bookCount,
   user,
@@ -139,6 +140,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       </View>
 
       <ScrollView style={{ flexShrink: 1, minHeight: 0 }} keyboardShouldPersistTaps="handled">
+        {authError && !actionError && <Text accessibilityRole="alert" style={styles.feedback}>{authError}</Text>}
         {actionError && <Text accessibilityRole="alert" style={styles.feedback}>{actionError}</Text>}
         {actionMessage && <Text accessibilityLiveRegion="polite" style={styles.feedback}>{actionMessage}</Text>}
         <View style={styles.userCard}>

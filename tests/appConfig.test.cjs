@@ -17,7 +17,7 @@ const production = { url: 'https://production.example.com', key: 'production-pub
 const development = { url: 'https://test.example.com', key: 'test-publishable-key' };
 
 function config(env) {
-  const keys = ['EXPO_PUBLIC_APP_VARIANT', 'EAS_BUILD_PROFILE', 'EXPO_PUBLIC_DEV_SUPABASE_URL', 'EXPO_PUBLIC_DEV_SUPABASE_KEY'];
+  const keys = ['EXPO_PUBLIC_APP_VARIANT', 'EAS_BUILD_PROFILE', 'EXPO_PUBLIC_DEV_SUPABASE_URL', 'EXPO_PUBLIC_DEV_SUPABASE_KEY', 'EXPO_PUBLIC_SUPABASE_URL', 'EXPO_PUBLIC_SUPABASE_KEY'];
   const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   try {
     for (const key of keys) {
@@ -34,8 +34,19 @@ function config(env) {
 }
 
 test('default and production identities remain unchanged', () => {
-  assert.deepEqual(config({}), base);
-  assert.deepEqual(config({ EXPO_PUBLIC_APP_VARIANT: 'production' }), base);
+  const expected = { ...base, plugins: [...base.plugins, './plugins/withReaderStorage'] };
+  assert.deepEqual(config({}), expected);
+  assert.deepEqual(config({ EXPO_PUBLIC_APP_VARIANT: 'production' }), expected);
+});
+
+test('production builds require the main backend and cannot bundle the Folio Dev project', () => {
+  const env = { EXPO_PUBLIC_APP_VARIANT: 'production', EAS_BUILD_PROFILE: 'production' };
+  assert.throws(() => config(env), /Configure EXPO_PUBLIC_SUPABASE/);
+  const credentials = { EXPO_PUBLIC_SUPABASE_URL: production.url, EXPO_PUBLIC_SUPABASE_KEY: production.key };
+  assert.equal(config({ ...env, ...credentials }).scheme, 'folio');
+  assert.throws(() => config({ ...env, ...credentials, EXPO_PUBLIC_SUPABASE_URL: 'https://ntdhzgjkmfohgjzymdgh.supabase.co' }), /main Folio app/);
+  assert.throws(() => config({ ...env, ...credentials, EXPO_PUBLIC_SUPABASE_URL: 'http://production.example.com' }), /HTTPS/);
+  assert.ok(config({ ...env, ...credentials }).plugins.includes('./plugins/withReaderStorage'));
 });
 
 test('Folio Dev installs independently and owns a separate OAuth scheme', () => {

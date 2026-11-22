@@ -24,20 +24,20 @@ const payloads = {
   upsertReadingSettingsToSupabase: { font: 'Literata', user_id: B },
 };
 function client() {
-  const state = { user: A, queries: [], data: null, error: null, authError: null };
+  const state = { user: A, queries: [], data: null, error: null, authError: null, acknowledgeBackup: true };
   return {
     state,
     auth: { async getSession() { return { data: { session: state.user ? { user: { id: state.user } } : null }, error: state.authError }; } },
     from(table) {
       const query = { table, filters: [], operation: '' }; state.queries.push(query);
       const builder = {
-        select(columns) { query.operation = 'select'; query.columns = columns; return builder; },
+        select(columns) { if (!query.operation) query.operation = 'select'; query.columns = columns; return builder; },
         eq(key, value) { query.filters.push([key, value]); return builder; },
         upsert(value, options) { query.operation = 'upsert'; query.value = value; query.options = options; return builder; },
         delete() { query.operation = 'delete'; return builder; },
         order() { return builder; }, limit() { return builder; },
         single() { return builder; }, maybeSingle() { return builder; },
-        then(resolve, reject) { return Promise.resolve({ data: state.data, error: state.error }).then(resolve, reject); },
+        then(resolve, reject) { return Promise.resolve({ data: state.data ?? (table === 'library_backups' && query.operation === 'upsert' && state.acknowledgeBackup ? { user_id: query.value.user_id } : null), error: state.error }).then(resolve, reject); },
       };
       return builder;
     },
@@ -110,6 +110,31 @@ test('backup APIs cannot be pointed at a different account', async () => {
   await repo.saveLibraryBackup(A, []); await repo.fetchLibraryBackup(A);
   assert.equal(c.state.queries[0].value.user_id, A);
   assert.deepEqual(c.state.queries[1].filters, [['user_id', A]]);
+});
+
+test('backup saves require a server acknowledgement for the captured owner', async () => {
+  const c = client(), repo = createAccountRepository(c, A);
+  const books = [{ title: 'A book', author: 'An author', gutenbergId: 1342, currentPage: 3 }];
+  await repo.saveLibraryBackup(A, books);
+  assert.deepEqual(c.state.queries[0].value.books, books);
+  assert.equal(c.state.queries[0].columns, 'user_id');
+  c.state.acknowledgeBackup = false;
+  await assert.rejects(repo.saveLibraryBackup(A, books), /did not confirm/);
+  c.state.data = { user_id: B };
+  await assert.rejects(repo.saveLibraryBackup(A, books), /did not confirm/);
+  c.state.error = { message: 'permission denied' };
+  await assert.rejects(repo.saveLibraryBackup(A, books), /permission denied/);
+});
+
+test('missing backups and valid empty backups differ from unreadable backups; invalid entries are never silently dropped', async () => {
+  const c = client(), repo = createAccountRepository(c, A);
+  assert.equal(await repo.fetchLibraryBackup(A), null);
+  c.state.data = { books: [] }; assert.deepEqual(await repo.fetchLibraryBackup(A), []);
+  for (const books of [null, 'unreadable', [{ title: 'Good', author: 'Author' }, { title: 'Missing author' }]]) {
+    c.state.data = { books }; await assert.rejects(repo.fetchLibraryBackup(A), /read safely/);
+  }
+  c.state.data = { books: [{ title: 'Good', author: 'Author', gutenbergId: 1342, progressPercent: 30 }] };
+  assert.deepEqual(await repo.fetchLibraryBackup(A), c.state.data.books);
 });
 
 test('a failed connection is not reported as connected', async () => {

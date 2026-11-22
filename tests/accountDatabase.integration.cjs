@@ -72,6 +72,13 @@ test('PostgreSQL account isolation, migration and legacy preservation', { timeou
       sql(role(B, denied(`insert into public.library_backups(user_id,books) values ('${A}','[]') on conflict(user_id) do update set books=excluded.books`)));
       sql(role(B, check(`(select count(*)=1 and bool_and(user_id='${B}') from public.library_backups)`, 'Backup visibility leaked')));
     });
+    await t.test('account backup upsert returns its owner and restores the exact JSON without crossing accounts', () => {
+      const books = [{ title: 'Backup edition', author: 'Test author', gutenbergId: 1342, currentPage: 3, progressPercent: 32 }];
+      const encoded = JSON.stringify(books);
+      sql(role(A, `insert into public.library_backups(user_id,books) values ('${A}','${encoded}') on conflict(user_id) do update set books=excluded.books returning user_id;`));
+      sql(role(A, check(`(select books='${encoded}'::jsonb from public.library_backups where user_id='${A}')`, 'Backup did not round-trip')));
+      sql(role(B, check(`(select books='[]'::jsonb from public.library_backups where user_id='${B}')`, 'Other account backup was altered')));
+    });
     await t.test('anonymous clients and authenticated clients cannot read quarantined shared tables', () => {
       for (const table of [...tables, ...tables.map(name => 'folio_' + name), 'library_backups']) sql(`set role anon; ${denied(`select * from public.${table}`)} reset role;`);
       for (const table of tables) sql(role(A, denied(`select * from public.${table}`)));

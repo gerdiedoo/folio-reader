@@ -2505,6 +2505,13 @@ test('account failures stay visible and permit retry; authentication errors do n
   assert.match(renderedText(root), /Connection interrupted/); assert.doesNotMatch(renderedText(root), /Authorized redirect URI/); assert.equal(labelled(root, 'Sign in with Google').disabled, false); other.h.unmount();
 });
 
+test('cold-start authentication errors remain readable in Account with sign-in available', () => {
+  const f = accountHarness({ user: null, authError: 'Google sign-in was declined. Please try again.' });
+  const root = f.render();
+  assert.ok(elements(root).some(node => node.props?.accessibilityRole === 'alert' && node.props.children === f.props.authError));
+  assert.equal(labelled(root, 'Sign in with Google').disabled, false); f.h.unmount();
+});
+
 test('account restore progress/results ignore late callbacks from an earlier operation', async () => {
   let progress, finishBackup;
   const f = accountHarness({ onRestoreLibrary: async callback => { progress = callback; return { restored: 0, alreadyInLibrary: 0, skipped: 0, lookupFailed: 0, failures: [] }; }, onBackupLibrary: () => new Promise(done => { finishBackup = done; }) });
@@ -2587,11 +2594,11 @@ test('account-removal retries back off, pause in background, and cancel late wor
   late.render(() => hook({}, {}, true, '1')); late.unmount(); const writes = late.stateWrites(); resolve({ pending: 1, failed: 1 }); await new Promise(done => setImmediate(done)); assert.equal(late.stateWrites(), writes); assert.equal(late.timers.size, 0);
 });
 
-test('Library keeps the text wordmark action and other headers retain their bundled offline mark', () => {
+test('Library and other headers keep their bundled offline mark and named Library action', () => {
   const h = harness(); const { Header } = h.load('../src/components/Header.tsx'); const selected = [];
   const props = { activeTab: 'library', onTabChange: value => selected.push(value), onOpenSearch() {}, onOpenProfile() {} };
   const root = h.render(Header, props);
-  assert.equal(elements(root).some(node => node.props?.testID === 'folio-header-mark'), false);
+  assert.equal(elements(root).some(node => node.props?.testID === 'folio-header-mark'), true);
   labelled(root, 'Folio Library').onPress(); assert.deepEqual(selected, ['library']);
   const other = h.render(Header, { ...props, activeTab: 'notebook' });
   const mark = elements(other).find(node => node.props?.testID === 'folio-header-mark');
