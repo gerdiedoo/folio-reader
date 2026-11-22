@@ -70,10 +70,10 @@ jobs:
         run: npm run typecheck
       # A known APK may be reused for workflow-only fixes. Any changed build
       # input, unavailable artifact, or expired artifact falls back to compilation.
-      - name: Check whether application inputs match the verified APK
+      - name: Check whether application inputs match the compiled APK
         id: matching-apk
         run: |
-          baseline=43864d2939ee22926a3b4cd60a8ee40005d3ddb4
+          baseline=a394cbf2301f5b2cb84a87b0fa8bea40e8160462
           if git fetch --no-tags --depth=1 origin "$baseline"; then
             if [ "$(node scripts/compare-apk-inputs.cjs "$baseline")" = true ]; then echo 'eligible=true' >> "$GITHUB_OUTPUT"; fi
           fi
@@ -84,7 +84,7 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7, Node 24
         with:
           name: folio-dev-apk
-          run-id: 44958391360
+          run-id: 44996211828
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}
       - name: Check Expo token is configured
@@ -183,7 +183,7 @@ jobs:
             'This does not use an Expo cloud Android build slot. The artifact is kept for 7 days.',
             '',
             `Reviewed source commit: ${process.env.GITHUB_SHA}`,
-            process.env.APK_REUSED === 'true' ? 'The signed APK was reused from run 44958391360 after verifying that all application build inputs match.' : 'The APK was compiled in this run.',
+            process.env.APK_REUSED === 'true' ? 'The signed APK was reused from run 44996211828 after verifying that all application build inputs match.' : 'The APK was compiled in this run.',
             '',
             'Use the phone checklist in docs/android-testing.md.',
             '',
@@ -220,6 +220,8 @@ jobs:
         with:
           name: folio-dev-apk
           path: ${{ runner.temp }}
+      - name: Check emulator reconnection handling
+        run: python3 -m unittest discover -s scripts/device-checks -p 'test_*.py'
       - name: Start disposable Android emulator
         timeout-minutes: 15
         run: bash scripts/device-checks/start-emulator.sh

@@ -27,6 +27,13 @@ native interaction result; inspect the smoke step and evidence separately.
 TalkBack, two-device synchronization, actual phone sharing and iOS remain manual
 checks. No public evidence should contain real reading data or credentials.
 
+The emulator journey verifies root access before opening Folio so it can inspect
+the disposable Guest database. It reconnects after `adb root` restarts the device
+daemon and checks the actual UID rather than assuming the command succeeded.
+Failures include the command output; a production Google Play system image cannot
+provide root and must not be substituted for the configured `google_apis` image.
+These privileges are only required on the test emulator, never on your phone.
+
 ## Step 27 APK batch
 
 This APK includes steps 22–27, including the previously local-only UI, Notebook,

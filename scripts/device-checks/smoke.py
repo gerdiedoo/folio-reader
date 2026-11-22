@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
+from adb_session import ensure_emulator_root
 PACKAGE='com.folio.reader.dev'
 OUT=pathlib.Path(os.environ.get('FOLIO_ANDROID_EVIDENCE','/tmp/folio-android-evidence'));OUT.mkdir(parents=True,exist_ok=True)
 def adb(*args,check=True):
@@ -72,7 +73,7 @@ def pause_snapshot(expected_bookmark=None):
     return library_record(expected_bookmark)
 
 def run():
-    adb('root');adb('wait-for-device')
+    ensure_emulator_root()
     launch();find('Folio Library',timeout=60);screenshot('01-empty-library')
     tap('Import EPUB')
     # Recent files often already contains the pushed EPUB. Only navigate roots
