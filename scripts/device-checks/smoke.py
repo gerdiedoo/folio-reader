@@ -93,6 +93,35 @@ def pause_snapshot(expected_bookmark=None):
     adb('shell','input','keyevent','KEYCODE_HOME');time.sleep(1.5)
     return library_record(expected_bookmark)
 
+def check_library_search():
+    field='Search Library by title or author'
+    book='Folio device journey by Folio test fixture.'
+    tap('Search Library');find(field)
+    adb('shell','input','text','Folio');time.sleep(.4)
+    assert find(field).get('text')=='Folio', 'Library input lost the typed title'
+    adb('shell','input','text','%sdevice');time.sleep(.4)
+    assert find(field).get('text')=='Folio device', 'Library input lost focus between keystrokes'
+    find(book,contains=True)
+    tap('Clear Library search');adb('shell','input','text','zzzzmissingbook');time.sleep(.4)
+    find('No books match this search and filter. Try another title or author.')
+    tap('Clear Library search');adb('shell','input','text','Folio%stest%sfixture');time.sleep(.4)
+    normal=list(map(int,re.findall(r'\d+',find(book,contains=True).get('bounds',''))))
+    tap('3-column grid')
+    dense=list(map(int,re.findall(r'\d+',find(book,contains=True).get('bounds',''))))
+    assert dense[2]-dense[0]<normal[2]-normal[0], 'Three columns did not make Library cards smaller'
+    assert find(field).get('text')=='Folio test fixture', 'Changing columns reset the author search'
+    screenshot('02b-library-search-three-columns')
+    tap('2-column grid');tap('Hide Library search')
+
+def check_free_books_controls():
+    tap('Browse free books')
+    field='Search free books by title or author'
+    tap(field);adb('shell','input','text','shelley');time.sleep(.4)
+    tap('3-column grid')
+    assert find(field).get('text')=='shelley', 'Changing free-book columns reset the search'
+    screenshot('02c-free-books-layout')
+    tap('2-column grid');tap('Back to library')
+
 def run():
     ensure_emulator_root()
     launch();find('Folio Library',timeout=60);screenshot('01-empty-library')
@@ -108,6 +137,8 @@ def run():
         tap('Downloads')
         tap('folio-device-journey.epub')
     find('Folio device journey by Folio test fixture.',contains=True,timeout=45)
+    check_library_search()
+    check_free_books_controls()
     book_point=reveal_library_book('Folio device journey by Folio test fixture.')
     screenshot('02-imported-library')
     adb('shell','input','tap',*map(str,book_point));time.sleep(.4)
@@ -134,7 +165,12 @@ def run():
     adb('shell','settings','put','system','font_scale','1.0')
     adb('shell','am','force-stop',PACKAGE);launch();find('Folio Library');tap('Notebook');find('A synthetic reflection',contains=True)
     screenshot('08-reflection-after-restart')
-    (OUT/'result.json').write_text(json.dumps({'passed':True,'checks':['native import','rich reader render','bookmark persistence control','scroll close/reopen position','process restart position','reflection creation and restart','large text rendering capture'],'talkback':'requires phone testing','book':before['id']},indent=2))
+    tap('Search Archive');tap('Search saved books, quotes, notes and vocabulary')
+    adb('shell','input','text','Folio');time.sleep(.4)
+    find('Open book details for Folio device journey by Folio test fixture')
+    screenshot('09-archive-search-results')
+    tap('Open book details for Folio device journey by Folio test fixture');find('Read Folio device journey')
+    (OUT/'result.json').write_text(json.dumps({'passed':True,'checks':['native import','Library title/author search and typing focus','Library missing-result recovery','two/three-column grid with search retained','free-books search and column controls','rich reader render','bookmark persistence control','scroll close/reopen position','process restart position','reflection creation and restart','large text rendering capture','global archive book results and navigation'],'talkback':'requires phone testing','book':before['id']},indent=2))
 try:run()
 except Exception as error:
     try:

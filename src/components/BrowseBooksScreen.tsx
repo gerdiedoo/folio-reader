@@ -17,15 +17,15 @@ import {
   TOPICS,
 } from '../lib/catalog';
 import { ImportStorageError } from '../lib/bookImport';
+import { bookShelfLayout, type ShelfColumns } from '../lib/bookShelfLayout';
 import type { LocalStore } from '../lib/localStore';
 import { parseEpubFile } from '../lib/epubParser';
 import { F, type } from '../theme';
 import { Book, BookContentPage } from '../types';
 import { BookCover } from './BookCover';
 import { BookDescription } from './BookDescription';
-import { Chip } from './ui/Chip';
 import { Icon } from './ui/Icon';
-import { choiceAppearance, choiceStyles } from './ui/choiceStyles';
+import { renderShelfChip, renderShelfSort, renderShelfViewOptions, shelfStyles } from './ui/ShelfControls';
 import { ProgressBar } from './ui/ProgressBar';
 
 interface Props {
@@ -34,6 +34,8 @@ interface Props {
   availableBookIds: readonly string[];
   viewMode: BrowseViewMode;
   onViewModeChange: (mode: BrowseViewMode) => void;
+  gridColumns: ShelfColumns;
+  onGridColumnsChange: (columns: ShelfColumns) => void;
   onAddEpubBook: (book: Book, pages: BookContentPage[]) => Promise<void>;
   onOpenBook: (bookId: string) => void;
   showToast: (msg: string) => void;
@@ -77,9 +79,10 @@ interface RowProps {
   viewMode: BrowseViewMode;
   cardWidth: number;
   error?: string;
+  dense?: boolean;
 }
 
-export const BookRow = React.memo<RowProps>(({ item, status, disabled, progressPercent, onGet, onRead, onDetails, viewMode, cardWidth, error }) => {
+export const BookRow = React.memo<RowProps>(({ item, status, disabled, progressPercent, onGet, onRead, onDetails, viewMode, cardWidth, error, dense }) => {
   const palette = useAppTheme();
   const styles = useMemo(() => createStyles(palette), [palette]);
   const busy = status === 'downloading' || status === 'preparing';
@@ -91,38 +94,39 @@ export const BookRow = React.memo<RowProps>(({ item, status, disabled, progressP
       <BookCover
         book={{ title: item.title, author: item.author, coverUrl: item.coverUrl, coverAlt: `Cover for ${item.title}` }}
         style="image"
+        variant={viewMode === 'grid' ? 'library' : 'default'}
         size={viewMode === 'list' ? 'compact' : 'regular'}
         containerStyle={viewMode === 'list' ? { width: 64, aspectRatio: 2 / 3 } : { width: '100%', aspectRatio: 2 / 3 }}
       />
       </Pressable>
-      <View style={[{ flex: 1, justifyContent: 'space-between', minHeight: 96 }, viewMode === 'grid' && styles.gridCardCopy]}>
+      <View style={{ flex: 1, justifyContent: 'space-between', minHeight: viewMode === 'grid' ? 0 : 96 }}>
         <Pressable onPress={() => onDetails(item)} accessibilityRole="button" accessibilityLabel={`About ${item.title}`} style={{ minHeight: 48 }}>
-          <Text style={styles.rowTitle} numberOfLines={viewMode === 'grid' ? 3 : 2}>
+          <Text style={[viewMode === 'grid' ? styles.shelfTitle : styles.rowTitle, dense && shelfStyles.denseTitle]} numberOfLines={2}>
             {item.title}
           </Text>
-          <Text style={styles.rowAuthor} numberOfLines={1}>
+          <Text style={[viewMode === 'grid' ? styles.shelfAuthor : styles.rowAuthor, dense && shelfStyles.denseAuthor]} numberOfLines={viewMode === 'grid' ? 2 : 1}>
             {item.author}
           </Text>
-          <Text style={styles.rowMeta}>EPUB{item.downloads > 0 ? ` · ${compact(item.downloads)} downloads` : ''}</Text>
+          {viewMode === 'list' && <Text style={styles.rowMeta}>EPUB{item.downloads > 0 ? ` · ${compact(item.downloads)} downloads` : ''}</Text>}
         </Pressable>
         <View style={styles.rowAction}>
           {status === 'added' ? (
-            <Pressable onPress={() => onRead(item)} accessibilityRole="button" accessibilityLabel={`Read ${item.title}`} style={[styles.btn, styles.btnOutline]}>
+            <Pressable onPress={() => onRead(item)} accessibilityRole="button" accessibilityLabel={`Read ${item.title}`} style={[styles.btn, styles.btnOutline, viewMode === 'grid' && styles.shelfAction]}>
               <Icon name="check_circle" size={16} color={palette.primary} />
-              <Text style={[styles.btnText, { color: palette.primary }]}>Read</Text>
+              <Text style={[styles.btnText, viewMode === 'grid' && styles.shelfActionText, { color: palette.primary }]}>Read</Text>
             </Pressable>
           ) : (
             <Pressable
               onPress={() => onGet(item)}
               disabled={disabled || busy}
-              style={[styles.btn, styles.btnFilled, (disabled && !busy) && { opacity: 0.45 }]}
+              style={[styles.btn, styles.btnFilled, viewMode === 'grid' && styles.shelfAction, (disabled && !busy) && { opacity: 0.45 }]}
               accessibilityRole="button"
               accessibilityState={{ disabled: disabled || busy, busy }}
               accessibilityLabel={`${error ? 'Retry downloading' : 'Add'} ${item.title}${error ? '' : ' to library'}`}
             >
-              <Icon name={busy ? 'sync' : 'download'} size={16} color="#fff" spin={busy} />
-              <Text style={[styles.btnText, { color: '#fff' }]}>
-                {status === 'downloading' ? 'Downloading…' : status === 'preparing' ? 'Preparing…' : error ? 'Retry' : 'Get'}
+              <Icon name={busy ? 'sync' : 'download'} size={16} color={viewMode === 'grid' ? palette.primary : '#fff'} spin={busy} />
+              <Text style={[styles.btnText, viewMode === 'grid' && styles.shelfActionText, { color: viewMode === 'grid' ? palette.primary : '#fff' }]}>
+                {status === 'downloading' ? (viewMode === 'grid' ? `${progressPercent ?? 0}%` : 'Downloading…') : status === 'preparing' ? (viewMode === 'grid' ? 'Saving…' : 'Preparing…') : error ? 'Retry' : 'Get'}
               </Text>
             </Pressable>
           )}
@@ -154,6 +158,8 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   availableBookIds,
   viewMode,
   onViewModeChange,
+  gridColumns,
+  onGridColumnsChange,
   onAddEpubBook,
   onOpenBook,
   showToast,
@@ -164,8 +170,9 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   const styles = useMemo(() => createStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
   const { width, fontScale } = useWindowDimensions();
-  const columns = viewMode === 'grid' && width >= 340 && fontScale <= 1.3 ? 2 : 1;
-  const cardWidth = Math.floor((width - 40 - (columns - 1) * 12) / columns);
+  const layout = bookShelfLayout(width, fontScale, gridColumns);
+  const columns = viewMode === 'grid' ? layout.columns : 1;
+  const cardWidth = layout.cardWidth;
 
   const [source, setSource] = useState<CatalogSource>('gutenberg');
   const [notice, setNotice] = useState<string | null>(null);
@@ -403,6 +410,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       onDetails={setSelectedBook}
       viewMode={viewMode}
       cardWidth={cardWidth}
+      dense={viewMode === 'grid' && columns === 3}
       error={downloadErrors[item.id]}
     />
   );
@@ -446,14 +454,49 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     </View>
   );
 
-  const browserHeader = <View style={{ gap: 6, paddingBottom: 8, marginHorizontal: -20 }}>
+  const browserHeader = <View style={{ gap: 6, paddingBottom: 8 }}>
     <View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow} keyboardShouldPersistTaps="handled">
-        {CATALOG_SOURCES.map(item => <Chip key={item.id} label={item.label} active={source === item.id} onPress={() => setSource(item.id)} />)}
+        {CATALOG_SOURCES.map(item => renderShelfChip(palette, item.label, source === item.id, () => setSource(item.id)))}
       </ScrollView>
     </View>
-    {/* Search */}
-    <View style={styles.searchBox}>
+    {/* Search lives outside the virtualized results so typing keeps focus. */}
+    {/* Topics */}
+    <View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow} keyboardShouldPersistTaps="handled">
+        {TOPICS.map(topic => renderShelfChip(palette, topic.label, !query && topicId === topic.id,
+          () => { setQueryInput(''); setQuery(''); setTopicId(topic.id); }))}
+      </ScrollView>
+    </View>
+
+    <View style={styles.sortRow}>
+      <View style={styles.sortGroup}>
+        <Icon name="sort" size={16} color={palette.muted} />
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sortOptions} keyboardShouldPersistTaps="handled">
+          {SORT_OPTIONS.map(option => renderShelfSort(palette, option.label, `Sort free books by ${option.label}`, sortBy === option.id, () => setSortBy(option.id)))}
+        </ScrollView>
+      </View>
+      {renderShelfViewOptions(palette, viewMode, gridColumns, onViewModeChange, onGridColumnsChange)}
+    </View>
+    {viewMode === 'grid' && columns !== gridColumns && <Text style={styles.sortNote}>Using {columns} {columns === 1 ? 'column' : 'columns'} to keep this layout readable.</Text>}
+    {sortBy === 'releaseDate' && source === 'gutenberg' ? (
+      <Text style={styles.sortNote}>Approximate order of addition, based on Gutenberg ID.</Text>
+    ) : null}
+
+    {notice && <View style={[styles.notice, { marginHorizontal: 0 }]}>
+      <Text accessibilityLiveRegion="polite" style={styles.noticeText}>{notice}</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel="Retry live catalog" onPress={() => setReloadNonce(value => value + 1)} style={styles.smallAction}><Text style={styles.sortActive}>Retry live catalog</Text></Pressable>
+    </View>}
+    <View style={styles.countRow}>
+      {!loading && !error && items.length > 0 ? (
+        <Text style={styles.count}>
+          {query ? `Results for “${query}”` : topicLabel} · {total === null ? `${items.length} books loaded` : `${total.toLocaleString()} books`}
+        </Text>
+      ) : <View style={{ flex: 1 }} />}
+    </View>
+  </View>;
+
+  const searchBar = <View style={styles.searchBox}>
       <Icon name="search" size={20} color={palette.muted} />
       <TextInput
         value={queryInput}
@@ -479,94 +522,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
           <Icon name="close" size={18} color={palette.muted} />
         </Pressable>
       ) : null}
-    </View>
-
-    {/* Topics */}
-    <View>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.chipRow}
-        keyboardShouldPersistTaps="handled"
-      >
-        {TOPICS.map((t) => (
-          <Chip
-            key={t.id}
-            label={t.label}
-            active={!query && topicId === t.id}
-            onPress={() => {
-              setQueryInput('');
-              setQuery('');
-              setTopicId(t.id);
-            }}
-          />
-        ))}
-      </ScrollView>
-    </View>
-
-    <View style={styles.sortRow}>
-      <View style={styles.sortGroup}>
-        <Icon name="sort" size={16} color={palette.muted} />
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.sortOptions}
-          keyboardShouldPersistTaps="handled"
-        >
-          {SORT_OPTIONS.map((option) => (
-            <Pressable
-              key={option.id}
-              onPress={() => setSortBy(option.id)}
-              style={choiceStyles.target}
-              accessibilityLabel={`Sort free books by ${option.label}`}
-              accessibilityRole="button"
-              accessibilityState={{ selected: sortBy === option.id }}
-            >
-              <View style={[choiceStyles.face, choiceAppearance(palette, sortBy === option.id)]} pointerEvents="none">
-                <Text style={[styles.sortText, { color: sortBy === option.id ? palette.onPrimaryContainer : palette.onSurface }]}>
-                  {option.label}
-                </Text>
-              </View>
-            </Pressable>
-          ))}
-        </ScrollView>
-      </View>
-      <View style={styles.viewToggle}>
-        {(['grid', 'list'] as const).map((mode) => (
-          <Pressable
-            key={mode}
-            onPress={() => onViewModeChange(mode)}
-            style={[styles.viewToggleButton, viewMode === mode && { backgroundColor: palette.surface }]}
-            accessibilityRole="button"
-            accessibilityLabel={`${mode === 'grid' ? 'Grid' : 'List'} view`}
-            accessibilityState={{ selected: viewMode === mode }}
-          >
-            <Icon
-              name={mode === 'grid' ? 'view_module' : 'view_list'}
-              size={19}
-              color={viewMode === mode ? palette.primary : palette.muted}
-            />
-          </Pressable>
-        ))}
-      </View>
-    </View>
-    {sortBy === 'releaseDate' && source === 'gutenberg' ? (
-      <Text style={styles.sortNote}>Approximate order of addition, based on Gutenberg ID.</Text>
-    ) : null}
-
-    {notice && <View style={styles.notice}>
-      <Text accessibilityLiveRegion="polite" style={styles.noticeText}>{notice}</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel="Retry live catalog" onPress={() => setReloadNonce(value => value + 1)} style={styles.smallAction}><Text style={styles.sortActive}>Retry live catalog</Text></Pressable>
-    </View>}
-    <View style={styles.countRow}>
-      {!loading && !error && items.length > 0 ? (
-        <Text style={styles.count}>
-          {query ? `Results for “${query}”` : topicLabel} · {total === null ? `${items.length} books loaded` : `${total.toLocaleString()} books`}
-        </Text>
-      ) : <View style={{ flex: 1 }} />}
-    </View>
-
-  </View>;
+    </View>;
 
   return (
     <Modal
@@ -601,16 +557,17 @@ export const BrowseBooksScreen: React.FC<Props> = ({
           {active.phase === 'downloading' && <Pressable accessibilityRole="button" accessibilityLabel="Cancel book download" onPress={() => transfer.current?.abort()} style={styles.smallAction}><Text style={styles.sortActive}>Cancel download</Text></Pressable>}
         </View>}
         {/* Results */}
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, width: '100%', maxWidth: 768, alignSelf: 'center' }}>
         <View style={{ flex: 1 }} pointerEvents={selectedBook ? 'none' : 'auto'}
           accessibilityElementsHidden={!!selectedBook} importantForAccessibility={selectedBook ? 'no-hide-descendants' : 'auto'}>
+        {searchBar}
         <FlatList
           key={`${viewMode}-${columns}`}
           accessibilityLabel={`${CATALOG_SOURCES.find(item => item.id === source)?.label} books`}
           data={sortedItems}
           extraData={[active, added, libraryIds, downloadErrors]}
           numColumns={columns}
-          columnWrapperStyle={columns === 2 ? styles.gridColumn : undefined}
+          columnWrapperStyle={columns > 1 ? styles.gridColumn : undefined}
           keyExtractor={(b) => b.id}
           renderItem={renderItem}
           ListHeaderComponent={browserHeader}
@@ -763,29 +720,26 @@ const createStyles = (p: AppPalette) =>
       alignItems: 'center',
       gap: 8,
       backgroundColor: p.surfaceContainer,
-      borderRadius: 14,
-      paddingHorizontal: 14,
+      borderRadius: 12,
+      borderWidth: 1, borderColor: p.border,
+      paddingLeft: 12,
       marginHorizontal: 20,
     },
-    searchInput: { flex: 1, paddingVertical: 12, fontFamily: F.sans, fontSize: 14, color: p.onSurface },
-    chipRow: { gap: 6, paddingHorizontal: 20 },
-    sortRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: 20 },
+    searchInput: { flex: 1, minWidth: 0, minHeight: 48, paddingVertical: 12, fontFamily: F.sans, fontSize: 14, color: p.onSurface },
+    chipRow: { ...shelfStyles.chipRow },
+    sortRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
     sortGroup: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
     sortOptions: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: 6 },
-    sortText: { ...type.labelMd, color: p.muted },
     sortActive: { color: p.primary },
-    sortNote: { ...type.bodySm, color: p.muted, marginTop: 0, paddingHorizontal: 20 },
+    sortNote: { ...type.bodySm, color: p.muted, marginTop: 0 },
     countRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      paddingHorizontal: 20,
     },
     count: { ...type.labelSm, color: p.muted, flex: 1 },
-    viewToggle: { flexDirection: 'row', backgroundColor: p.surfaceContainer, padding: 3, borderRadius: 10, gap: 2 },
-    viewToggleButton: { width: 48, height: 48, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
     resultsContent: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 24, gap: 12 },
     resultsList: { gap: 12 },
-    gridColumn: { justifyContent: 'space-between', gap: 12 },
+    gridColumn: { gap: 16 },
 
     row: {
       flexDirection: 'row',
@@ -796,8 +750,11 @@ const createStyles = (p: AppPalette) =>
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: p.borderSoft,
     },
-    gridCard: { flexDirection: 'column', alignItems: 'stretch', gap: 8 },
-    gridCardCopy: { minHeight: 124 },
+    gridCard: { flexDirection: 'column', alignItems: 'stretch', gap: 0, padding: 0, borderWidth: 0, backgroundColor: 'transparent' },
+    shelfTitle: { ...shelfStyles.title, color: p.onSurface },
+    shelfAuthor: { ...shelfStyles.author, color: p.muted },
+    shelfAction: { backgroundColor: 'transparent', borderWidth: 0, paddingHorizontal: 0, paddingVertical: 0, minWidth: 48, minHeight: 48 },
+    shelfActionText: { fontSize: 12, lineHeight: 18 },
     rowTitle: { fontFamily: F.serifSemi, fontSize: 17, lineHeight: 21, color: p.onSurface },
     rowAuthor: { ...type.bodyMd, color: p.onSurfaceVariant, marginTop: 2 },
     rowMeta: { ...type.bodySm, color: p.muted, marginTop: 2 },

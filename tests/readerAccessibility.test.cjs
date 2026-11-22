@@ -1938,7 +1938,37 @@ test('Library Recent and Continue Reading use reading date and device text; Down
   assert.equal(elements(root).some(node => node.props?.accessibilityLabel?.startsWith('Resume ')), false);
   labelled(root, 'List view').onPress(); root = f.render();
   assert.deepEqual(labelled(root, 'List view').accessibilityState, { selected: true });
-  assert.deepEqual(labelled(root, 'Grid view').accessibilityState, { selected: false }); f.h.unmount();
+  assert.deepEqual(labelled(root, '2-column grid').accessibilityState, { selected: false }); f.h.unmount();
+});
+
+test('Library header search requests show a fixed input, reset stale filters, and preserve input through grid changes', () => {
+  let handled = 0;
+  const f = libraryHarness({ onSearchRequestHandled: () => handled++ }); let root = f.render();
+  labelled(root, 'Finished').onPress(); f.render();
+  f.props.searchRequest = 1; f.render(); root = f.render();
+  assert.equal(handled, 1); f.props.searchRequest = 0; root = f.render();
+  assert.equal(labelled(root, 'All Books').accessibilityState.selected, true);
+  labelled(root, 'Search Library by title or author').onChangeText('An Author'); root = f.render();
+  assert.equal(libraryRows(root).length, 3);
+  const list = elements(root).find(node => node.props?.testID === 'library-collection');
+  assert.equal(elements(list.props.ListHeaderComponent).some(node => node.type === 'TextInput'), false);
+  labelled(root, '3-column grid').onPress(); root = f.render();
+  assert.equal(labelled(root, 'Search Library by title or author').value, 'An Author');
+  assert.equal(elements(root).find(node => node.props?.testID === 'library-collection').props.data[0].length, 3);
+  labelled(root, 'Hide Library search').onPress(); root = f.render();
+  assert.equal(libraryRows(root).length, 4); assert.equal(elements(root).some(node => node.type === 'TextInput'), false); f.h.unmount();
+});
+
+test('Library restores and saves three columns and passes the same choice to free books', async () => {
+  const writes = [], storage = { loadJSON: async () => ({ gridColumns: 3 }), saveJSONStrict: async (_key, value) => writes.push(value) };
+  const f = libraryHarness({ storage }); f.render(); await flushNative(); let root = f.render();
+  assert.equal(labelled(root, '3-column grid').accessibilityState.selected, true);
+  assert.equal(elements(root).find(node => node.props?.testID === 'library-collection').props.data[0].length, 3);
+  labelled(root, 'Browse free books').onPress(); root = f.render();
+  const browse = elements(root).find(node => node.type === 'BrowseBooksScreen').props;
+  assert.equal(browse.gridColumns, 3); browse.onGridColumnsChange(2); browse.onClose(); root = f.render();
+  assert.equal(labelled(root, '2-column grid').accessibilityState.selected, true);
+  assert.equal(writes.at(-1).gridColumns, 2); f.h.unmount();
 });
 
 test('Library grid shows truthful percentage badges for unread and finished books while list status stays descriptive', () => {
@@ -2018,7 +2048,8 @@ function catalogHarness({ search, download, parse, save, remember, details } = {
   } });
   const item = { id: 'gutenberg-1', title: 'A Book', author: 'An Author', source: 'gutenberg', coverUrl: 'https://www.gutenberg.org/cover.jpg', downloads: 10, subjects: [] };
   const { BrowseBooksScreen, BookRow } = h.load('../src/components/BrowseBooksScreen.tsx');
-  const props = { storage: { removeBookFiles: id => calls.deleted.push(id) }, books: [], availableBookIds: [], viewMode: 'grid', onViewModeChange() {},
+  const props = { storage: { removeBookFiles: id => calls.deleted.push(id) }, books: [], availableBookIds: [], viewMode: 'grid', gridColumns: 2,
+    onViewModeChange: mode => { props.viewMode = mode; }, onGridColumnsChange: count => { props.gridColumns = count; },
     onAddEpubBook: async (book, pages) => { calls.saved.push({ book, pages }); if (save) await save(book, pages); props.books = [...props.books, book]; props.availableBookIds = [...props.availableBookIds, book.id]; },
     onOpenBook: id => calls.opened.push(id), onClose: () => calls.closed++, showToast: message => calls.toasts.push(message) };
   return { h, calls, props, item, BookRow, render: () => h.render(BrowseBooksScreen, props) };
@@ -2071,6 +2102,19 @@ test('free-book covers and titles open details without downloading; Back retains
   f.h.unmount(); rowHarness.unmount();
 });
 
+test('free books share two/three columns and keep search outside the results list when density changes', async () => {
+  const f = catalogHarness(); f.render(); await flushNative(); let root = f.render();
+  assert.equal(freeBookList(root).numColumns, 2);
+  labelled(root, 'Search free books by title or author').onChangeText('A Book'); root = f.render();
+  labelled(root, '3-column grid').onPress(); root = f.render();
+  assert.equal(freeBookList(root).numColumns, 3); assert.equal(freeBookRow(f, root).dense, true);
+  assert.equal(labelled(root, 'Search free books by title or author').value, 'A Book');
+  assert.equal(elements(freeBookList(root).ListHeaderComponent).some(node => node.type === 'TextInput'), false);
+  assert.ok(freeBookRow(f, root).cardWidth < 120);
+  labelled(root, 'List view').onPress(); root = f.render(); assert.equal(freeBookList(root).numColumns, 1);
+  labelled(root, '2-column grid').onPress(); root = f.render(); assert.equal(freeBookList(root).numColumns, 2); f.h.unmount();
+});
+
 test('details requests are cancelled on Back; failures offer retry while keeping download available', async () => {
   let late;
   const f = catalogHarness({ details: () => new Promise(done => { late = done; }) });
@@ -2102,7 +2146,7 @@ test('free-book source changes cancel old results; provider errors keep retry an
   let first;
   const f = catalogHarness({ search: opts => opts.source === 'gutenberg' ? new Promise(done => { first = done; }) : Promise.reject(Error('Source unavailable')) });
   let root = f.render();
-  elements(root).find(node => node.type === 'Chip' && node.props.label === 'Standard Ebooks').props.onPress(); root = f.render();
+  labelled(root, 'Standard Ebooks').onPress(); root = f.render();
   assert.equal(f.calls.searches[0].signal.aborted, true);
   first({ books: [f.item], total: 1, hasMore: false }); await flushNative(); root = f.render();
   assert.equal(freeBookList(root).data.length, 0);

@@ -14,7 +14,7 @@ interface ChipProps {
   style?: StyleProp<ViewStyle>;
 }
 
-/** Compact rounded rectangle shared by Notebook and free-book filters. */
+/** Compact rounded rectangle used by Notebook and archive filters. */
 export const Chip: React.FC<ChipProps> = ({
   label,
   active,

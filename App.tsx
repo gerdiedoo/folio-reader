@@ -243,6 +243,7 @@ function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onP
   useEffect(() => storage.subscribeArchive('bookmarks', () => { void loadBookmarks(); }), [storage, loadBookmarks]);
   const [isSettingsSheetOpen, setIsSettingsSheetOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [librarySearchRequest, setLibrarySearchRequest] = useState(0);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   useEffect(() => { if (authError) setIsProfileOpen(true); }, [authError]);
   const [libraryBookmarksOpen, setLibraryBookmarksOpen] = useState(false);
@@ -860,7 +861,7 @@ function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onP
       <Header
         activeTab={activeTab}
         onTabChange={tab => { if (tab !== 'reading') { navigationGeneration.current++; setOpeningBookId(null); } setActiveTab(tab); }}
-        onOpenSearch={() => setIsSearchOpen(true)}
+        onOpenSearch={() => activeTab === 'library' ? setLibrarySearchRequest(value => value + 1) : setIsSearchOpen(true)}
         onOpenProfile={() => setIsProfileOpen(true)}
         visible={isNavVisible && !isImmersiveMode}
         userAvatar={user?.avatarUrl}
@@ -875,6 +876,8 @@ function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onP
       <View style={[styles.main, activeTab === 'library' && { paddingHorizontal: 0 }, { paddingTop: topPad, paddingBottom: reading ? 0 : 0 }]}>
         {activeTab === 'library' && (
           <LibraryView
+            searchRequest={librarySearchRequest}
+            onSearchRequestHandled={() => setLibrarySearchRequest(0)}
             storage={storage}
             bookmarkCount={bookmarks.length}
             onOpenBookmarks={() => setLibraryBookmarksOpen(true)}

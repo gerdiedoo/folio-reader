@@ -100,7 +100,7 @@ export const SearchModal: React.FC<SearchModalProps> = ({
   };
 
   return (
-    <ModalShell onClose={onClose} align="top" maxWidth={512} cardStyle={{ maxHeight: '80%' }}>
+    <ModalShell onClose={onClose} align="top" maxWidth={512} cardStyle={{ height: '80%', maxHeight: '80%' }}>
       <View style={styles.heading}>
         <Text accessibilityRole="header" style={styles.title}>Search</Text>
         <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close archive search" style={styles.iconAction}>
@@ -151,7 +151,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   iconAction: { minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
   searchBox: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginVertical: 8, paddingLeft: 10, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, backgroundColor: colors.surfaceContainer },
   input: { ...type.bodyMd, flex: 1, minWidth: 0, minHeight: 48, paddingVertical: 10, color: colors.onSurface },
-  results: { flexShrink: 1, minHeight: 0 },
+  results: { flex: 1, minHeight: 0 },
   body: { paddingHorizontal: 16, paddingBottom: 16 },
   listHeader: { gap: 8, paddingBottom: 8 }, chips: { gap: 6 },
   notice: { padding: 10, borderRadius: 8, backgroundColor: colors.surfaceContainer },

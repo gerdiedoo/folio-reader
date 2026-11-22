@@ -117,7 +117,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         <View style={styles.right}>
           {!detailsTitle && activeTab !== 'reading' && (
-            <Pressable onPress={onOpenSearch} accessibilityRole="button" accessibilityLabel="Search Archive" style={styles.iconBtn}>
+            <Pressable onPress={onOpenSearch} accessibilityRole="button" accessibilityLabel={activeTab === 'library' ? 'Search Library' : 'Search Archive'} style={styles.iconBtn}>
               <Icon name="search" size={22} color={palette.muted} />
             </Pressable>
           )}
