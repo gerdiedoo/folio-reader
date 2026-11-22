@@ -42,6 +42,20 @@ def tap_node(node):
     time.sleep(.4)
 
 def tap(label,**kwargs): tap_node(find(label,**kwargs))
+def reveal_library_book(label):
+    # Accessibility bounds can include a cover underneath the floating tabs.
+    # Scroll it clear of that overlay before choosing a physical tap coordinate.
+    size=adb('shell','wm','size').decode()
+    width,height=map(int,re.findall(r'(\d+)x(\d+)',size)[-1])
+    for _ in range(5):
+        node=find(label,contains=True)
+        box=list(map(int,re.findall(r'\d+',node.get('bounds',''))))
+        if len(box)==4 and box[1]>=height*.18 and box[3]<=height*.75:
+            return node
+        adb('shell','input','swipe',str(width//2),str(int(height*.70)),
+            str(width//2),str(int(height*.35)),'500')
+        time.sleep(.5)
+    raise AssertionError('Imported Library book could not be scrolled clear of navigation')
 def screenshot(name): (OUT/(name+'.png')).write_bytes(adb('exec-out','screencap','-p'))
 def launch():
     result=adb('shell','am','start','-W','-n',PACKAGE+'/.MainActivity')
@@ -87,8 +101,9 @@ def run():
         tap('Downloads')
         tap('folio-device-journey.epub')
     find('Folio device journey by Folio test fixture.',contains=True,timeout=45)
+    book_node=reveal_library_book('Folio device journey by Folio test fixture.')
     screenshot('02-imported-library')
-    tap('Folio device journey by Folio test fixture.',contains=True)
+    tap_node(book_node)
     tap('Read Folio device journey')
     find('Scroll reading mode');find('Circle on warm paper');screenshot('03-rich-reader')
     tap('Save bookmark for this passage')
