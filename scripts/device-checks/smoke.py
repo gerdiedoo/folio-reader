@@ -50,7 +50,7 @@ def reveal_library_book(label):
     for _ in range(5):
         node=find(label,contains=True)
         box=list(map(int,re.findall(r'\d+',node.get('bounds',''))))
-        if len(box)==4 and box[1]>=height*.18 and box[3]<=height*.75:
+        if len(box)==4 and height*.25<=(box[1]+box[3])/2<=height*.65:
             return node
         adb('shell','input','swipe',str(width//2),str(int(height*.70)),
             str(width//2),str(int(height*.35)),'500')
