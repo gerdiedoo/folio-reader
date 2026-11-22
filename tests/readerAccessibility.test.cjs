@@ -1899,7 +1899,7 @@ function libraryHarness(overrides = {}) {
     books: [book('Amber', { author: 'Zoë', lastOpened: '2026-01-01', progressPercent: 20 }), book('Brook', { lastOpened: '2026-11-19', progressPercent: 40 }), book('Cloud', { isDownloaded: true, lastOpened: '2026-11-20' }), book('Unread', { progressPercent: 1 })],
     availableBookIds: ['Amber', 'Brook', 'Unread'], libraryStatus: 'ready',
     recoveryBooks: [{ id: 'missing', title: 'Café', author: 'Zoë' }], selectedBookId: null,
-    readingGoal: { minutesReadToday: 0 }, globalCoverStyle: 'image', bottomInset: 0,
+    readingGoal: { minutesReadToday: 0, streakDays: 0, booksFinishedYear: 0 }, globalCoverStyle: 'image', bottomInset: 0,
     onSelectBook: id => selected.push(id), onOpenBook: id => opened.push(id),
     onAddEpubBook: async () => assert.fail('Unexpected import'), onRestoreImportedProgress: async book => book,
     onReimportRecoveryBook: async () => assert.fail('Unexpected recovery'),
@@ -1907,10 +1907,11 @@ function libraryHarness(overrides = {}) {
   return { h, props, selected, opened, CoverEditor, pickerCalls: () => pickerCalls, render: () => h.render(LibraryView, props) };
 }
 const libraryRows = root => elements(root).filter(node => node.props?.accessibilityHint === 'Open book details');
-const pressLibraryFilter = (root, label) => elements(root).find(node => node.type === 'Chip' && node.props.label === label).props.onPress();
+const pressLibraryFilter = (root, label) => labelled(root, label).onPress();
 
 test('Library search filters title/author and recovery rows; clearing results resets query and filter while keeping sort', () => {
   const f = libraryHarness(); let root = f.render();
+  labelled(root, 'Search Library').onPress(); root = f.render();
   labelled(root, 'Search Library by title or author').onChangeText('zoe'); root = f.render();
   assert.equal(libraryRows(root).length, 1); assert.match(libraryRows(root)[0].props.accessibilityLabel, /^Amber by Zoë/);
   assert.ok(labelled(root, 'Re-import Café from a local EPUB'));
@@ -1921,7 +1922,7 @@ test('Library search filters title/author and recovery rows; clearing results re
   labelled(root, 'Clear Library search and filters').onPress(); root = f.render();
   assert.equal(labelled(root, 'Search Library by title or author').value, '');
   assert.equal(labelled(root, 'Sort Library by Title').accessibilityState.selected, true);
-  assert.equal(elements(root).find(node => node.type === 'Chip' && node.props.label === 'All Books').props.active, true);
+  assert.equal(labelled(root, 'All Books').accessibilityState.selected, true);
   assert.deepEqual(libraryRows(root).map(node => node.props.accessibilityLabel.split(' by ')[0]), ['Amber', 'Brook', 'Cloud', 'Unread']);
   labelled(root, 'Search Library by title or author').onChangeText('brook'); root = f.render();
   labelled(root, 'Clear Library search').onPress(); root = f.render();
@@ -1956,6 +1957,7 @@ test('Library grid shows truthful percentage badges for unread and finished book
 
 test('book details and Android back retain Library search; cover edit is a separate named action', () => {
   const f = libraryHarness(); let root = f.render();
+  labelled(root, 'Search Library').onPress(); root = f.render();
   labelled(root, 'Search Library by title or author').onChangeText('amber'); root = f.render();
   const row = libraryRows(root)[0]; assert.equal(row.props.accessibilityRole, 'button');
   assert.equal(elements(row).some(node => node.type === 'BookCover' && node.props.onEdit), false);
@@ -2517,13 +2519,16 @@ test('account-removal retries back off, pause in background, and cancel late wor
   late.render(() => hook({}, {}, true, '1')); late.unmount(); const writes = late.stateWrites(); resolve({ pending: 1, failed: 1 }); await new Promise(done => setImmediate(done)); assert.equal(late.stateWrites(), writes); assert.equal(late.timers.size, 0);
 });
 
-test('the upper-left Folio mark uses the bundled PNG offline and its Library action remains available', () => {
+test('Library keeps the text wordmark action and other headers retain their bundled offline mark', () => {
   const h = harness(); const { Header } = h.load('../src/components/Header.tsx'); const selected = [];
-  const root = h.render(Header, { activeTab: 'library', onTabChange: value => selected.push(value), onOpenSearch() {}, onOpenProfile() {} });
-  const mark = elements(root).find(node => node.props?.testID === 'folio-header-mark');
+  const props = { activeTab: 'library', onTabChange: value => selected.push(value), onOpenSearch() {}, onOpenProfile() {} };
+  const root = h.render(Header, props);
+  assert.equal(elements(root).some(node => node.props?.testID === 'folio-header-mark'), false);
+  labelled(root, 'Folio Library').onPress(); assert.deepEqual(selected, ['library']);
+  const other = h.render(Header, { ...props, activeTab: 'notebook' });
+  const mark = elements(other).find(node => node.props?.testID === 'folio-header-mark');
   assert.ok(mark); assert.equal(mark.type, 'Image'); assert.equal(mark.props.source.bundledAsset, path.resolve(__dirname, '../assets/folio-logo.png'));
-  assert.equal(fs.existsSync(mark.props.source.bundledAsset), true); assert.equal(mark.props.source.uri, undefined);
-  assert.equal(mark.props.accessible, false); labelled(root, 'Folio Library').onPress(); assert.deepEqual(selected, ['library']);
+  assert.equal(fs.existsSync(mark.props.source.bundledAsset), true); assert.equal(mark.props.accessible, false);
 });
 
 test('Library rows are virtualized and loading a book keeps its details and blocks duplicate opens', () => {
@@ -2568,4 +2573,20 @@ test('conflict review blocks duplicate choices and dismissal until the durable c
  complete(Error('Storage acknowledgement failed'));await flushJobs();root=h.render(SyncReviewModal,props);
  assert.match(renderedText(root),/Storage acknowledgement failed/);assert.match(renderedText(row()),/Device thought/);assert.match(renderedText(row()),/Account thought/);
  labelled(root,'Close account change review').onPress();assert.equal(closed,1);h.unmount();
+});
+
+test('Library bookmarks shortcut forwards its action and local search can be expanded and cleared',()=>{
+ let opened=0;const f=libraryHarness({bookmarkCount:2,onOpenBookmarks:()=>opened++});let root=f.render();
+ labelled(root,'Library bookmarks, 2 saved').onPress();assert.equal(opened,1);
+ assert.equal(elements(root).some(node=>node.props?.accessibilityLabel==='Search Library by title or author'),false);
+ labelled(root,'Search Library').onPress();root=f.render();labelled(root,'Search Library by title or author').onChangeText('amber');root=f.render();assert.equal(libraryRows(root).length,1);
+ labelled(root,'Hide Library search').onPress();root=f.render();assert.equal(libraryRows(root).length,4);assert.equal(labelled(root,'Search Library').accessibilityState.expanded,false);f.h.unmount();
+});
+
+test('Library-wide bookmarks name their book and open the selected book’s saved record',()=>{
+ const h=harness();const {BookmarkSheet}=h.load('../src/components/BookmarkSheet.tsx');const selected=[];
+ const items=[{id:'a:1',bookId:'a',pageNumber:1,chapterTitle:'Opening',locNumber:100,excerpt:'First passage'},{id:'b:1',bookId:'b',pageNumber:1,chapterTitle:'Opening',locNumber:100,excerpt:'Second passage'}];
+ const root=h.render(BookmarkSheet,{bookmarks:items,currentPage:0,bookTitles:{a:'First book',b:'Second book'},status:'ready',saving:false,onClose(){},onSelect:item=>selected.push(item),onRemove(){},onRetry(){}});
+ const list=elements(root).find(node=>node.type==='FlatList');const row=list.props.renderItem({item:items[1]});const open=labelled(row,'Open bookmark, Second book, Opening, location 100. Second passage');
+ assert.equal(open.accessibilityState.selected,false);open.onPress();assert.equal(selected[0],items[1]);h.unmount();
 });

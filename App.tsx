@@ -20,6 +20,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { BottomNav } from './src/components/BottomNav';
 import { DictionaryModal } from './src/components/DictionaryModal';
 import { createRetryableWriter } from './src/lib/retryableCreate';
+import { BookmarkSheet } from './src/components/BookmarkSheet';
 import { FlashcardModal } from './src/components/FlashcardModal';
 import { Header, HEADER_HEIGHT } from './src/components/Header';
 import { LibraryView } from './src/components/LibraryView';
@@ -241,6 +242,7 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
   const [isSettingsSheetOpen, setIsSettingsSheetOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [libraryBookmarksOpen, setLibraryBookmarksOpen] = useState(false);
   const [syncReviewOpen, setSyncReviewOpen] = useState(false);
   const [dictionaryState, setDictionaryState] = useState<{ isOpen: boolean; word: string; context?: string; bookId?: string; source?: { page: number; chapter: string; anchor?: SourceAnchor } }>({
     isOpen: false,
@@ -866,11 +868,12 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
         onBackFromDetails={() => { navigationGeneration.current++; setOpeningBookId(null); setBookDetailsId(null); }}
       />
 
-      <View style={[styles.main, { paddingTop: topPad, paddingBottom: reading ? 0 : 0 }]}>
+      <View style={[styles.main, activeTab === 'library' && { paddingHorizontal: 0 }, { paddingTop: topPad, paddingBottom: reading ? 0 : 0 }]}>
         {activeTab === 'library' && (
           <LibraryView
             storage={storage}
-            hasLegacyData={hasLegacyData}
+            bookmarkCount={bookmarks.length}
+            onOpenBookmarks={() => setLibraryBookmarksOpen(true)}
             books={books}
             availableBookIds={availableBookIds}
             openingBookId={openingBookId}
@@ -1008,12 +1011,22 @@ function FolioApp({ user, scope, hasLegacyData, onPortableJob, onRemovalJob }: R
         />
       )}
 
+      {libraryBookmarksOpen && <BookmarkSheet
+        bookmarks={bookmarks} currentPage={0} status={bookmarkStatus} saving={bookmarkSaving}
+        bookTitles={Object.fromEntries(books.map(book => [book.id, book.title]))}
+        onClose={() => setLibraryBookmarksOpen(false)} onRetry={loadBookmarks} onRemove={handleRemoveBookmark}
+        onSelect={bookmark => {
+          if (!availableBookIds.includes(bookmark.bookId)) { setLibraryBookmarksOpen(false); showToast('Import this book’s EPUB from Library to open its saved passage.'); return; }
+          setLibraryBookmarksOpen(false); void handleJumpToReader(bookmark.bookId, bookmark.pageNumber, bookmark.anchor);
+        }}
+      />}
       {syncReviewOpen && <SyncReviewModal conflicts={accountSync.status.conflicts} onClose={() => setSyncReviewOpen(false)} onResolve={async (record, choice) => {
         await cloud.sync.resolve(record.kind, record.id, record.token, record.account.revision, choice); accountSync.retry();
       }} />}
       {isProfileOpen && (
         <ProfileModal
           goal={readingGoal}
+          hasLegacyData={hasLegacyData}
           libraryStatus={libraryStatus}
           bookCount={books.length}
           user={user}

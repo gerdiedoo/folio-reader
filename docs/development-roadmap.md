@@ -133,3 +133,18 @@ See [the 22 November evidence record](verification-2026-11-22.md) for the exact
 observed checks, successful APK run, migration activation steps and remaining
 phone/iOS evidence. This supersedes earlier “emulator verification pending” notes
 for the automated Guest journey only.
+
+## Library reference alignment — 22 November 2026
+
+The Library now follows the supplied first screenshot's visual hierarchy: one
+20-point outer margin, Today’s reading and streak/year totals, a Bookmarks
+shortcut, compact filters, text-only Recent/Title/Progress actions and smaller
+cover-percentage labels. The current compact Continue reading card is retained.
+Local search expands from a small action instead of taking a permanent row;
+active saved queries remain visible. The older-library notice moves to Account.
+The Library header uses the reference's text wordmark; other headers retain their
+bundled logo. Bookmarks can be browsed across books and retain their source IDs.
+
+480 regression tests, TypeScript and Android/iOS Hermes exports passed locally.
+Native screenshots and execution for this layout are produced by its APK run;
+the earlier verification record describes the previous layout.

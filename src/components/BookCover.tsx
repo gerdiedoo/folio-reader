@@ -152,7 +152,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 3 },
   },
   libraryCover: {
-    borderRadius: 10,
+    borderRadius: 8,
     backgroundColor: colors.surfaceHighest,
     elevation: 4,
     shadowColor: '#000',
@@ -160,9 +160,9 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 4 },
   },
-  libraryArtwork: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, borderRadius: 10, elevation: 0, shadowOpacity: 0 },
-  libraryBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 7 },
-  libraryBadgeText: { fontFamily: F.sansSemi, fontSize: 14, lineHeight: 20, letterSpacing: 0.2 },
+  libraryArtwork: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, borderRadius: 8, elevation: 0, shadowOpacity: 0 },
+  libraryBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  libraryBadgeText: { fontFamily: F.sansSemi, fontSize: 11, lineHeight: 14, letterSpacing: 0.1 },
   image: { width: '100%', height: '100%' },
   cloth: {
     flex: 1,

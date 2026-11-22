@@ -9,6 +9,7 @@ import { ModalShell } from './ui/ModalShell';
 interface Props {
   bookmarks: Bookmark[];
   currentPage: number;
+  bookTitles?: Record<string, string>;
   status: 'loading' | 'ready' | 'error';
   saving: boolean;
   onClose: () => void;
@@ -17,8 +18,9 @@ interface Props {
   onRetry: () => void;
 }
 
-export function BookmarkSheet({ bookmarks, currentPage, status, saving, onClose, onSelect, onRemove, onRetry }: Props) {
+export function BookmarkSheet({ bookmarks, currentPage, bookTitles, status, saving, onClose, onSelect, onRemove, onRetry }: Props) {
   const palette = useAppTheme();
+  const bookTitle = (id: string) => bookTitles && Object.prototype.hasOwnProperty.call(bookTitles, id) ? bookTitles[id] : 'Book unavailable';
   return (
     <ModalShell onClose={onClose} align="bottom" maxWidth={560} cardStyle={{ maxHeight: '80%' }}>
       <View style={styles.header}>
@@ -28,7 +30,7 @@ export function BookmarkSheet({ bookmarks, currentPage, status, saving, onClose,
         </Pressable>
       </View>
       <Text style={[styles.hint, { color: palette.muted }]}>
-        Saved on this device. Opens the start of each passage.
+        {bookTitles ? 'Saved passages across your library.' : 'Saved on this device. Opens the start of each passage.'}
       </Text>
       {status === 'loading' ? <ActivityIndicator accessibilityLabel="Loading bookmarks" color={palette.primary} style={styles.empty} />
         : status === 'error' ? (
@@ -45,7 +47,7 @@ export function BookmarkSheet({ bookmarks, currentPage, status, saving, onClose,
             keyExtractor={item => item.id}
             ListEmptyComponent={
               <View style={styles.empty}>
-                <Text style={[styles.body, { color: palette.onSurface }]}>No bookmarks in this book yet.</Text>
+                <Text style={[styles.body, { color: palette.onSurface }]}>{bookTitles ? 'No bookmarks yet.' : 'No bookmarks in this book yet.'}</Text>
                 <Text style={[styles.body, { color: palette.muted }]}>Tap the bookmark icon in Scroll or Pages mode to save a passage.</Text>
               </View>
             }
@@ -54,10 +56,11 @@ export function BookmarkSheet({ bookmarks, currentPage, status, saving, onClose,
                 <Pressable
                   onPress={() => onSelect(item)}
                   accessibilityRole="button"
-                  accessibilityLabel={`Open bookmark, ${item.chapterTitle}, location ${item.locNumber}. ${item.excerpt}`}
+                  accessibilityLabel={`Open bookmark, ${bookTitles ? bookTitle(item.bookId) + ', ' : ''}${item.chapterTitle}, location ${item.locNumber}. ${item.excerpt}`}
                   accessibilityState={{ selected: item.pageNumber === currentPage }}
                   style={styles.open}
                 >
+                  {bookTitles && <Text style={[styles.body, { color: palette.onSurface }]}>{bookTitle(item.bookId)}</Text>}
                   <Text style={[styles.body, { color: palette.primary }]}>{item.chapterTitle} · Loc {item.locNumber}</Text>
                   <Text numberOfLines={3} style={[styles.body, { color: palette.onSurface }]}>{item.excerpt}</Text>
                 </Pressable>

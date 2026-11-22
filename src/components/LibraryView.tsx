@@ -26,7 +26,6 @@ import { LibraryRecoveryBook } from '../lib/catalog';
 import { BookRemovalDialog } from './BookRemovalDialog';
 import { BookCover, CLOTH, ClothTint } from './BookCover';
 import { BrowseBooksScreen } from './BrowseBooksScreen';
-import { Chip } from './ui/Chip';
 import { Icon } from './ui/Icon';
 import { choiceAppearance, choiceStyles } from './ui/choiceStyles';
 import { ModalShell } from './ui/ModalShell';
@@ -34,7 +33,8 @@ import { ProgressBar } from './ui/ProgressBar';
 
 interface LibraryViewProps {
   storage: LocalStore;
-  hasLegacyData: boolean;
+  bookmarkCount?: number;
+  onOpenBookmarks?: () => void;
   books: Book[];
   availableBookIds: readonly string[];
   libraryStatus: 'loading' | 'ready' | 'error';
@@ -90,7 +90,7 @@ function formatLastRead(value: string): string {
 
 export const LibraryView: React.FC<LibraryViewProps> = ({
   storage,
-  hasLegacyData,
+  bookmarkCount = 0, onOpenBookmarks,
   books,
   availableBookIds,
   libraryStatus,
@@ -131,6 +131,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   useEffect(() => {
     if (preferencesReady) void Promise.resolve(storage.saveJSONStrict?.('libraryViewPreferences', viewPreferences)).catch(() => undefined);
   }, [storage, preferencesReady, viewPreferences]);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [browseViewMode, setBrowseViewMode] = useState<LibraryViewMode>('grid');
   const [importing, setImporting] = useState(false);
   const [reimportingId, setReimportingId] = useState<string | null>(null);
@@ -532,13 +533,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </Text>
         </View>
       )}
-      {/* Today's reading time */}
-      {hasLegacyData && (
-        <View style={{ padding: 16, gap: 8, borderRadius: 12, backgroundColor: colors.surfaceContainer }}>
-          <Text style={{ ...type.bodyMd, color: colors.onSurface }}>Your older library is preserved on this device.</Text>
-          <Text style={{ ...type.bodySm, color: colors.muted }}>It hasn't been assigned to this reading space. Accounts and Guest now keep separate books and notes. Keep Folio Dev installed while you review the migration guide.</Text>
-        </View>
-      )}
+      <View style={styles.goalCard}>
+        <View style={styles.readingTimeIcon}><Icon name="schedule" size={24} color={colors.primary} /></View>
+        <View style={{ flex: 1 }}><Text accessibilityRole="header" style={styles.goalTitle}>Today’s reading</Text><Text style={styles.goalSub}>{readingTimeLabel} read today</Text></View>
+      </View>
+      <View style={styles.readingStats}>
+        <View style={styles.readingStat}><Icon name="local_fire_department" size={22} color={colors.primary} /><View style={{ flexShrink: 1 }}><Text style={styles.statValue}>{readingGoal.streakDays}</Text><Text style={styles.statLabel}>day streak</Text></View></View>
+        <View style={styles.readingStat}><Icon name="menu_book" size={22} color={colors.primary} /><View style={{ flexShrink: 1 }}><Text style={styles.statValue}>{readingGoal.booksFinishedYear}</Text><Text style={styles.statLabel}>Books finished this year</Text></View></View>
+      </View>
 
       {/* Continue reading */}
       {libraryStatus === 'ready' && !filtered && (featured ? (
@@ -583,7 +585,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           <Icon name="explore" size={20} color="#fff" />
           <View style={{ flex: 1 }}>
             <Text style={styles.browseTitle}>Browse free books</Text>
-
+            <Text style={styles.browseSub}>Explore classics</Text>
           </View>
           <Icon name="chevron_right" size={20} color="#fff" />
         </Pressable>
@@ -593,20 +595,28 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         </Pressable>
       </View>
 
-      <View style={styles.librarySearch}>
+      <View style={styles.shortcutRow}>
+        <Pressable onPress={onOpenBookmarks} disabled={!onOpenBookmarks} accessibilityRole="button" accessibilityLabel={`Library bookmarks, ${bookmarkCount} saved`} style={styles.bookmarkTarget}>
+          <View pointerEvents="none" style={styles.bookmarkFace}><Icon name="bookmark" size={17} color={colors.primary} /><Text style={styles.bookmarkText}>Bookmarks</Text><View style={styles.bookmarkCount}><Text style={styles.bookmarkCountText}>{bookmarkCount}</Text></View></View>
+        </Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel={searchOpen || query ? 'Hide Library search' : 'Search Library'} accessibilityState={{ expanded: searchOpen || Boolean(query) }} onPress={() => { if (searchOpen || query) { setSearchOpen(false); setQuery(''); } else setSearchOpen(true); }} style={styles.smallAction}><Icon name="search" size={20} color={colors.muted} /></Pressable>
+      </View>
+      {(searchOpen || Boolean(query)) && <View style={styles.librarySearch}>
         <Icon name="search" size={20} color={colors.muted} />
         <TextInput value={query} onChangeText={value => setQuery(value.slice(0, 200))} maxLength={200}
           accessibilityLabel="Search Library by title or author" placeholder="Search titles or authors" placeholderTextColor={colors.muted}
-          autoCapitalize="none" autoCorrect={false} returnKeyType="search" style={styles.librarySearchInput} />
+          autoFocus={searchOpen} autoCapitalize="none" autoCorrect={false} returnKeyType="search" style={styles.librarySearchInput} />
         {query.length > 0 && <Pressable onPress={() => setQuery('')} accessibilityRole="button" accessibilityLabel="Clear Library search" style={styles.smallAction}>
           <Icon name="close" size={20} color={colors.muted} />
         </Pressable>}
-      </View>
+      </View>}
 
       {/* Filters */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
         {FILTERS.map((f) => (
-          <Chip key={f.id} label={f.label} active={filter === f.id} onPress={() => setFilter(f.id)} />
+          <Pressable key={f.id} onPress={() => setFilter(f.id)} accessibilityRole="button" accessibilityLabel={f.label} accessibilityState={{ selected: filter === f.id }} style={styles.filterTarget}>
+            <View pointerEvents="none" style={[styles.filterFace, { backgroundColor: filter === f.id ? colors.primaryContainer : colors.surfaceContainer }]}><Text style={[styles.filterText, { color: filter === f.id ? colors.onPrimaryContainer : colors.onSurface }]}>{f.label}</Text></View>
+          </Pressable>
         ))}
       </ScrollView>
 
@@ -615,36 +625,36 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         <View style={styles.sortGroup}>
           <Icon name="sort" size={16} color={colors.muted} />
           {SORTS.map((s) => (
-            <Pressable key={s.id} onPress={() => setSort(s.id)} accessibilityRole="button" accessibilityLabel={`Sort Library by ${s.label}`} accessibilityState={{ selected: sort === s.id }} style={choiceStyles.target}>
-              <View style={[choiceStyles.face, choiceAppearance(colors, sort === s.id)]} pointerEvents="none">
-                <Text style={[styles.sortText, { color: sort === s.id ? colors.onPrimaryContainer : colors.onSurface }]}>{s.label}</Text>
-              </View>
+            <Pressable key={s.id} onPress={() => setSort(s.id)} accessibilityRole="button" accessibilityLabel={`Sort Library by ${s.label}`} accessibilityState={{ selected: sort === s.id }} style={styles.sortTarget}>
+              <Text style={[styles.sortText, sort === s.id && styles.sortActive]}>{s.label}</Text>
             </Pressable>
           ))}
         </View>
         <View style={styles.viewToggle}>
+          <View pointerEvents="none" style={styles.viewToggleTrack} />
           {(['grid', 'list'] as const).map((mode) => (
             <Pressable
               key={mode}
               onPress={() => setViewMode(mode)}
-              style={[styles.viewToggleButton, viewMode === mode && { backgroundColor: colors.surface }]}
+              style={styles.viewToggleButton}
+              hitSlop={{ left: 6, right: 6 }}
               accessibilityRole="button"
               accessibilityLabel={`${mode === 'grid' ? 'Grid' : 'List'} view`}
               accessibilityState={{ selected: viewMode === mode }}
             >
-              <Icon
+              <View pointerEvents="none" style={[styles.viewToggleFace, viewMode === mode && { backgroundColor: colors.surface }]}><Icon
                 name={mode === 'grid' ? 'view_module' : 'view_list'}
-                size={19}
+                size={17}
                 color={viewMode === mode ? colors.primary : colors.muted}
-              />
+              /></View>
             </Pressable>
           ))}
         </View>
       </View>
 
-      <Text accessibilityLiveRegion="polite" style={styles.resultCount}>
+      {(filtered || libraryStatus !== 'ready') && <Text accessibilityLiveRegion="polite" style={styles.resultCount}>
         {libraryStatus === 'loading' ? 'Checking saved books…' : libraryStatus === 'error' ? 'Saved library unavailable' : `${visible.length} ${visible.length === 1 ? 'book' : 'books'} · ${readingTimeLabel} read today${visibleRecoveryBooks.length ? ` · ${visibleRecoveryBooks.length} need an EPUB` : ''}`}
-      </Text>
+      </Text>}
 
       </View>}
       ListEmptyComponent={
@@ -855,33 +865,46 @@ export const CoverEditor: React.FC<{
 
 const createStyles = (colors: AppPalette) => StyleSheet.create({
   collectionContent: { width: '100%', maxWidth: 768, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 8 },
-  collectionHeader: { gap: 14, marginBottom: 16 },
+  collectionHeader: { gap: 12, marginBottom: 14 },
   collectionRow: { flexDirection: 'row', gap: 16, marginBottom: 26 },
   collectionListRow: { marginBottom: 12 },
   scroll: { paddingTop: 4, gap: 12 },
   statusCard: { padding: 16, borderRadius: 12, backgroundColor: colors.surfaceContainer },
   statusText: { ...type.bodyMd, color: colors.onSurface },
   librarySearch: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceContainer, borderRadius: 12, paddingLeft: 12 },
-  librarySearchInput: { ...type.bodyMd, flex: 1, color: colors.onSurface, minHeight: 48, paddingVertical: 10 },
+  librarySearchInput: { ...type.bodyMd, flex: 1, color: colors.onSurface, minHeight: 48, paddingVertical: 8 },
   smallAction: { minWidth: 48, minHeight: 48, justifyContent: 'center', alignItems: 'center' },
   resultCount: { ...type.bodySm, color: colors.muted },
   editBookAction: { position: 'absolute', right: 6, top: 6, minWidth: 48, minHeight: 48, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.surface, borderRadius: 24, borderWidth: 1, borderColor: colors.border },
+  readingStats: { flexDirection: 'row', flexWrap: 'wrap', gap: 16, paddingHorizontal: 20, paddingVertical: 14, borderRadius: 16, backgroundColor: colors.surfaceLow },
+  readingStat: { flex: 1, minWidth: 125, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
+  statValue: { fontFamily: F.sans, fontSize: 16, lineHeight: 21, color: colors.onSurface },
+  statLabel: { ...type.bodySm, fontSize: 11, lineHeight: 16, color: colors.muted },
+  shortcutRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  bookmarkTarget: { minHeight: 48, justifyContent: 'center', alignSelf: 'flex-start' },
+  bookmarkFace: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: colors.surfaceContainer },
+  bookmarkText: { ...type.labelMd, color: colors.primary },
+  bookmarkCount: { backgroundColor: colors.primaryContainer, minWidth: 21, minHeight: 21, paddingHorizontal: 5, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  bookmarkCountText: { ...type.labelSm, color: colors.onPrimaryContainer },
+  filterTarget: { minHeight: 48, justifyContent: 'center' },
+  filterFace: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20 },
+  filterText: { ...type.labelMd, fontSize: 12, lineHeight: 18 },
   goalCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    padding: 12,
-    borderRadius: 12,
+    padding: 16,
+    borderRadius: 16,
     backgroundColor: colors.surfaceLow,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.borderSoft,
   },
   readingTimeIcon: {
-    width: 40,
-    height: 40,
+    width: 56,
+    height: 56,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 10,
+    borderRadius: 28,
     backgroundColor: colors.primaryFixed,
   },
   goalTitle: { ...type.headlineSm, fontSize: 19, lineHeight: 24, color: colors.onSurface },
@@ -934,7 +957,7 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     borderRadius: 12,
     backgroundColor: colors.primaryContainer,
   },
-  browseTitle: { ...type.labelMd, color: '#fff' },
+  browseTitle: { ...type.labelMd, fontSize: 13, color: '#fff' },
   browseSub: { ...type.bodySm, color: 'rgba(255,255,255,0.8)', marginTop: 1, fontSize: 11 },
   bookSourceActions: { flexDirection: 'row', gap: 10, alignItems: 'stretch' },
   importBtn: {
@@ -1031,23 +1054,14 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
 
   chipRow: { gap: 6, paddingRight: 6 },
   toolRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  viewToggle: {
-    flexDirection: 'row',
-    backgroundColor: colors.surfaceContainer,
-    padding: 3,
-    borderRadius: 10,
-    gap: 2,
-  },
-  viewToggleButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 7,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sortGroup: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4, flexShrink: 1 },
-  sortText: { ...type.labelMd, color: colors.muted },
-  sortActive: { color: colors.primary },
+  viewToggle: { flexDirection: 'row', alignItems: 'center', marginLeft: 4, marginRight: 3 },
+  viewToggleTrack: { position: 'absolute', top: 6, bottom: 6, left: -3, right: -3, borderRadius: 8, backgroundColor: colors.surfaceContainer },
+  viewToggleButton: { width: 36, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
+  viewToggleFace: { width: 32, height: 32, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
+  sortGroup: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 2, flexShrink: 1 },
+  sortTarget: { minHeight: 48, minWidth: 48, paddingHorizontal: 4, justifyContent: 'center', alignItems: 'center' },
+  sortText: { fontFamily: F.sans, fontSize: 13, lineHeight: 18, color: colors.muted },
+  sortActive: { color: colors.primary, fontFamily: F.sansSemi },
   coverToggle: { flexDirection: 'row', backgroundColor: colors.surfaceContainer, padding: 3, borderRadius: 10, gap: 2 },
   toggleBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
 
