@@ -49,6 +49,13 @@ test('production builds require the main backend and cannot bundle the Folio Dev
   assert.ok(config({ ...env, ...credentials }).plugins.includes('./plugins/withReaderStorage'));
 });
 
+test('main APK config retains the main package, callback and production backend requirement', () => {
+  const env = { EXPO_PUBLIC_APP_VARIANT: 'production', EAS_BUILD_PROFILE: 'main-apk' };
+  assert.throws(() => config(env), /Configure EXPO_PUBLIC_SUPABASE/);
+  const actual = config({ ...env, EXPO_PUBLIC_SUPABASE_URL: production.url, EXPO_PUBLIC_SUPABASE_KEY: production.key });
+  assert.equal(actual.name, 'Folio'); assert.equal(actual.android.package, 'com.folio.reader'); assert.equal(actual.scheme, 'folio');
+});
+
 test('Folio Dev installs independently and owns a separate OAuth scheme', () => {
   const result = config({ EXPO_PUBLIC_APP_VARIANT: 'development' });
   assert.equal(result.name, 'Folio Dev');

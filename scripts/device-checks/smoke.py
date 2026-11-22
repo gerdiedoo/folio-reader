@@ -14,7 +14,9 @@ import time
 import xml.etree.ElementTree as ET
 from adb_session import ensure_emulator_root
 from tap_geometry import exposed_book_point
-PACKAGE='com.folio.reader.dev'
+PACKAGE=os.environ.get('FOLIO_ANDROID_PACKAGE','com.folio.reader.dev')
+if PACKAGE not in ['com.folio.reader','com.folio.reader.dev']:
+    raise ValueError('Only Folio packages on the disposable CI emulator are supported')
 OUT=pathlib.Path(os.environ.get('FOLIO_ANDROID_EVIDENCE','/tmp/folio-android-evidence'));OUT.mkdir(parents=True,exist_ok=True)
 def adb(*args,check=True):
     return subprocess.run(['adb',*args],check=check,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=40).stdout

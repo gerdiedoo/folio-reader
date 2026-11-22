@@ -6,7 +6,7 @@ module.exports = ({ config }) => {
   }
   config = { ...config, plugins: [...(config.plugins || []), './plugins/withReaderStorage'] };
   if (variant !== 'development') {
-    if (['production', 'preview'].includes(process.env.EAS_BUILD_PROFILE)) {
+    if (['production', 'preview', 'main-apk'].includes(process.env.EAS_BUILD_PROFILE)) {
       if (!process.env.EXPO_PUBLIC_SUPABASE_URL || !process.env.EXPO_PUBLIC_SUPABASE_KEY) {
         throw new Error('Configure EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_KEY in the EAS production/preview environment before building Folio.');
       }

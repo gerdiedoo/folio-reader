@@ -19,6 +19,14 @@
         "EXPO_PUBLIC_APP_VARIANT": "production"
       }
     },
+    "main-apk": {
+      "extends": "production",
+      "distribution": "internal",
+      "credentialsSource": "remote",
+      "android": {
+        "buildType": "apk"
+      }
+    },
     "development-simulator": {
       "developmentClient": true,
       "distribution": "internal",

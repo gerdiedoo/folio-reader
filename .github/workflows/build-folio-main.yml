@@ -1,0 +1,171 @@
+name: Build Folio Main APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/build-folio-main.yml
+      - eas.json
+      - app.json
+      - app.config.js
+      - App.tsx
+      - index.ts
+      - src/**
+      - plugins/**
+      - scripts/build-main-apk.cjs
+      - scripts/report-eas-build-error.cjs
+      - scripts/device-checks/**
+      - assets/**
+      - package.json
+      - package-lock.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: folio-main-apk
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      EXPO_PUBLIC_APP_VARIANT: production
+      EXPO_NO_DOTENV: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.22.1
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run regression tests
+        run: npm test
+      - name: Check TypeScript
+        run: npm run typecheck
+      - name: Check Expo authentication is configured
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo '::error::The existing EXPO_TOKEN repository secret is required to use main-app signing credentials.'
+            exit 1
+          fi
+      - name: Set up authenticated EAS CLI
+        uses: expo/expo-github-action@5273c2136bd09c2a341fe3340d3e767ce5a13015 # v9.0.2
+        with:
+          eas-version: 24.13.0
+          eas-cache: false
+          packager: npm
+          token: ${{ secrets.EXPO_TOKEN }}
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build signed main APK with the Expo production environment
+        env:
+          GRADLE_OPTS: -Dorg.gradle.workers.max=2
+          CMAKE_BUILD_PARALLEL_LEVEL: '2'
+        run: |
+          set +e
+          # env:exec loads Plain text/Sensitive production variables without
+          # printing values. The child validates them before local compilation.
+          # Do not set EAS_BUILD_PROFILE until AFTER these values are loaded.
+          eas env:exec production 'node scripts/build-main-apk.cjs' --non-interactive 2>&1 | tee "$RUNNER_TEMP/folio-main-build.log"
+          build_status=${PIPESTATUS[0]}
+          set -e
+          if [ "$build_status" -ne 0 ]; then
+            node scripts/report-eas-build-error.cjs "$RUNNER_TEMP/folio-main-build.log"
+            exit "$build_status"
+          fi
+          test -s "$RUNNER_TEMP/folio.apk"
+      - name: Verify main package and APK signature
+        run: |
+          actual_package=$("$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest application-id "$RUNNER_TEMP/folio.apk")
+          if [ "$actual_package" != com.folio.reader ]; then
+            echo '::error::The APK does not have the main Folio package identifier.'
+            exit 1
+          fi
+          build_tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+          "$build_tools/apksigner" verify --verbose --print-certs "$RUNNER_TEMP/folio.apk"
+      - name: Upload main Folio APK
+        id: apk
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: folio-main-apk
+          path: ${{ runner.temp }}/folio.apk
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - name: Show main APK download
+        env:
+          APK_ARTIFACT_URL: ${{ steps.apk.outputs.artifact-url }}
+        run: |
+          node <<'JS'
+          const fs = require('node:fs');
+          const url = new URL(process.env.APK_ARTIFACT_URL);
+          if (url.protocol !== 'https:' || url.hostname !== 'github.com') throw Error('Expected a GitHub artifact download.');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
+            '# Main Folio APK', '', `[Download folio-main-apk (ZIP)](${url.href})`, '',
+            'Extract folio.apk and install over the existing main Folio app.',
+            'Keep Folio Dev installed. Do not uninstall Folio or clear its data.',
+            'Android requires the same signing certificate as your installed main app. If it refuses the update, keep the installed app and report the message.', '',
+            'Package: com.folio.reader. Backend: Expo production environment.',
+            `Source: main at ${process.env.GITHUB_SHA}. Artifact retained for 7 days.`,
+            'Built locally on GitHub with remote EAS signing credentials; no Expo cloud build slot used.', '',
+            'The separate emulator job checks a disposable Guest reading journey. Google consent and account backup still need a signed-in phone check.', '',
+          ].join('\n'));
+          JS
+
+  android-smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      FOLIO_ANDROID_PACKAGE: com.folio.reader
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.22.1
+      - name: Download main APK
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7, Node 24
+        with:
+          name: folio-main-apk
+          path: ${{ runner.temp }}
+      - name: Check emulator helpers
+        run: python3 -m unittest discover -s scripts/device-checks -p 'test_*.py'
+      - name: Start disposable emulator and install main Folio
+        timeout-minutes: 15
+        env:
+          FOLIO_ANDROID_APK: ${{ runner.temp }}/folio.apk
+        run: bash scripts/device-checks/start-emulator.sh
+      - name: Exercise main Android reading and recovery journey
+        timeout-minutes: 8
+        env:
+          FOLIO_ANDROID_EVIDENCE: ${{ runner.temp }}/folio-main-evidence
+        run: |
+          python3 scripts/device-checks/make-smoke-epub.py "$RUNNER_TEMP/folio-device-journey.epub"
+          adb push "$RUNNER_TEMP/folio-device-journey.epub" /sdcard/Download/folio-device-journey.epub
+          python3 scripts/device-checks/smoke.py
+      - name: Upload main Android execution evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: folio-main-android-evidence
+          path: |
+            ${{ runner.temp }}/folio-main-evidence
+            ${{ runner.temp }}/folio-emulator.log
+            ${{ runner.temp }}/folio-emulator-setup.log
+          if-no-files-found: warn
+          retention-days: 7

@@ -67,3 +67,24 @@ Restore with another installation signed into the same account, then check an
 unrelated account cannot see its list. Also test cancelling Google and returning
 after time in the background. Guest books remain in Guest; signing in opens a
 separate account space. Keep a portable copy of important books during checks.
+
+## Main APK workflow
+
+The **Build Folio Main APK** workflow compiles `main` using the `main-apk`
+profile, inheriting the production environment and remote signing credentials.
+It produces `folio-main-apk`, a ZIP containing `folio.apk`, rather than a Play
+Store AAB. It runs locally on GitHub without consuming an Expo cloud build slot.
+The package and signature are checked before upload; a separate disposable
+emulator exercises the main package using synthetic Guest data.
+
+Production client values are loaded with `eas env:exec production` before the
+guarded build profile is evaluated. They must have **Plain text** or **Sensitive**
+visibility on Expo, because EAS local builds cannot download variables marked
+**Secret**. Only a publishable or legacy anon client key may enter the bundle.
+This workflow never substitutes the Dev backend or uploads signing files.
+
+Download **folio-main-apk** from the successful main workflow run, extract the
+ZIP and install `folio.apk` over the installed main Folio app. Keep Folio Dev
+installed. If Android rejects the update's signature, keep the installed app and
+its data while the signing mismatch is investigated; do not uninstall it to
+force installation. The artifact is retained for seven days.

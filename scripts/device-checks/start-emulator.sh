@@ -54,4 +54,4 @@ adb shell input keyevent 82
 adb shell settings put global window_animation_scale 0
 adb shell settings put global transition_animation_scale 0
 adb shell settings put global animator_duration_scale 0
-timeout 120s adb install "$RUNNER_TEMP/folio-dev.apk" >> "$setup_log" 2>&1
+timeout 120s adb install "${FOLIO_ANDROID_APK:-$RUNNER_TEMP/folio-dev.apk}" >> "$setup_log" 2>&1
