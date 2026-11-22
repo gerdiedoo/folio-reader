@@ -98,7 +98,8 @@ def check_library_search():
     book='Folio device journey by Folio test fixture.'
     tap('Search Library');find(field)
     adb('shell','input','text','Folio');time.sleep(.4)
-    assert find(field).get('text')=='Folio', 'Library input lost the typed title'
+    initial=find(field)
+    assert initial.get('text')=='Folio', 'Library input lost the typed title: '+json.dumps(initial.attrib)
     adb('shell','input','text','%sdevice');time.sleep(.4)
     assert find(field).get('text')=='Folio device', 'Library input lost focus between keystrokes'
     find(book,contains=True)
@@ -174,9 +175,11 @@ def run():
 try:run()
 except Exception as error:
     try:
-        labels=[node.get('content-desc') or node.get('text') for node in nodes()]
+        snapshot=nodes()
+        labels=[node.get('content-desc') or node.get('text') for node in snapshot]
+        inputs=[node.attrib for node in snapshot if node.get('class','').endswith('EditText')]
         runtime=adb('logcat','-d','-v','brief','ReactNativeJS:V','AndroidRuntime:E','*:S',check=False).decode(errors='replace')[-2200:]
-        message=json.dumps({'error':str(error),'runtime':runtime,'visible':[label for label in labels if label]},ensure_ascii=True)[:3800]
+        message=json.dumps({'error':str(error),'inputs':inputs,'runtime':runtime,'visible':[label for label in labels if label]},ensure_ascii=True)[:3800]
         print('::error title=Android reading journey failed::'+message.replace('%','%25').replace('\r','%0D').replace('\n','%0A'),flush=True)
     except Exception:pass
     try:screenshot('failure')
