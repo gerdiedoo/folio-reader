@@ -6,6 +6,8 @@ The default/production configuration remains Folio (`com.folio.reader`). Android
 keeps each package's local books, settings, and sign-in storage separate. Uninstalling
 Folio Dev deletes its local data; you do not need to uninstall the main app.
 
+[Latest verified APK and test evidence](verification-2026-11-22.md) — application commit `7b20420`.
+
 ## Current remaining-critique batch
 
 This update adds structured EPUB rendering, measured text-line resume, a smaller

@@ -127,3 +127,9 @@ now await completion before verifying files or publishing metadata. Deferred-cop
 regressions model the installed SDK API, rather than a synchronous test double.
 The app must be rebuilt for this fix; workflow-only APK reuse rejects changed
 application files or compiler settings.
+
+Native Android verification now passes for the rebuilt `7b20420` application.
+See [the 22 November evidence record](verification-2026-11-22.md) for the exact
+observed checks, successful APK run, migration activation steps and remaining
+phone/iOS evidence. This supersedes earlier “emulator verification pending” notes
+for the automated Guest journey only.
