@@ -93,10 +93,20 @@ def pause_snapshot(expected_bookmark=None):
     adb('shell','input','keyevent','KEYCODE_HOME');time.sleep(1.5)
     return library_record(expected_bookmark)
 
+def focused_field(label,timeout=12):
+    # Seeing the view in the hierarchy does not mean Android has finished its
+    # input-focus handoff. Do not inject keys into a not-yet-focused window.
+    deadline=time.monotonic()+timeout
+    while time.monotonic()<deadline:
+        node=find(label,timeout=3)
+        if node.get('focused')=='true':return node
+        time.sleep(.3)
+    raise AssertionError('Search input did not receive native focus: '+json.dumps(node.attrib))
+
 def check_library_search():
     field='Search Library by title or author'
     book='Folio device journey by Folio test fixture.'
-    tap('Search Library');find(field)
+    tap('Search Library');focused_field(field)
     adb('shell','input','text','Folio');time.sleep(.4)
     initial=find(field)
     assert initial.get('text')=='Folio', 'Library input lost the typed title: '+json.dumps(initial.attrib)
@@ -117,7 +127,7 @@ def check_library_search():
 def check_free_books_controls():
     tap('Browse free books')
     field='Search free books by title or author'
-    tap(field);adb('shell','input','text','shelley');time.sleep(.4)
+    tap(field);focused_field(field);adb('shell','input','text','shelley');time.sleep(.4)
     tap('3-column grid')
     assert find(field).get('text')=='shelley', 'Changing free-book columns reset the search'
     screenshot('02c-free-books-layout')
