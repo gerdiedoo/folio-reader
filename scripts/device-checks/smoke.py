@@ -106,7 +106,7 @@ def focused_field(label,timeout=12):
 def check_library_search():
     field='Search Library by title or author'
     book='Folio device journey by Folio test fixture.'
-    tap('Search Library');focused_field(field)
+    tap('Search Library');tap(field);focused_field(field)
     adb('shell','input','text','Folio');time.sleep(.4)
     initial=find(field)
     assert initial.get('text')=='Folio', 'Library input lost the typed title: '+json.dumps(initial.attrib)
