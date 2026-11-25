@@ -193,3 +193,19 @@ exercises sequential typing, title/author matches, missing-result recovery,
 changing columns without clearing search, free-book controls, and opening a
 global book result. Native execution is established only when that Dev APK
 workflow completes. These changes are confined to development.
+
+Verified on 25 November: [Dev run 45032415455](https://github.com/gerdiedoo/folio-reader/actions/runs/45032415455)
+passed the complete native journey using the signed APK from application source
+`078c834`, reused only after matching all build inputs. It checked title/author
+search, clearing a missing result, two/three-column card widths, preservation of
+the query while changing columns, free-book search/layout controls, and opening
+a global archive result. Import, bookmarks, reading-position recovery, saved
+reflections and the large-text capture also passed.
+
+The test taps the text field and waits for native focus before typing; it does
+not certify the timing of Android's initial keyboard animation. Earlier checks
+that injected text immediately after opening search failed intermittently.
+Screenshots are available in `folio-android-evidence`; capture is not a visual
+review or TalkBack test. The installable update is the `folio-dev-apk` artifact
+on that run. Main remains at `653ac5e`; no schema change is required by this UI
+update.
