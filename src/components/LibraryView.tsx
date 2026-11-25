@@ -51,7 +51,7 @@ interface LibraryViewProps {
   onOpenBook: (bookId: string) => void;
   onSelectBook: (bookId: string | null) => void;
   onAddEpubBook: (book: Book, pages: BookContentPage[]) => Promise<void>;
-  onRestoreImportedProgress: (book: Book) => Promise<Book>;
+  onRestoreImportedProgress: (book: Book, pages: BookContentPage[]) => Promise<Book>;
   onReimportRecoveryBook: (
     recovery: LibraryRecoveryBook,
     book: Book,
@@ -117,6 +117,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   bottomInset,
 }) => {
   const { width, fontScale } = useWindowDimensions();
+  const summaryStacked = width < 350 || fontScale > 1.25;
   const colors = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [viewPreferences, setViewPreferences] = useState(() => libraryViewPreferences(null));
@@ -202,7 +203,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       }
       setImporting(true);
       const { book, pages } = await parseEpubFile(asset.uri, asset.name, storage);
-      const bookWithProgress = await onRestoreImportedProgress(book);
+      const bookWithProgress = await onRestoreImportedProgress(book, pages);
       await onAddEpubBook(bookWithProgress, pages);
     } catch (err: unknown) {
       console.warn('EPUB import failed:', err);
@@ -558,14 +559,20 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </Text>
         </View>
       )}
-      {!searching && <><View testID="library-reading-summary" style={styles.goalCard}>
-        <View style={styles.readingToday}>
+      {!searching && <><View testID="library-reading-summary" style={[styles.goalCard, summaryStacked && styles.goalCardStacked]}>
+        <View style={[styles.readingToday, summaryStacked && styles.readingTodayStacked]}>
           <View style={styles.readingTimeIcon}><Icon name="schedule" size={20} color={colors.primary} /></View>
           <View style={{ flex: 1 }}><Text accessibilityRole="header" style={styles.goalTitle}>Today’s reading</Text><Text style={styles.goalSub}>{readingTimeLabel} read today</Text></View>
         </View>
-        <View style={styles.readingStats}>
-          <View style={styles.readingStat}><Icon name="local_fire_department" size={18} color={colors.primary} /><Text style={styles.statLabel}><Text style={styles.statValue}>{readingGoal.streakDays}</Text> day streak</Text></View>
-          <View style={styles.readingStat}><Icon name="menu_book" size={18} color={colors.primary} /><Text style={styles.statLabel}><Text style={styles.statValue}>{readingGoal.booksFinishedYear}</Text> books finished this year</Text></View>
+        <View style={[styles.readingStats, summaryStacked && styles.readingStatsStacked]}>
+          <View accessible accessibilityLabel={`${readingGoal.streakDays} day streak`} style={styles.readingStat}>
+            <View style={styles.statTotal}><Icon name="local_fire_department" size={15} color={colors.primary} /><Text style={styles.statValue}>{readingGoal.streakDays}</Text></View>
+            <Text style={styles.statLabel}>Streak</Text>
+          </View>
+          <View accessible accessibilityLabel={`${readingGoal.booksFinishedYear} books finished this year`} style={styles.readingStat}>
+            <View style={styles.statTotal}><Icon name="book" size={15} color={colors.primary} /><Text style={styles.statValue}>{readingGoal.booksFinishedYear}</Text></View>
+            <Text style={styles.statLabel}>Finished</Text>
+          </View>
         </View>
       </View>
 
@@ -870,11 +877,14 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   smallAction: { minWidth: 48, minHeight: 48, justifyContent: 'center', alignItems: 'center' },
   resultCount: { ...type.bodySm, color: colors.muted },
   editBookAction: { position: 'absolute', right: 6, top: 6, minWidth: 48, minHeight: 48, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.surface, borderRadius: 24, borderWidth: 1, borderColor: colors.border },
-  readingToday: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  readingStats: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.borderSoft },
-  readingStat: { flex: 1, minWidth: 125, flexDirection: 'row', alignItems: 'center', gap: 7 },
-  statValue: { fontFamily: F.sansSemi, color: colors.onSurface },
-  statLabel: { ...type.bodySm, fontSize: 12, lineHeight: 18, color: colors.muted, flexShrink: 1 },
+  readingToday: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  readingTodayStacked: { flexGrow: 0, flexShrink: 0, flexBasis: 'auto' },
+  readingStats: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingLeft: 10, borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: colors.borderSoft },
+  readingStatsStacked: { alignSelf: 'stretch', justifyContent: 'space-around', paddingLeft: 0, paddingTop: 10, borderLeftWidth: 0, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.borderSoft },
+  readingStat: { minWidth: 44, alignItems: 'center', gap: 2 },
+  statTotal: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  statValue: { fontFamily: F.sansSemi, fontSize: 16, lineHeight: 21, color: colors.onSurface },
+  statLabel: { ...type.bodySm, fontSize: 11, lineHeight: 16, color: colors.muted },
   bookmarkTarget: { minHeight: 48, justifyContent: 'center', marginRight: 4 },
   bookmarkFace: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   bookmarkText: { ...type.labelMd, fontSize: 12, lineHeight: 18, color: colors.primary },
@@ -883,23 +893,26 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   filterFace: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20 },
   filterText: { ...type.labelMd, fontSize: 12, lineHeight: 18 },
   goalCard: {
-    gap: 12,
-    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 12,
     borderRadius: 16,
     backgroundColor: colors.surfaceLow,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.borderSoft,
   },
+  goalCardStacked: { flexDirection: 'column', alignItems: 'stretch' },
   readingTimeIcon: {
-    width: 40,
-    height: 40,
+    width: 36,
+    height: 36,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 20,
+    borderRadius: 18,
     backgroundColor: colors.primaryFixed,
   },
-  goalTitle: { ...type.headlineSm, fontSize: 19, lineHeight: 24, color: colors.onSurface },
-  goalSub: { ...type.bodySm, color: colors.muted, marginTop: 2 },
+  goalTitle: { ...type.headlineSm, fontSize: 17, lineHeight: 22, color: colors.onSurface },
+  goalSub: { ...type.bodySm, fontSize: 12, lineHeight: 18, color: colors.muted, marginTop: 2 },
   sectionLabel: { ...type.labelSm, color: colors.muted, marginBottom: 8, letterSpacing: 1 },
   featured: {
     flexDirection: 'row',

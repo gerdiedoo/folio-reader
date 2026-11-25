@@ -2718,7 +2718,8 @@ test('Library combines current reading totals and keeps bookmarks reachable whil
  assert.equal(summary.length, 1);
  const text = renderedText(summary[0]);
  assert.match(text, /Today’s reading/); assert.match(text, /23 min\s+read today/);
- assert.match(text, /4\s+day streak/); assert.match(text, /7\s+books finished this year/);
+ assert.ok(labelled(summary[0], '4 day streak')); assert.ok(labelled(summary[0], '7 books finished this year'));
+ assert.match(text, /Streak/); assert.match(text, /Finished/);
  assert.equal(elements(root).some(node => node.props?.accessibilityLabel === 'Search Library'), false);
  labelled(root, 'Finished').onPress(); root = f.render();
  labelled(root, 'Library bookmarks, 2 saved').onPress(); assert.equal(opened, 1);
@@ -2728,4 +2729,16 @@ test('Library combines current reading totals and keeps bookmarks reachable whil
  assert.ok(labelled(root, 'Search Library by title or author'));
  labelled(root, 'Hide Library search').onPress(); root = f.render();
  assert.ok(labelled(root, 'Resume Brook by An Author')); f.h.unmount();
+});
+
+test('book-list restore distinguishes recovered books from unavailable reading passages', async () => {
+ const f = accountHarness({ onRestoreLibrary: async () => ({ restored: 2, alreadyInLibrary: 1, skipped: 0, lookupFailed: 0, failures: [], readingPositionsNotRestored: 2 }) });
+ let root = f.render();
+ assert.match(renderedText(root), /Book list backup/);
+ assert.match(renderedText(root), /excludes EPUB files, notes and bookmarks/);
+ await labelled(root, 'Restore library').onPress(); root = f.render();
+ assert.match(renderedText(root), /2\s+books were\s+added at the beginning/);
+ assert.match(renderedText(root), /account backup was kept unchanged/);
+ assert.match(f.messages.at(-1), /2 saved passages were unavailable/);
+ f.h.unmount();
 });

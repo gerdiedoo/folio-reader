@@ -136,7 +136,13 @@ def check_free_books_controls():
 def run():
     ensure_emulator_root()
     launch();find('Folio Library',timeout=60)
-    find('Today’s reading');find('0 day streak');find('0 books finished this year')
+    summary=[find(label) for label in ['Today’s reading','0 day streak','0 books finished this year']]
+    boxes=[list(map(int,re.findall(r'\d+',node.get('bounds','')))) for node in summary]
+    assert all(len(box)==4 for box in boxes), 'Reading summary has no measured native bounds'
+    title,streak,finished=boxes
+    assert title[0]<streak[0]<finished[0], 'Reading summary counters must sit to the right of the reading time'
+    assert all(min(title[3],box[3])>max(title[1],box[1]) for box in [streak,finished]), 'Reading summary is not a compact single row'
+    (OUT/'reading-summary-layout.json').write_text(json.dumps({'fontScale':1,'title':title,'streak':streak,'finished':finished},indent=2))
     tap('Library bookmarks, 0 saved');find('No bookmarks yet.');tap('Close bookmarks')
     screenshot('01-empty-library')
     adb('shell','settings','put','system','font_scale','1.5');time.sleep(1)

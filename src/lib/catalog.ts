@@ -1,4 +1,5 @@
 import { File, Paths } from 'expo-file-system';
+import type { ReadingPosition } from '../types';
 import { loadJSON, saveJSON } from './localStore';
 import type { LocalStore } from './localStore';
 
@@ -31,6 +32,8 @@ export interface CatalogBook {
 }
 
 export interface LibraryBackupEntry {
+  documentFingerprint?: string;
+  readingPosition?: Pick<ReadingPosition, 'pageNumber' | 'wordOffset' | 'anchor'>;
   title: string;
   author: string;
   gutenbergId?: number;
@@ -61,6 +64,7 @@ export interface LibraryRecoveryBook extends LibraryBackupEntry {
 }
 
 export interface LibraryRestoreResult {
+  readingPositionsNotRestored?: number;
   restored: number;
   skipped: number;
   alreadyInLibrary: number;
