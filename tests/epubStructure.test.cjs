@@ -78,3 +78,48 @@ test('ordered-list numbering follows explicit starts and item values for followi
  const blocks=await extract('<ol start="3"><li>Three</li><li value="8">Eight</li><li>Nine</li></ol>');
  assert.deepEqual(blocks.map(b=>b.rich.marker),['3.','8.','9.']);
 });
+
+test('poetry styled with pre-wrap retains line breaks, blank stanzas and emphasis without becoming code', async () => {
+ const [block] = await extract('<p style="white-space: pre-wrap">First line\n<em>Second line</em>\n\n  Final stanza</p>');
+ assert.equal(block.text, 'First line\nSecond line\n\n  Final stanza');
+ assert.equal(block.rich.kind, 'paragraph');
+ assert.ok(block.rich.runs.some(run => run.text === 'Second line' && run.emphasis));
+ assert.equal(block.path, 'body/0/0');
+ assert.equal(validRichBlock(block.rich), true);
+});
+
+test('white-space is inherited with inline overrides and pre-line collapses spaces while preserving newlines', async () => {
+ const blocks = await extract('<div style="white-space: pre-wrap"><p>First\r\n  second<br/>third</p><p style="white-space: normal"> One\n   line </p></div><p style="white-space:pre-line"> One   two \n  three\n\nfour </p><p>Before <span style="white-space:pre-wrap">two\n  lines</span> after.</p>');
+ assert.deepEqual(blocks.map(block => block.text), ['First\n  second\nthird', 'One line', 'One two\nthree\n\nfour', 'Before two\n  lines after.']);
+ for (const block of blocks) assert.equal(validRichBlock(block.rich), true);
+});
+
+test('hidden and display:none content never leaks into prose, images or source anchors', async () => {
+ const blocks = await extract('<p><span hidden>Hidden first.</span>Visible text.<span hidden="false">Hidden material.</span><span style="display: none !important; display: block">Also hidden.</span><span aria-hidden="true">Visual text.</span></p><div hidden><img src="unused.png"/><video/></div><p style="display:none">Hidden block.</p><p>Last line.</p>');
+ assert.deepEqual(blocks.map(block => block.text), ['Visible text.Visual text.', 'Last line.']);
+ assert.equal(blocks[0].path, 'body/0/1');
+ assert.equal(blocks[1].path, 'body/3/0');
+});
+
+test('table alternatives omit hidden captions, row groups and cell text, with anchors on visible text', async () => {
+ const [block] = await extract('<table><caption hidden>Hidden caption</caption><tbody hidden><tr><td>Hidden row</td></tr></tbody><tbody><tr><td><span hidden>Hidden cell text</span>Visible</td><td style="display:none">Hidden cell</td></tr></tbody></table>');
+ assert.equal(block.text, 'Visible');
+ assert.equal(block.rich.table.caption, '');
+ assert.equal(block.rich.table.rows.length, 1);
+ assert.equal(block.rich.table.rows[0].length, 1);
+ assert.equal(block.path, 'body/0/2/0/0/1');
+ assert.equal(validRichBlock(block.rich), true);
+});
+
+test('Pages preserves verse line breaks and indentation when preparing display segments', async () => {
+ const blocks = await extract('<p style="white-space:pre-wrap">First line\nSecond line\n\n  Final stanza  </p>');
+ const segments = paginateContent([page(blocks.map(block => block.rich))], 4, 12);
+ assert.equal(segments.flatMap(segment => segment.page.rich.filter(Boolean).map(block => block.text)).join(''), 'First line\nSecond line\n\n  Final stanza  ');
+});
+
+test('table cells inherit pre-line whitespace from their row group', async () => {
+ const [block] = await extract('<table><tbody style="white-space:pre-line"><tr><td>One   two\nThree</td><td><span hidden><img src="unused.png"/></span>Four<br/>Five</td></tr></tbody></table>');
+ assert.equal(block.rich.table.rows[0][0].text, 'One two\nThree');
+ assert.equal(block.rich.table.rows[0][1].text, 'Four\nFive');
+ assert.equal(validRichBlock(block.rich), true);
+});

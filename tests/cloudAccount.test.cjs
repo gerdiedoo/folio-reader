@@ -1,14 +1,9 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const Module = require('node:module');
 const { test } = require('node:test');
-const ts = require('typescript');
 function load(name) {
-  const filename = path.resolve(__dirname, '../src/lib', name + '.ts');
-  const loaded = new Module(filename, module); loaded.filename = filename; loaded.paths = module.paths;
-  loaded._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, filename);
-  return loaded.exports;
+  return require('./loadTypeScript.cjs').loadTypeScript(path.resolve(__dirname, '../src/lib', name + '.ts'));
 }
 const { createAccountRepository } = load('cloudAccount');
 const { watchAccountSession } = load('accountSession');
@@ -205,4 +200,23 @@ test('profile metadata cannot change account identity or reference another accou
   const profile = toUserProfile({ id: A, email: 'test@example.com', user_metadata: { id: B, avatar_url: 'file:///private/account-B/cover.png' } });
   assert.equal(profile.id, A); assert.equal(profile.avatarUrl, undefined);
   assert.equal(toUserProfile({ id: A, user_metadata: { picture: 'https://example.com/avatar.png' } }).avatarUrl, 'https://example.com/avatar.png');
+});
+
+test('account book-list backup round trips an edition checkpoint while dropping device-local fields', async () => {
+ const c = client(), repo = createAccountRepository(c, A);
+ const edition = 'a'.repeat(64), anchor = { version: 1, edition, href: 'EPUB/body.xhtml', path: 'body/2/0', wordOffset: 3 };
+ const entry = { title: 'Book', author: 'Author', currentPage: 12, documentFingerprint: edition,
+  readingPosition: { pageNumber: 12, wordOffset: 8, anchor, scroll: { offset: 240, layout: 'private-device' } }, fileLocation: 'file:///private/book.epub' };
+ await repo.saveLibraryBackup(A, [entry]);
+ const saved = c.state.queries[0].value.books;
+ assert.equal(saved[0].documentFingerprint, edition);
+ assert.deepEqual(saved[0].readingPosition, { pageNumber: 12, wordOffset: 8, anchor });
+ assert.equal(saved[0].fileLocation, undefined);
+ c.state.data = { books: saved };
+ assert.deepEqual(await repo.fetchLibraryBackup(A), saved);
+ c.state.data = { books: [{ ...saved[0], documentFingerprint: 'bad' }] };
+ await assert.rejects(repo.fetchLibraryBackup(A), /read safely/);
+ const writesBefore = c.state.queries.length;
+ await assert.rejects(repo.saveLibraryBackup(A, c.state.data.books), /read safely/);
+ assert.equal(c.state.queries.length, writesBefore);
 });

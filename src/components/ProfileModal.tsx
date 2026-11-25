@@ -118,7 +118,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     if (!result) { setRestoreProgress(null); return 'No library backup found for this account'; }
     setRestoreResult(result);
     setRestoreProgress(null);
-    return `Restored ${result.restored}; ${result.alreadyInLibrary} already in Library; ${result.failures.length} need attention.`;
+    return `Restored ${result.restored}; ${result.alreadyInLibrary} already in Library; ${result.failures.length} need attention.${result.readingPositionsNotRestored ? ` ${result.readingPositionsNotRestored} saved ${result.readingPositionsNotRestored === 1 ? 'passage was' : 'passages were'} unavailable; those books start at the beginning.` : ''}`;
   });
   const chooseSafetyCopy = () => runAction('choose-copy', async () => {
     setSafetyCopy(null);
@@ -161,7 +161,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           <Text style={styles.email}>{user?.email || 'Not signed in'}</Text>
           {hasLegacyData && <View style={{ gap: 4, paddingVertical: 12 }}>
             <Text style={[styles.backupDescription, { color: colors.onSurface }]}>Your older library is preserved on this device.</Text>
-            <Text style={styles.backupDescription}>It hasn’t been assigned to this reading space. Guest and accounts keep separate books and notes. Keep Folio Dev installed while reviewing Account help.</Text>
+            <Text style={styles.backupDescription}>It hasn’t been assigned to this reading space. Guest and accounts keep separate books and notes. Keep this app installed while reviewing Account help.</Text>
           </View>}
           {syncSummary && <Text accessibilityLiveRegion="polite" style={styles.backupDescription}>{syncSummary}</Text>}
           {onReviewConflicts && <Pressable accessibilityRole="button" accessibilityLabel="Review account changes" disabled={busy} onPress={() => { if (!pending.current) onReviewConflicts(); }} style={styles.helpRow}><Text style={styles.helpText}>Review conflicting versions</Text></Pressable>}
@@ -199,11 +199,11 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
             <View style={[styles.libraryBackup, { backgroundColor: colors.surfaceLow, borderColor: colors.borderSoft }]}>
               <View style={styles.backupHeading}>
                 <Icon name="cloud_upload" size={19} color={colors.primary} />
-                <Text style={[styles.backupTitle, { color: colors.onSurface }]}>Library backup</Text>
+                <Text style={[styles.backupTitle, { color: colors.onSurface }]}>Book list backup</Text>
               </View>
               <Text style={[styles.backupDescription, { color: colors.muted }]}>
-                Back up your book list and reading progress. EPUB files stay on this device.
-                Restore re-downloads matching Gutenberg editions; other editions may need their original EPUB.
+                Save your book list and exact reading passages when available. Restore adds missing books and keeps existing reading progress.
+                A saved passage needs the same EPUB edition. This backup excludes EPUB files, notes and bookmarks; include them in a portable safety copy.
               </Text>
               {libraryStatus === 'ready' && bookCount === 0 && <Text style={styles.backupDescription}>Add or restore a book before backing up. An empty library will not replace your account backup.</Text>}
               {libraryStatus !== 'ready' && <Text accessibilityLiveRegion="polite" style={styles.backupDescription}>{libraryStatus === 'loading' ? 'Loading your saved library before backup or restore…' : 'Your saved library could not be loaded. Restart Folio before backup or restore.'}</Text>}
@@ -233,6 +233,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                       ? `Restore complete: ${restoreResult.restored} added; ${restoreResult.alreadyInLibrary} already in Library`
                       : `Could not restore ${restoreResult.failures.length} ${restoreResult.failures.length === 1 ? 'book' : 'books'}`}
                   </Text>
+                  {Boolean(restoreResult.readingPositionsNotRestored) && <Text accessibilityLiveRegion="polite" style={styles.backupDescription}>
+                    {restoreResult.readingPositionsNotRestored} {restoreResult.readingPositionsNotRestored === 1 ? 'book was' : 'books were'} added at the beginning because the saved passage could not be matched. Your account backup was kept unchanged.
+                  </Text>}
                   {restoreResult.failures.map((failure, index) => (
                     <View key={`${failure.title}-${index}`} style={styles.restoreFailure}>
                       <Icon name="cloud_off" size={15} color={colors.muted} />

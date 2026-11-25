@@ -31,8 +31,12 @@ Notebook/search navigation targets are consumed once instead of being replayed
 on every Reading mount. Opening from Library also clears an old target. Each
 book mounts a separate reader. Late cloud snapshots add cloud-only books while
 existing device library entries retain their progress and local file metadata.
-An explicit library-progress restore still applies the selected backup and clears
-an obsolete local scroll offset.
+Book-list restore now keeps existing device books at their current positions.
+For a new import, an edition-specific checkpoint resolves its source path and word
+against the imported text; another edition never receives its old page number.
+Older book-list backups without source anchors still restore the list and completed
+status, but cannot reconstruct a precise passage. See
+[the 25 November development step](development-2026-11-25.md).
 
 ## Upgrade and limits
 

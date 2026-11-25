@@ -171,3 +171,41 @@ metadata, cancellation/retry, catalog Back state and downloading/reading from
 details. Native phone appearance and live provider availability still need the
 APK check. The emulator harness also chooses the exposed part of a partially
 visible book card rather than requiring a full card to fit above floating tabs.
+
+## Development: Library search and shared shelves — 22 November 2026
+
+The Library header's search button opens local title/author search. Its input
+stays outside the virtualized collection, and search mode hides the reading
+dashboard so results remain visible while typing. Opening search clears a stale
+status filter; filters chosen during a search remain explicit. Cancel clears the
+query. Global archive search remains available from Notebook/Settings and now
+has a bounded results viewport instead of relying on an intrinsic list height.
+
+Library and free books share compact filter/sort controls, cover geometry,
+title/author typography and 2-column, 3-column and List choices. The saved column
+preference applies to both shelves, survives restarts and defaults to two for
+older settings. Narrow windows and large system text use a readable fallback
+with a visible explanation. Free-book details and download/retry actions remain
+available; grid cards use minimal actions and no surrounding card border.
+
+521 regression tests and TypeScript passed locally. Android automation now
+exercises sequential typing, title/author matches, missing-result recovery,
+changing columns without clearing search, free-book controls, and opening a
+global book result. Native execution is established only when that Dev APK
+workflow completes. These changes are confined to development.
+
+Verified on 25 November: [Dev run 45032415455](https://github.com/gerdiedoo/folio-reader/actions/runs/45032415455)
+passed the complete native journey using the signed APK from application source
+`078c834`, reused only after matching all build inputs. It checked title/author
+search, clearing a missing result, two/three-column card widths, preservation of
+the query while changing columns, free-book search/layout controls, and opening
+a global archive result. Import, bookmarks, reading-position recovery, saved
+reflections and the large-text capture also passed.
+
+The test taps the text field and waits for native focus before typing; it does
+not certify the timing of Android's initial keyboard animation. Earlier checks
+that injected text immediately after opening search failed intermittently.
+Screenshots are available in `folio-android-evidence`; capture is not a visual
+review or TalkBack test. The installable update is the `folio-dev-apk` artifact
+on that run. Main remains at `653ac5e`; no schema change is required by this UI
+update.

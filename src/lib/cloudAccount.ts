@@ -7,6 +7,7 @@ import type {
   ReadingSettings,
 } from '../types';
 import type { LibraryBackupEntry } from './catalog';
+import { readLibraryBackupEntry } from './libraryBackup';
 
 /** Bind once per mounted account. Late work from A cannot upload under B. */
 export function createAccountRepository(supabase: SupabaseClient, ownerId: string | null) {
@@ -21,8 +22,9 @@ export function createAccountRepository(supabase: SupabaseClient, ownerId: strin
   }
   async function saveLibraryBackup(userId: string, books: LibraryBackupEntry[]): Promise<void> {
     if (userId !== ownerId || !await ownsSession()) { throw new Error('Sign in to this account before backing up.'); }
+    const entries = books.map(readLibraryBackupEntry);
     const { data, error } = await supabase.from('library_backups').upsert(
-      { user_id: userId, books, updated_at: new Date().toISOString() },
+      { user_id: userId, books: entries, updated_at: new Date().toISOString() },
       { onConflict: 'user_id' }
     ).select('user_id').single();
     if (error) {
@@ -44,30 +46,8 @@ export function createAccountRepository(supabase: SupabaseClient, ownerId: strin
       throw new Error(`Could not load your library backup: ${error.message}`);
     }
     if (!data) return null;
-    if (!Array.isArray(data.books) || !data.books.every((entry: unknown) => {
-      if (!entry || typeof entry !== 'object') return false;
-      const candidate = entry as Partial<LibraryBackupEntry>;
-      return typeof candidate.title === 'string' && typeof candidate.author === 'string';
-    })) throw new Error('Your account backup could not be read safely. It has been kept unchanged; try again or use a portable safety copy.');
-
-    return (data.books as LibraryBackupEntry[]).map((entry) => ({
-      title: entry.title,
-      author: entry.author,
-      ...(typeof entry.gutenbergId === 'number' && Number.isInteger(entry.gutenbergId)
-        ? { gutenbergId: entry.gutenbergId }
-        : {}),
-      ...(typeof entry.currentPage === 'number' && Number.isFinite(entry.currentPage)
-        ? { currentPage: entry.currentPage }
-        : {}),
-      ...(typeof entry.progressPercent === 'number' && Number.isFinite(entry.progressPercent)
-        ? { progressPercent: entry.progressPercent }
-        : {}),
-      ...(typeof entry.currentChapter === 'string' ? { currentChapter: entry.currentChapter } : {}),
-      ...(typeof entry.currentLoc === 'number' && Number.isFinite(entry.currentLoc)
-        ? { currentLoc: entry.currentLoc }
-        : {}),
-      ...(typeof entry.isFinished === 'boolean' ? { isFinished: entry.isFinished } : {}),
-    }));
+    if (!Array.isArray(data.books)) throw new Error('Your account backup could not be read safely. It has been kept unchanged; try again or use a portable safety copy.');
+    return data.books.map(readLibraryBackupEntry);
   }
 
   async function testSupabaseConnection(): Promise<{ connected: boolean; message: string }> {

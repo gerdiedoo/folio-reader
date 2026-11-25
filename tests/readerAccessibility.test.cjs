@@ -1911,7 +1911,7 @@ const pressLibraryFilter = (root, label) => labelled(root, label).onPress();
 
 test('Library search filters title/author and recovery rows; clearing results resets query and filter while keeping sort', () => {
   const f = libraryHarness(); let root = f.render();
-  labelled(root, 'Search Library').onPress(); root = f.render();
+  f.props.searchRequest = 1; f.render(); root = f.render();
   labelled(root, 'Search Library by title or author').onChangeText('zoe'); root = f.render();
   assert.equal(libraryRows(root).length, 1); assert.match(libraryRows(root)[0].props.accessibilityLabel, /^Amber by Zoë/);
   assert.ok(labelled(root, 'Re-import Café from a local EPUB'));
@@ -1938,7 +1938,37 @@ test('Library Recent and Continue Reading use reading date and device text; Down
   assert.equal(elements(root).some(node => node.props?.accessibilityLabel?.startsWith('Resume ')), false);
   labelled(root, 'List view').onPress(); root = f.render();
   assert.deepEqual(labelled(root, 'List view').accessibilityState, { selected: true });
-  assert.deepEqual(labelled(root, 'Grid view').accessibilityState, { selected: false }); f.h.unmount();
+  assert.deepEqual(labelled(root, '2-column grid').accessibilityState, { selected: false }); f.h.unmount();
+});
+
+test('Library header search requests show a fixed input, reset stale filters, and preserve input through grid changes', () => {
+  let handled = 0;
+  const f = libraryHarness({ onSearchRequestHandled: () => handled++ }); let root = f.render();
+  labelled(root, 'Finished').onPress(); f.render();
+  f.props.searchRequest = 1; f.render(); root = f.render();
+  assert.equal(handled, 1); f.props.searchRequest = 0; root = f.render();
+  assert.equal(labelled(root, 'All Books').accessibilityState.selected, true);
+  labelled(root, 'Search Library by title or author').onChangeText('An Author'); root = f.render();
+  assert.equal(libraryRows(root).length, 3);
+  const list = elements(root).find(node => node.props?.testID === 'library-collection');
+  assert.equal(elements(list.props.ListHeaderComponent).some(node => node.type === 'TextInput'), false);
+  labelled(root, '3-column grid').onPress(); root = f.render();
+  assert.equal(labelled(root, 'Search Library by title or author').value, 'An Author');
+  assert.equal(elements(root).find(node => node.props?.testID === 'library-collection').props.data[0].length, 3);
+  labelled(root, 'Hide Library search').onPress(); root = f.render();
+  assert.equal(libraryRows(root).length, 4); assert.equal(elements(root).some(node => node.type === 'TextInput'), false); f.h.unmount();
+});
+
+test('Library restores and saves three columns and passes the same choice to free books', async () => {
+  const writes = [], storage = { loadJSON: async () => ({ gridColumns: 3 }), saveJSONStrict: async (_key, value) => writes.push(value) };
+  const f = libraryHarness({ storage }); f.render(); await flushNative(); let root = f.render();
+  assert.equal(labelled(root, '3-column grid').accessibilityState.selected, true);
+  assert.equal(elements(root).find(node => node.props?.testID === 'library-collection').props.data[0].length, 3);
+  labelled(root, 'Browse free books').onPress(); root = f.render();
+  const browse = elements(root).find(node => node.type === 'BrowseBooksScreen').props;
+  assert.equal(browse.gridColumns, 3); browse.onGridColumnsChange(2); browse.onClose(); root = f.render();
+  assert.equal(labelled(root, '2-column grid').accessibilityState.selected, true);
+  assert.equal(writes.at(-1).gridColumns, 2); f.h.unmount();
 });
 
 test('Library grid shows truthful percentage badges for unread and finished books while list status stays descriptive', () => {
@@ -1957,7 +1987,7 @@ test('Library grid shows truthful percentage badges for unread and finished book
 
 test('book details and Android back retain Library search; cover edit is a separate named action', () => {
   const f = libraryHarness(); let root = f.render();
-  labelled(root, 'Search Library').onPress(); root = f.render();
+  f.props.searchRequest = 1; f.render(); root = f.render();
   labelled(root, 'Search Library by title or author').onChangeText('amber'); root = f.render();
   const row = libraryRows(root)[0]; assert.equal(row.props.accessibilityRole, 'button');
   assert.equal(elements(row).some(node => node.type === 'BookCover' && node.props.onEdit), false);
@@ -2018,7 +2048,8 @@ function catalogHarness({ search, download, parse, save, remember, details } = {
   } });
   const item = { id: 'gutenberg-1', title: 'A Book', author: 'An Author', source: 'gutenberg', coverUrl: 'https://www.gutenberg.org/cover.jpg', downloads: 10, subjects: [] };
   const { BrowseBooksScreen, BookRow } = h.load('../src/components/BrowseBooksScreen.tsx');
-  const props = { storage: { removeBookFiles: id => calls.deleted.push(id) }, books: [], availableBookIds: [], viewMode: 'grid', onViewModeChange() {},
+  const props = { storage: { removeBookFiles: id => calls.deleted.push(id) }, books: [], availableBookIds: [], viewMode: 'grid', gridColumns: 2,
+    onViewModeChange: mode => { props.viewMode = mode; }, onGridColumnsChange: count => { props.gridColumns = count; },
     onAddEpubBook: async (book, pages) => { calls.saved.push({ book, pages }); if (save) await save(book, pages); props.books = [...props.books, book]; props.availableBookIds = [...props.availableBookIds, book.id]; },
     onOpenBook: id => calls.opened.push(id), onClose: () => calls.closed++, showToast: message => calls.toasts.push(message) };
   return { h, calls, props, item, BookRow, render: () => h.render(BrowseBooksScreen, props) };
@@ -2071,6 +2102,19 @@ test('free-book covers and titles open details without downloading; Back retains
   f.h.unmount(); rowHarness.unmount();
 });
 
+test('free books share two/three columns and keep search outside the results list when density changes', async () => {
+  const f = catalogHarness(); f.render(); await flushNative(); let root = f.render();
+  assert.equal(freeBookList(root).numColumns, 2);
+  labelled(root, 'Search free books by title or author').onChangeText('A Book'); root = f.render();
+  labelled(root, '3-column grid').onPress(); root = f.render();
+  assert.equal(freeBookList(root).numColumns, 3); assert.equal(freeBookRow(f, root).dense, true);
+  assert.equal(labelled(root, 'Search free books by title or author').value, 'A Book');
+  assert.equal(elements(freeBookList(root).ListHeaderComponent).some(node => node.type === 'TextInput'), false);
+  assert.ok(freeBookRow(f, root).cardWidth < 120);
+  labelled(root, 'List view').onPress(); root = f.render(); assert.equal(freeBookList(root).numColumns, 1);
+  labelled(root, '2-column grid').onPress(); root = f.render(); assert.equal(freeBookList(root).numColumns, 2); f.h.unmount();
+});
+
 test('details requests are cancelled on Back; failures offer retry while keeping download available', async () => {
   let late;
   const f = catalogHarness({ details: () => new Promise(done => { late = done; }) });
@@ -2102,7 +2146,7 @@ test('free-book source changes cancel old results; provider errors keep retry an
   let first;
   const f = catalogHarness({ search: opts => opts.source === 'gutenberg' ? new Promise(done => { first = done; }) : Promise.reject(Error('Source unavailable')) });
   let root = f.render();
-  elements(root).find(node => node.type === 'Chip' && node.props.label === 'Standard Ebooks').props.onPress(); root = f.render();
+  labelled(root, 'Standard Ebooks').onPress(); root = f.render();
   assert.equal(f.calls.searches[0].signal.aborted, true);
   first({ books: [f.item], total: 1, hasMore: false }); await flushNative(); root = f.render();
   assert.equal(freeBookList(root).data.length, 0);
@@ -2650,12 +2694,12 @@ test('conflict review blocks duplicate choices and dismissal until the durable c
  labelled(root,'Close account change review').onPress();assert.equal(closed,1);h.unmount();
 });
 
-test('Library bookmarks shortcut forwards its action and local search can be expanded and cleared',()=>{
+test('Library bookmark chip stays with collection filters and header search can be expanded and cleared',()=>{
  let opened=0;const f=libraryHarness({bookmarkCount:2,onOpenBookmarks:()=>opened++});let root=f.render();
  labelled(root,'Library bookmarks, 2 saved').onPress();assert.equal(opened,1);
  assert.equal(elements(root).some(node=>node.props?.accessibilityLabel==='Search Library by title or author'),false);
- labelled(root,'Search Library').onPress();root=f.render();labelled(root,'Search Library by title or author').onChangeText('amber');root=f.render();assert.equal(libraryRows(root).length,1);
- labelled(root,'Hide Library search').onPress();root=f.render();assert.equal(libraryRows(root).length,4);assert.equal(labelled(root,'Search Library').accessibilityState.expanded,false);f.h.unmount();
+ f.props.searchRequest=1;f.render();root=f.render();labelled(root,'Search Library by title or author').onChangeText('amber');root=f.render();assert.equal(libraryRows(root).length,1);
+ labelled(root,'Hide Library search').onPress();root=f.render();assert.equal(libraryRows(root).length,4);assert.equal(elements(root).some(node=>node.props?.accessibilityLabel==='Search Library'),false);f.h.unmount();
 });
 
 test('Library-wide bookmarks name their book and open the selected book’s saved record',()=>{
@@ -2664,4 +2708,37 @@ test('Library-wide bookmarks name their book and open the selected book’s save
  const root=h.render(BookmarkSheet,{bookmarks:items,currentPage:0,bookTitles:{a:'First book',b:'Second book'},status:'ready',saving:false,onClose(){},onSelect:item=>selected.push(item),onRemove(){},onRetry(){}});
  const list=elements(root).find(node=>node.type==='FlatList');const row=list.props.renderItem({item:items[1]});const open=labelled(row,'Open bookmark, Second book, Opening, location 100. Second passage');
  assert.equal(open.accessibilityState.selected,false);open.onPress();assert.equal(selected[0],items[1]);h.unmount();
+});
+
+test('Library combines current reading totals and keeps bookmarks reachable while filtering or searching', () => {
+ let opened = 0;
+ const f = libraryHarness({ readingGoal: { minutesReadToday: 23, streakDays: 4, booksFinishedYear: 7 }, bookmarkCount: 2, onOpenBookmarks: () => opened++ });
+ let root = f.render();
+ const summary = elements(root).filter(node => node.props?.testID === 'library-reading-summary');
+ assert.equal(summary.length, 1);
+ const text = renderedText(summary[0]);
+ assert.match(text, /Today’s reading/); assert.match(text, /23 min\s+read today/);
+ assert.ok(labelled(summary[0], '4 day streak')); assert.ok(labelled(summary[0], '7 books finished this year'));
+ assert.match(text, /Streak/); assert.match(text, /Finished/);
+ assert.equal(elements(root).some(node => node.props?.accessibilityLabel === 'Search Library'), false);
+ labelled(root, 'Finished').onPress(); root = f.render();
+ labelled(root, 'Library bookmarks, 2 saved').onPress(); assert.equal(opened, 1);
+ assert.equal(labelled(root, 'Finished').accessibilityState.selected, true);
+ f.props.searchRequest = 1; f.render(); root = f.render();
+ labelled(root, 'Library bookmarks, 2 saved').onPress(); assert.equal(opened, 2);
+ assert.ok(labelled(root, 'Search Library by title or author'));
+ labelled(root, 'Hide Library search').onPress(); root = f.render();
+ assert.ok(labelled(root, 'Resume Brook by An Author')); f.h.unmount();
+});
+
+test('book-list restore distinguishes recovered books from unavailable reading passages', async () => {
+ const f = accountHarness({ onRestoreLibrary: async () => ({ restored: 2, alreadyInLibrary: 1, skipped: 0, lookupFailed: 0, failures: [], readingPositionsNotRestored: 2 }) });
+ let root = f.render();
+ assert.match(renderedText(root), /Book list backup/);
+ assert.match(renderedText(root), /excludes EPUB files, notes and bookmarks/);
+ await labelled(root, 'Restore library').onPress(); root = f.render();
+ assert.match(renderedText(root), /2\s+books were\s+added at the beginning/);
+ assert.match(renderedText(root), /account backup was kept unchanged/);
+ assert.match(f.messages.at(-1), /2 saved passages were unavailable/);
+ f.h.unmount();
 });

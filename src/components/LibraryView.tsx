@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { browseLibrary, continueReadingBook, hasReadingHistory, libraryBookStatus, displayedBookProgress, type LibraryFilter, type LibrarySort } from '../lib/libraryBrowser';
 import { libraryViewPreferences, type LibraryViewPreferences } from '../lib/libraryViewPreferences';
+import { bookShelfLayout } from '../lib/bookShelfLayout';
 import { coverImageUrl, normalizeCoverTint, type BookCoverDraft, type CoverSaveResult } from '../lib/bookCover';
 import type { BookRemovalResult } from '../lib/bookRemoval';
 import { parseEpubFile } from '../lib/epubParser';
@@ -31,8 +32,11 @@ import { Icon } from './ui/Icon';
 import { choiceAppearance, choiceStyles } from './ui/choiceStyles';
 import { ModalShell } from './ui/ModalShell';
 import { ProgressBar } from './ui/ProgressBar';
+import { renderShelfChip, renderShelfSort, renderShelfViewOptions, shelfStyles } from './ui/ShelfControls';
 
 interface LibraryViewProps {
+  searchRequest?: number;
+  onSearchRequestHandled?: () => void;
   storage: LocalStore;
   bookmarkCount?: number;
   onOpenBookmarks?: () => void;
@@ -47,7 +51,7 @@ interface LibraryViewProps {
   onOpenBook: (bookId: string) => void;
   onSelectBook: (bookId: string | null) => void;
   onAddEpubBook: (book: Book, pages: BookContentPage[]) => Promise<void>;
-  onRestoreImportedProgress: (book: Book) => Promise<Book>;
+  onRestoreImportedProgress: (book: Book, pages: BookContentPage[]) => Promise<Book>;
   onReimportRecoveryBook: (
     recovery: LibraryRecoveryBook,
     book: Book,
@@ -90,6 +94,8 @@ function formatLastRead(value: string): string {
 }
 
 export const LibraryView: React.FC<LibraryViewProps> = ({
+  searchRequest = 0,
+  onSearchRequestHandled,
   storage,
   bookmarkCount = 0, onOpenBookmarks,
   books,
@@ -111,12 +117,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   bottomInset,
 }) => {
   const { width, fontScale } = useWindowDimensions();
+  const summaryStacked = width < 350 || fontScale > 1.25;
   const colors = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [viewPreferences, setViewPreferences] = useState(() => libraryViewPreferences(null));
   const [preferencesReady, setPreferencesReady] = useState(false);
   const preferencesTouched = useRef(false);
-  const { query, filter, sort, viewMode } = viewPreferences;
+  const { query, filter, sort, viewMode, gridColumns } = viewPreferences;
   const changeView = (change: Partial<LibraryViewPreferences>) => { preferencesTouched.current = true; setPreferencesReady(true); setViewPreferences(previous => ({ ...previous, ...change })); };
   const setQuery = (query: string) => changeView({ query });
   const setFilter = (filter: Filter) => changeView({ filter });
@@ -133,6 +140,11 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     if (preferencesReady) void Promise.resolve(storage.saveJSONStrict?.('libraryViewPreferences', viewPreferences)).catch(() => undefined);
   }, [storage, preferencesReady, viewPreferences]);
   const [searchOpen, setSearchOpen] = useState(false);
+  const searchInput = useRef<TextInput>(null);
+  const searching = searchOpen || Boolean(query);
+  const openSearch = () => { setSearchOpen(true); setFilter('all'); };
+  useEffect(() => { if (searchRequest) { openSearch(); onSearchRequestHandled?.(); } }, [searchRequest]);
+  useEffect(() => { if (searchOpen) searchInput.current?.focus(); }, [searchOpen, searchRequest]);
   const [browseViewMode, setBrowseViewMode] = useState<LibraryViewMode>('grid');
   const [importing, setImporting] = useState(false);
   const [reimportingId, setReimportingId] = useState<string | null>(null);
@@ -159,9 +171,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     return () => subscription.remove();
   }, [selectedBook, onSelectBook]);
 
-  const contentWidth = Math.max(160, Math.min(width, 768) - 40);
-  const columns = fontScale > 1.3 || contentWidth < 300 ? 1 : 2;
-  const cardWidth = Math.floor((contentWidth - (columns - 1) * 16) / columns);
+  const { columns, cardWidth } = bookShelfLayout(width, fontScale, gridColumns);
   const available = useMemo(() => new Set(availableBookIds), [availableBookIds]);
   const featured = libraryStatus === 'ready' ? continueReadingBook(books, available) : undefined;
   const results = useMemo(() => browseLibrary(books, recoveryBooks, query, filter, sort, available), [books, recoveryBooks, query, filter, sort, available]);
@@ -193,7 +203,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       }
       setImporting(true);
       const { book, pages } = await parseEpubFile(asset.uri, asset.name, storage);
-      const bookWithProgress = await onRestoreImportedProgress(book);
+      const bookWithProgress = await onRestoreImportedProgress(book, pages);
       await onAddEpubBook(bookWithProgress, pages);
     } catch (err: unknown) {
       console.warn('EPUB import failed:', err);
@@ -419,8 +429,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   }
                 />
                 <View style={viewMode === 'list' ? styles.libraryListCopy : undefined}>
-                  <Text style={viewMode === 'grid' ? styles.shelfTitle : styles.cardTitle} numberOfLines={2} ellipsizeMode="tail">{b.title}</Text>
-                  <Text style={viewMode === 'grid' ? styles.shelfAuthor : styles.cardAuthor} numberOfLines={viewMode === 'grid' ? 2 : 1} ellipsizeMode="tail">{b.author}</Text>
+                  <Text style={[viewMode === 'grid' ? styles.shelfTitle : styles.cardTitle, viewMode === 'grid' && columns === 3 && shelfStyles.denseTitle]} numberOfLines={2} ellipsizeMode="tail">{b.title}</Text>
+                  <Text style={[viewMode === 'grid' ? styles.shelfAuthor : styles.cardAuthor, viewMode === 'grid' && columns === 3 && shelfStyles.denseAuthor]} numberOfLines={viewMode === 'grid' ? 2 : 1} ellipsizeMode="tail">{b.author}</Text>
                   {viewMode === 'list' ? (
                     <Text style={styles.listBookProgress}>
                       {libraryBookStatus(b)} · Position {b.currentPage} of {b.totalPages}
@@ -487,8 +497,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   ) : null}
                 </View>
                 <View style={viewMode === 'list' ? styles.libraryListCopy : undefined}>
-                  <Text style={viewMode === 'grid' ? styles.shelfTitle : styles.cardTitle} numberOfLines={2} ellipsizeMode="tail">{recovery.title}</Text>
-                  <Text style={viewMode === 'grid' ? styles.shelfAuthor : styles.cardAuthor} numberOfLines={viewMode === 'grid' ? 2 : 1} ellipsizeMode="tail">{recovery.author}</Text>
+                  <Text style={[viewMode === 'grid' ? styles.shelfTitle : styles.cardTitle, viewMode === 'grid' && columns === 3 && shelfStyles.denseTitle]} numberOfLines={2} ellipsizeMode="tail">{recovery.title}</Text>
+                  <Text style={[viewMode === 'grid' ? styles.shelfAuthor : styles.cardAuthor, viewMode === 'grid' && columns === 3 && shelfStyles.denseAuthor]} numberOfLines={viewMode === 'grid' ? 2 : 1} ellipsizeMode="tail">{recovery.author}</Text>
                   {viewMode === 'list' ? (
                     <>
                       <Text style={styles.listBookProgress}>Needs the original EPUB file</Text>
@@ -517,8 +527,24 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const rows: (typeof entries)[] = [];
   for (let index = 0; index < entries.length; index += rowSize) rows.push(entries.slice(index, index + rowSize));
   return <>
+    <View style={{ flex: 1 }}>
+    {searching && <View style={styles.searchDock}>
+      <View style={styles.librarySearch}>
+        <Icon name="search" size={20} color={colors.muted} />
+        <TextInput ref={searchInput} value={query} onChangeText={value => setQuery(value.slice(0, 200))} maxLength={200}
+          accessibilityLabel="Search Library by title or author" placeholder="Search titles or authors" placeholderTextColor={colors.muted}
+          autoFocus={searchOpen} autoCapitalize="none" autoCorrect={false} returnKeyType="search" onSubmitEditing={() => searchInput.current?.blur()} style={styles.librarySearchInput} />
+        {query.length > 0 && <Pressable onPress={() => setQuery('')} accessibilityRole="button" accessibilityLabel="Clear Library search" style={styles.smallAction}>
+          <Icon name="close" size={18} color={colors.muted} />
+        </Pressable>}
+      </View>
+      <Pressable onPress={() => { searchInput.current?.blur(); setSearchOpen(false); setQuery(''); }} accessibilityRole="button" accessibilityLabel="Hide Library search" accessibilityState={{ expanded: true }} style={styles.smallAction}>
+        <Text style={{ ...type.labelSm, color: colors.primary }}>Cancel</Text>
+      </Pressable>
+    </View>}
     <FlatList
       testID="library-collection"
+      accessibilityLabel={`Library ${viewMode === 'grid' ? `grid, ${columns} ${columns === 1 ? 'column' : 'columns'}` : 'list'}`}
       key={`${viewMode}:${rowSize}`}
       data={rows}
       keyExtractor={row => row.map(entry => entry.key).join('|')}
@@ -533,13 +559,21 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </Text>
         </View>
       )}
-      <View style={styles.goalCard}>
-        <View style={styles.readingTimeIcon}><Icon name="schedule" size={24} color={colors.primary} /></View>
-        <View style={{ flex: 1 }}><Text accessibilityRole="header" style={styles.goalTitle}>Today’s reading</Text><Text style={styles.goalSub}>{readingTimeLabel} read today</Text></View>
-      </View>
-      <View style={styles.readingStats}>
-        <View style={styles.readingStat}><Icon name="local_fire_department" size={22} color={colors.primary} /><View style={{ flexShrink: 1 }}><Text style={styles.statValue}>{readingGoal.streakDays}</Text><Text style={styles.statLabel}>day streak</Text></View></View>
-        <View style={styles.readingStat}><Icon name="menu_book" size={22} color={colors.primary} /><View style={{ flexShrink: 1 }}><Text style={styles.statValue}>{readingGoal.booksFinishedYear}</Text><Text style={styles.statLabel}>Books finished this year</Text></View></View>
+      {!searching && <><View testID="library-reading-summary" style={[styles.goalCard, summaryStacked && styles.goalCardStacked]}>
+        <View style={[styles.readingToday, summaryStacked && styles.readingTodayStacked]}>
+          <View style={styles.readingTimeIcon}><Icon name="schedule" size={20} color={colors.primary} /></View>
+          <View style={{ flex: 1 }}><Text accessibilityRole="header" style={styles.goalTitle}>Today’s reading</Text><Text style={styles.goalSub}>{readingTimeLabel} read today</Text></View>
+        </View>
+        <View style={[styles.readingStats, summaryStacked && styles.readingStatsStacked]}>
+          <View accessible accessibilityLabel={`${readingGoal.streakDays} day streak`} style={styles.readingStat}>
+            <View style={styles.statTotal}><Icon name="local_fire_department" size={15} color={colors.primary} /><Text style={styles.statValue}>{readingGoal.streakDays}</Text></View>
+            <Text style={styles.statLabel}>Streak</Text>
+          </View>
+          <View accessible accessibilityLabel={`${readingGoal.booksFinishedYear} books finished this year`} style={styles.readingStat}>
+            <View style={styles.statTotal}><Icon name="book" size={15} color={colors.primary} /><Text style={styles.statValue}>{readingGoal.booksFinishedYear}</Text></View>
+            <Text style={styles.statLabel}>Finished</Text>
+          </View>
+        </View>
       </View>
 
       {/* Continue reading */}
@@ -594,65 +628,27 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           <Text style={styles.importText}>{importing ? 'Reading…' : 'Import EPUB'}</Text>
         </Pressable>
       </View>
+      </>}
 
-      <View style={styles.shortcutRow}>
-        <Pressable onPress={onOpenBookmarks} disabled={!onOpenBookmarks} accessibilityRole="button" accessibilityLabel={`Library bookmarks, ${bookmarkCount} saved`} style={styles.bookmarkTarget}>
-          <View pointerEvents="none" style={styles.bookmarkFace}><Icon name="bookmark" size={17} color={colors.primary} /><Text style={styles.bookmarkText}>Bookmarks</Text><View style={styles.bookmarkCount}><Text style={styles.bookmarkCountText}>{bookmarkCount}</Text></View></View>
-        </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel={searchOpen || query ? 'Hide Library search' : 'Search Library'} accessibilityState={{ expanded: searchOpen || Boolean(query) }} onPress={() => { if (searchOpen || query) { setSearchOpen(false); setQuery(''); } else setSearchOpen(true); }} style={styles.smallAction}><Icon name="search" size={20} color={colors.muted} /></Pressable>
-      </View>
-      {(searchOpen || Boolean(query)) && <View style={styles.librarySearch}>
-        <Icon name="search" size={20} color={colors.muted} />
-        <TextInput value={query} onChangeText={value => setQuery(value.slice(0, 200))} maxLength={200}
-          accessibilityLabel="Search Library by title or author" placeholder="Search titles or authors" placeholderTextColor={colors.muted}
-          autoFocus={searchOpen} autoCapitalize="none" autoCorrect={false} returnKeyType="search" style={styles.librarySearchInput} />
-        {query.length > 0 && <Pressable onPress={() => setQuery('')} accessibilityRole="button" accessibilityLabel="Clear Library search" style={styles.smallAction}>
-          <Icon name="close" size={20} color={colors.muted} />
-        </Pressable>}
-      </View>}
-
-      {/* Filters */}
+      {/* Saved passages sit beside collection filters, without a separate shortcut row. */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-        {FILTERS.map((f) => (
-          <Pressable key={f.id} onPress={() => setFilter(f.id)} accessibilityRole="button" accessibilityLabel={f.label} accessibilityState={{ selected: filter === f.id }} style={styles.filterTarget}>
-            <View pointerEvents="none" style={[styles.filterFace, { backgroundColor: filter === f.id ? colors.primaryContainer : colors.surfaceContainer }]}><Text style={[styles.filterText, { color: filter === f.id ? colors.onPrimaryContainer : colors.onSurface }]}>{f.label}</Text></View>
-          </Pressable>
-        ))}
+        <Pressable onPress={onOpenBookmarks} disabled={!onOpenBookmarks} accessibilityRole="button" accessibilityLabel={`Library bookmarks, ${bookmarkCount} saved`} accessibilityHint="Open saved bookmarks across your library" accessibilityState={{ disabled: !onOpenBookmarks }} style={styles.bookmarkTarget}>
+          <View pointerEvents="none" style={styles.bookmarkFace}><Icon name="bookmark" size={15} color={colors.primary} /><Text style={styles.bookmarkText}>Bookmarks</Text><Text style={styles.bookmarkCountText}>{bookmarkCount}</Text></View>
+        </Pressable>
+        {FILTERS.map(f => renderShelfChip(colors, f.label, filter === f.id, () => setFilter(f.id)))}
       </ScrollView>
 
       {/* Sort + cover style */}
       <View style={styles.toolRow}>
         <View style={styles.sortGroup}>
           <Icon name="sort" size={16} color={colors.muted} />
-          {SORTS.map((s) => (
-            <Pressable key={s.id} onPress={() => setSort(s.id)} accessibilityRole="button" accessibilityLabel={`Sort Library by ${s.label}`} accessibilityState={{ selected: sort === s.id }} style={styles.sortTarget}>
-              <Text style={[styles.sortText, sort === s.id && styles.sortActive]}>{s.label}</Text>
-            </Pressable>
-          ))}
+          {SORTS.map(s => renderShelfSort(colors, s.label, `Sort Library by ${s.label}`, sort === s.id, () => setSort(s.id)))}
         </View>
-        <View style={styles.viewToggle}>
-          <View pointerEvents="none" style={styles.viewToggleTrack} />
-          {(['grid', 'list'] as const).map((mode) => (
-            <Pressable
-              key={mode}
-              onPress={() => setViewMode(mode)}
-              style={styles.viewToggleButton}
-              hitSlop={{ left: 6, right: 6 }}
-              accessibilityRole="button"
-              accessibilityLabel={`${mode === 'grid' ? 'Grid' : 'List'} view`}
-              accessibilityState={{ selected: viewMode === mode }}
-            >
-              <View pointerEvents="none" style={[styles.viewToggleFace, viewMode === mode && { backgroundColor: colors.surface }]}><Icon
-                name={mode === 'grid' ? 'view_module' : 'view_list'}
-                size={17}
-                color={viewMode === mode ? colors.primary : colors.muted}
-              /></View>
-            </Pressable>
-          ))}
-        </View>
+        {renderShelfViewOptions(colors, viewMode, gridColumns, setViewMode, gridColumns => changeView({ gridColumns }))}
       </View>
+      {viewMode === 'grid' && columns !== gridColumns && <Text style={styles.resultCount}>Using {columns} {columns === 1 ? 'column' : 'columns'} to keep this layout readable.</Text>}
 
-      {(filtered || libraryStatus !== 'ready') && <Text accessibilityLiveRegion="polite" style={styles.resultCount}>
+      {(searching || filtered || libraryStatus !== 'ready') && <Text accessibilityLiveRegion="polite" style={styles.resultCount}>
         {libraryStatus === 'loading' ? 'Checking saved books…' : libraryStatus === 'error' ? 'Saved library unavailable' : `${visible.length} ${visible.length === 1 ? 'book' : 'books'} · ${readingTimeLabel} read today${visibleRecoveryBooks.length ? ` · ${visibleRecoveryBooks.length} need an EPUB` : ''}`}
       </Text>}
 
@@ -671,12 +667,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       }
       contentContainerStyle={[styles.collectionContent, { paddingBottom: NAV_SPACE + bottomInset }]}
       keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
       showsVerticalScrollIndicator={false}
       initialNumToRender={4}
       maxToRenderPerBatch={4}
       windowSize={5}
       removeClippedSubviews={false}
     />
+    </View>
       {browseOpen && (
         <BrowseBooksScreen
           storage={storage}
@@ -684,6 +682,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           availableBookIds={availableBookIds}
           viewMode={browseViewMode}
           onViewModeChange={setBrowseViewMode}
+          gridColumns={gridColumns}
+          onGridColumnsChange={gridColumns => changeView({ gridColumns })}
           onAddEpubBook={onAddEpubBook}
           onOpenBook={onOpenBook}
           showToast={showToast}
@@ -871,44 +871,48 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   scroll: { paddingTop: 4, gap: 12 },
   statusCard: { padding: 16, borderRadius: 12, backgroundColor: colors.surfaceContainer },
   statusText: { ...type.bodyMd, color: colors.onSurface },
-  librarySearch: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceContainer, borderRadius: 12, paddingLeft: 12 },
+  searchDock: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingBottom: 8 },
+  librarySearch: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceContainer, borderRadius: 12, paddingLeft: 12 },
   librarySearchInput: { ...type.bodyMd, flex: 1, color: colors.onSurface, minHeight: 48, paddingVertical: 8 },
   smallAction: { minWidth: 48, minHeight: 48, justifyContent: 'center', alignItems: 'center' },
   resultCount: { ...type.bodySm, color: colors.muted },
   editBookAction: { position: 'absolute', right: 6, top: 6, minWidth: 48, minHeight: 48, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.surface, borderRadius: 24, borderWidth: 1, borderColor: colors.border },
-  readingStats: { flexDirection: 'row', flexWrap: 'wrap', gap: 16, paddingHorizontal: 20, paddingVertical: 14, borderRadius: 16, backgroundColor: colors.surfaceLow },
-  readingStat: { flex: 1, minWidth: 125, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
-  statValue: { fontFamily: F.sans, fontSize: 16, lineHeight: 21, color: colors.onSurface },
+  readingToday: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  readingTodayStacked: { flexGrow: 0, flexShrink: 0, flexBasis: 'auto' },
+  readingStats: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingLeft: 10, borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: colors.borderSoft },
+  readingStatsStacked: { alignSelf: 'stretch', justifyContent: 'space-around', paddingLeft: 0, paddingTop: 10, borderLeftWidth: 0, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.borderSoft },
+  readingStat: { minWidth: 44, alignItems: 'center', gap: 2 },
+  statTotal: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  statValue: { fontFamily: F.sansSemi, fontSize: 16, lineHeight: 21, color: colors.onSurface },
   statLabel: { ...type.bodySm, fontSize: 11, lineHeight: 16, color: colors.muted },
-  shortcutRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  bookmarkTarget: { minHeight: 48, justifyContent: 'center', alignSelf: 'flex-start' },
-  bookmarkFace: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: colors.surfaceContainer },
-  bookmarkText: { ...type.labelMd, color: colors.primary },
-  bookmarkCount: { backgroundColor: colors.primaryContainer, minWidth: 21, minHeight: 21, paddingHorizontal: 5, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
-  bookmarkCountText: { ...type.labelSm, color: colors.onPrimaryContainer },
+  bookmarkTarget: { minHeight: 48, justifyContent: 'center', marginRight: 4 },
+  bookmarkFace: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+  bookmarkText: { ...type.labelMd, fontSize: 12, lineHeight: 18, color: colors.primary },
+  bookmarkCountText: { ...type.labelSm, color: colors.primary },
   filterTarget: { minHeight: 48, justifyContent: 'center' },
   filterFace: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20 },
   filterText: { ...type.labelMd, fontSize: 12, lineHeight: 18 },
   goalCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    padding: 16,
+    gap: 10,
+    padding: 12,
     borderRadius: 16,
     backgroundColor: colors.surfaceLow,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.borderSoft,
   },
+  goalCardStacked: { flexDirection: 'column', alignItems: 'stretch' },
   readingTimeIcon: {
-    width: 56,
-    height: 56,
+    width: 36,
+    height: 36,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 28,
+    borderRadius: 18,
     backgroundColor: colors.primaryFixed,
   },
-  goalTitle: { ...type.headlineSm, fontSize: 19, lineHeight: 24, color: colors.onSurface },
-  goalSub: { ...type.bodySm, color: colors.muted, marginTop: 2 },
+  goalTitle: { ...type.headlineSm, fontSize: 17, lineHeight: 22, color: colors.onSurface },
+  goalSub: { ...type.bodySm, fontSize: 12, lineHeight: 18, color: colors.muted, marginTop: 2 },
   sectionLabel: { ...type.labelSm, color: colors.muted, marginBottom: 8, letterSpacing: 1 },
   featured: {
     flexDirection: 'row',
@@ -1069,8 +1073,8 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   coverActions: { position: 'absolute', top: 0, left: 0, right: 0, aspectRatio: 2 / 3, zIndex: 1 },
   shelfEditTarget: { position: 'absolute', right: 4, bottom: 4, width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
   shelfEditFace: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.94)', alignItems: 'center', justifyContent: 'center' },
-  shelfTitle: { fontFamily: F.serifSemi, fontSize: 19, lineHeight: 24, color: colors.onSurface, marginTop: 10 },
-  shelfAuthor: { fontFamily: F.sans, fontSize: 14, lineHeight: 20, color: colors.muted, marginTop: 3 },
+  shelfTitle: { ...shelfStyles.title, color: colors.onSurface },
+  shelfAuthor: { ...shelfStyles.author, color: colors.muted },
   list: { gap: 12 },
   libraryListCard: {
     width: '100%',

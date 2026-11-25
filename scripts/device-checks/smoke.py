@@ -93,9 +93,61 @@ def pause_snapshot(expected_bookmark=None):
     adb('shell','input','keyevent','KEYCODE_HOME');time.sleep(1.5)
     return library_record(expected_bookmark)
 
+def focused_field(label,timeout=12):
+    # Seeing the view in the hierarchy does not mean Android has finished its
+    # input-focus handoff. Do not inject keys into a not-yet-focused window.
+    deadline=time.monotonic()+timeout
+    while time.monotonic()<deadline:
+        node=find(label,timeout=3)
+        if node.get('focused')=='true':return node
+        time.sleep(.3)
+    raise AssertionError('Search input did not receive native focus: '+json.dumps(node.attrib))
+
+def check_library_search():
+    field='Search Library by title or author'
+    book='Folio device journey by Folio test fixture.'
+    tap('Search Library');tap(field);focused_field(field)
+    adb('shell','input','text','Folio');time.sleep(.4)
+    initial=find(field)
+    assert initial.get('text')=='Folio', 'Library input lost the typed title: '+json.dumps(initial.attrib)
+    adb('shell','input','text','%sdevice');time.sleep(.4)
+    assert find(field).get('text')=='Folio device', 'Library input lost focus between keystrokes'
+    find(book,contains=True)
+    tap('Clear Library search');adb('shell','input','text','zzzzmissingbook');time.sleep(.4)
+    find('No books match this search and filter. Try another title or author.')
+    tap('Clear Library search');adb('shell','input','text','Folio%stest%sfixture');time.sleep(.4)
+    normal=list(map(int,re.findall(r'\d+',find(book,contains=True).get('bounds',''))))
+    tap('3-column grid')
+    dense=list(map(int,re.findall(r'\d+',find(book,contains=True).get('bounds',''))))
+    assert dense[2]-dense[0]<normal[2]-normal[0], 'Three columns did not make Library cards smaller'
+    assert find(field).get('text')=='Folio test fixture', 'Changing columns reset the author search'
+    screenshot('02b-library-search-three-columns')
+    tap('2-column grid');tap('Hide Library search')
+
+def check_free_books_controls():
+    tap('Browse free books')
+    field='Search free books by title or author'
+    tap(field);focused_field(field);adb('shell','input','text','shelley');time.sleep(.4)
+    tap('3-column grid')
+    assert find(field).get('text')=='shelley', 'Changing free-book columns reset the search'
+    screenshot('02c-free-books-layout')
+    tap('2-column grid');tap('Back to library')
+
 def run():
     ensure_emulator_root()
-    launch();find('Folio Library',timeout=60);screenshot('01-empty-library')
+    launch();find('Folio Library',timeout=60)
+    summary=[find(label) for label in ['Today’s reading','0 day streak','0 books finished this year']]
+    boxes=[list(map(int,re.findall(r'\d+',node.get('bounds','')))) for node in summary]
+    assert all(len(box)==4 for box in boxes), 'Reading summary has no measured native bounds'
+    title,streak,finished=boxes
+    assert title[0]<streak[0]<finished[0], 'Reading summary counters must sit to the right of the reading time'
+    assert all(min(title[3],box[3])>max(title[1],box[1]) for box in [streak,finished]), 'Reading summary is not a compact single row'
+    (OUT/'reading-summary-layout.json').write_text(json.dumps({'fontScale':1,'title':title,'streak':streak,'finished':finished},indent=2))
+    tap('Library bookmarks, 0 saved');find('No bookmarks yet.');tap('Close bookmarks')
+    screenshot('01-empty-library')
+    adb('shell','settings','put','system','font_scale','1.5');time.sleep(1)
+    find('Today’s reading');find('0 books finished this year');screenshot('01b-large-text-reading-summary')
+    adb('shell','settings','put','system','font_scale','1.0');time.sleep(1)
     tap('Import EPUB')
     # Recent files often already contains the pushed EPUB. Only navigate roots
     # if it is not visible; Android DocumentsUI varies across system images.
@@ -108,6 +160,8 @@ def run():
         tap('Downloads')
         tap('folio-device-journey.epub')
     find('Folio device journey by Folio test fixture.',contains=True,timeout=45)
+    check_library_search()
+    check_free_books_controls()
     book_point=reveal_library_book('Folio device journey by Folio test fixture.')
     screenshot('02-imported-library')
     adb('shell','input','tap',*map(str,book_point));time.sleep(.4)
@@ -134,13 +188,20 @@ def run():
     adb('shell','settings','put','system','font_scale','1.0')
     adb('shell','am','force-stop',PACKAGE);launch();find('Folio Library');tap('Notebook');find('A synthetic reflection',contains=True)
     screenshot('08-reflection-after-restart')
-    (OUT/'result.json').write_text(json.dumps({'passed':True,'checks':['native import','rich reader render','bookmark persistence control','scroll close/reopen position','process restart position','reflection creation and restart','large text rendering capture'],'talkback':'requires phone testing','book':before['id']},indent=2))
+    tap('Search Archive');tap('Search saved books, quotes, notes and vocabulary')
+    adb('shell','input','text','Folio');time.sleep(.4)
+    find('Open book details for Folio device journey by Folio test fixture')
+    screenshot('09-archive-search-results')
+    tap('Open book details for Folio device journey by Folio test fixture');find('Read Folio device journey')
+    (OUT/'result.json').write_text(json.dumps({'passed':True,'checks':['combined Library reading summary and large-text capture','Library bookmark chip opens saved passages','native import','Library title/author search and typing focus','Library missing-result recovery','two/three-column grid with search retained','free-books search and column controls','rich reader render','bookmark persistence control','scroll close/reopen position','process restart position','reflection creation and restart','large text rendering capture','global archive book results and navigation'],'talkback':'requires phone testing','book':before['id']},indent=2))
 try:run()
 except Exception as error:
     try:
-        labels=[node.get('content-desc') or node.get('text') for node in nodes()]
+        snapshot=nodes()
+        labels=[node.get('content-desc') or node.get('text') for node in snapshot]
+        inputs=[node.attrib for node in snapshot if node.get('class','').endswith('EditText')]
         runtime=adb('logcat','-d','-v','brief','ReactNativeJS:V','AndroidRuntime:E','*:S',check=False).decode(errors='replace')[-2200:]
-        message=json.dumps({'error':str(error),'runtime':runtime,'visible':[label for label in labels if label]},ensure_ascii=True)[:3800]
+        message=json.dumps({'error':str(error),'inputs':inputs,'runtime':runtime,'visible':[label for label in labels if label]},ensure_ascii=True)[:3800]
         print('::error title=Android reading journey failed::'+message.replace('%','%25').replace('\r','%0D').replace('\n','%0A'),flush=True)
     except Exception:pass
     try:screenshot('failure')

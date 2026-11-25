@@ -73,7 +73,7 @@ jobs:
       - name: Check whether application inputs match the compiled APK
         id: matching-apk
         run: |
-          baseline=a394cbf2301f5b2cb84a87b0fa8bea40e8160462
+          baseline=078c834f08608d3df3e89ed907a22b4be1dbbb5a
           if git fetch --no-tags --depth=1 origin "$baseline"; then
             if [ "$(node scripts/compare-apk-inputs.cjs "$baseline")" = true ]; then echo 'eligible=true' >> "$GITHUB_OUTPUT"; fi
           fi
@@ -84,7 +84,7 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7, Node 24
         with:
           name: folio-dev-apk
-          run-id: 44996211828
+          run-id: 45029834863
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}
       - name: Check Expo token is configured
@@ -183,7 +183,7 @@ jobs:
             'This does not use an Expo cloud Android build slot. The artifact is kept for 7 days.',
             '',
             `Reviewed source commit: ${process.env.GITHUB_SHA}`,
-            process.env.APK_REUSED === 'true' ? 'The signed APK was reused from run 44996211828 after verifying that all application build inputs match.' : 'The APK was compiled in this run.',
+            process.env.APK_REUSED === 'true' ? 'The signed APK was reused from run 45029834863 after verifying that all application build inputs match.' : 'The APK was compiled in this run.',
             '',
             'Use the phone checklist in docs/android-testing.md.',
             '',

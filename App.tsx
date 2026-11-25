@@ -38,6 +38,7 @@ import { INITIAL_BOOKS, INITIAL_GOAL } from './src/data/initialData';
 import { saveBookCover, type BookCoverDraft, type CoverSaveResult } from './src/lib/bookCover';
 import { type BookRemovalResult } from './src/lib/bookRemoval';
 import { applyReadingPosition, createReadingProgressWriter } from './src/lib/readingPosition';
+import { backupBookKey, backupProgressNotice, hasBackupReadingProgress, libraryBackupEntry, matchingLibraryBackupEntry, restoreLibraryProgress } from './src/lib/libraryBackup';
 import { hasPendingRestore, recoverPortableRestore, removeBookWithRecovery } from './src/lib/backupRecovery';
 import { choosePortableBackup, exportPortableBackup, importPortableBackup } from './src/lib/portableBackupNative';
 import type { PreparedBackup } from './src/lib/portableBackup';
@@ -95,30 +96,6 @@ function getLocalDateKey(): string {
   const month = String(today.getMonth() + 1).padStart(2, '0');
   const day = String(today.getDate()).padStart(2, '0');
   return `${today.getFullYear()}-${month}-${day}`;
-}
-
-function normalizeBookMetadata(value: string): string {
-  return value
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^\w\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function applySavedReadingProgress(book: Book, entry: LibraryBackupEntry): Book {
-  const totalPages = Math.max(1, book.totalPages);
-  const currentPage = Math.max(1, Math.min(totalPages, Math.floor(entry.currentPage ?? book.currentPage)));
-  return {
-    ...book,
-    currentPage,
-    readingPosition: undefined,
-    progressPercent: Math.max(0, Math.min(100, Math.round((currentPage / totalPages) * 100))),
-    currentChapter: entry.currentChapter || book.currentChapter,
-    currentLoc: entry.currentLoc ?? book.currentLoc,
-    isFinished: entry.isFinished ?? book.isFinished,
-  };
 }
 
 type PortableJob = { kind: 'export'; includeOriginals: boolean } | { kind: 'restore'; backup: PreparedBackup; preferences: boolean; recoverMatching?: boolean } | { kind: 'remove'; bookId: string };
@@ -243,6 +220,7 @@ function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onP
   useEffect(() => storage.subscribeArchive('bookmarks', () => { void loadBookmarks(); }), [storage, loadBookmarks]);
   const [isSettingsSheetOpen, setIsSettingsSheetOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [librarySearchRequest, setLibrarySearchRequest] = useState(0);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   useEffect(() => { if (authError) setIsProfileOpen(true); }, [authError]);
   const [libraryBookmarksOpen, setLibraryBookmarksOpen] = useState(false);
@@ -462,34 +440,21 @@ function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onP
     const backup: LibraryBackupEntry[] = booksRef.current.map((book) => {
       const catalogId = Object.entries(catalogBooks).find(([, bookId]) => bookId === book.id)?.[0];
       const gutenbergId = catalogId?.match(/^gutenberg-(\d+)$/)?.[1];
-      return {
-        title: book.title,
-        author: book.author,
-        ...(gutenbergId ? { gutenbergId: Number(gutenbergId) } : {}),
-        currentPage: book.currentPage,
-        progressPercent: book.progressPercent,
-        currentChapter: book.currentChapter,
-        currentLoc: book.currentLoc,
-        isFinished: book.isFinished,
-      };
+      return libraryBackupEntry(book, gutenbergId ? Number(gutenbergId) : undefined);
     });
     await saveLibraryBackup(user.id, backup);
     return backup.length;
   };
 
-  const handleRestoreImportedProgress = async (book: Book): Promise<Book> => {
+  const handleRestoreImportedProgress = async (book: Book, pages: BookContentPage[]): Promise<Book> => {
     if (!user) return book;
     try {
       const backup = await fetchLibraryBackup(user.id);
-      const matchingEntry = backup?.find((entry) =>
-        normalizeBookMetadata(entry.title) === normalizeBookMetadata(book.title) &&
-        normalizeBookMetadata(entry.author) === normalizeBookMetadata(book.author)
-      );
-      if (!matchingEntry || typeof matchingEntry.currentPage !== 'number') return book;
-
-      const restoredBook = applySavedReadingProgress(book, matchingEntry);
-      showToast(`Restored reading progress for "${book.title}"`);
-      return restoredBook;
+      const matchingEntry = matchingLibraryBackupEntry(book, backup ?? []);
+      if (!matchingEntry || !hasBackupReadingProgress(matchingEntry)) return book;
+      const result = restoreLibraryProgress(book, matchingEntry, pages);
+      showToast(backupProgressNotice(result));
+      return result.book;
     } catch (err) {
       console.warn(`Could not restore saved progress for "${book.title}":`, err);
       showToast('Could not check your cloud backup; imported book will start at the beginning');
@@ -516,17 +481,18 @@ function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onP
       };
     }
 
-    const existingTitles = new Set(books.map((book) => normalizeBookMetadata(book.title)));
+    const existingBooks = new Set(booksRef.current.map(backupBookKey));
     let catalogMappings = await loadAdded();
     let restored = 0;
     let skipped = 0;
     let alreadyInLibrary = 0;
     let lookupFailed = 0;
+    let readingPositionsNotRestored = 0;
     const failures: LibraryRestoreFailure[] = [];
 
     for (const [index, entry] of backup.entries()) {
       if (!spaceActive.current) throw new Error('Restore stopped after the reading space changed.');
-      const titleKey = normalizeBookMetadata(entry.title);
+      const bookKey = backupBookKey(entry);
       const basePercent = (index / backup.length) * 100;
       const bookPercent = 100 / backup.length;
       const reportBookComplete = () => onProgress({
@@ -536,16 +502,8 @@ function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onP
         title: entry.title,
         phase: 'finding',
       });
-      if (existingTitles.has(titleKey)) {
-        const existingBook = books.find((book) => normalizeBookMetadata(book.title) === titleKey);
-        if (existingBook && typeof entry.currentPage === 'number') {
-          const updatedBook = applySavedReadingProgress(existingBook, entry);
-          const patch = readingFields(updatedBook);
-          await libraryStore.patch(updatedBook.id, patch);
-          booksRef.current = booksRef.current.map(book => book.id === updatedBook.id ? { ...book, ...patch } : book);
-          setBooks(previous => previous.map(book => book.id === updatedBook.id ? { ...book, ...patch } : book));
-          void upsertBookToSupabase({ ...existingBook, ...patch });
-        }
+      if (existingBooks.has(bookKey)) {
+        // Restoring a book list must never rewind a book already on this device.
         alreadyInLibrary++;
         reportBookComplete();
         continue;
@@ -613,10 +571,11 @@ function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onP
           book.coverUrl = catalogBook.coverUrl;
           book.coverStyle = 'image';
         }
-        const restoredBook = applySavedReadingProgress(book, entry);
-        await handleAddEpubBook(restoredBook, pages);
+        const result = restoreLibraryProgress(book, entry, pages);
+        await handleAddEpubBook(result.book, pages);
+        if (!result.restored && hasBackupReadingProgress(entry)) readingPositionsNotRestored++;
         catalogMappings = await rememberAdded(catalogMappings, catalogBook.id, book.id);
-        existingTitles.add(titleKey);
+        existingBooks.add(bookKey);
         restored++;
       } catch (err) {
         console.warn(`Could not restore "${entry.title}":`, err);
@@ -635,7 +594,7 @@ function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onP
       setRecoveryBooks((current) => {
         const byId = new Map(current.map((recovery) => [recovery.id, recovery]));
         failures.forEach((failure) => {
-          const id = `${normalizeBookMetadata(failure.entry.title)}::${normalizeBookMetadata(failure.entry.author)}`;
+          const id = backupBookKey(failure.entry);
           byId.set(id, { ...failure.entry, id, reason: failure.reason });
         });
         return Array.from(byId.values());
@@ -643,7 +602,7 @@ function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onP
     }
 
     onProgress({ current: backup.length, total: backup.length, percent: 100, title: 'Library restored', phase: 'complete' });
-    return { restored, skipped, alreadyInLibrary, lookupFailed, failures };
+    return { restored, skipped, alreadyInLibrary, lookupFailed, failures, readingPositionsNotRestored };
   };
 
   const handleReimportRecoveryBook = async (
@@ -651,10 +610,10 @@ function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onP
     importedBook: Book,
     pages: BookContentPage[]
   ) => {
-    const restoredBook = applySavedReadingProgress(importedBook, recovery);
-    await handleAddEpubBook(restoredBook, pages);
+    const result = restoreLibraryProgress(importedBook, recovery, pages);
+    await handleAddEpubBook(result.book, pages);
     setRecoveryBooks((current) => current.filter((item) => item.id !== recovery.id));
-    showToast(`Restored "${restoredBook.title}" with saved reading progress`);
+    showToast(hasBackupReadingProgress(recovery) ? backupProgressNotice(result) : `Restored “${importedBook.title}” to your Library.`);
   };
 
   const currentBook = books.find((b) => b.id === currentBookId) || (activeTab !== 'reading' ? books[0] : undefined);
@@ -860,7 +819,7 @@ function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onP
       <Header
         activeTab={activeTab}
         onTabChange={tab => { if (tab !== 'reading') { navigationGeneration.current++; setOpeningBookId(null); } setActiveTab(tab); }}
-        onOpenSearch={() => setIsSearchOpen(true)}
+        onOpenSearch={() => activeTab === 'library' ? setLibrarySearchRequest(value => value + 1) : setIsSearchOpen(true)}
         onOpenProfile={() => setIsProfileOpen(true)}
         visible={isNavVisible && !isImmersiveMode}
         userAvatar={user?.avatarUrl}
@@ -875,6 +834,8 @@ function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onP
       <View style={[styles.main, activeTab === 'library' && { paddingHorizontal: 0 }, { paddingTop: topPad, paddingBottom: reading ? 0 : 0 }]}>
         {activeTab === 'library' && (
           <LibraryView
+            searchRequest={librarySearchRequest}
+            onSearchRequestHandled={() => setLibrarySearchRequest(0)}
             storage={storage}
             bookmarkCount={bookmarks.length}
             onOpenBookmarks={() => setLibraryBookmarksOpen(true)}

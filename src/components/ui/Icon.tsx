@@ -14,6 +14,7 @@ type MCIName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 const MI: Record<string, MIName> = {
   local_library: 'local-library',
   menu_book: 'menu-book',
+  book: 'book',
   tune: 'tune',
   arrow_back: 'arrow-back',
   bookmark: 'bookmark',
