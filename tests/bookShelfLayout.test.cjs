@@ -15,10 +15,12 @@ test('two- and three-column shelves fit the same margins without overflow on pho
   assert.ok(bookShelfLayout(400, 1, 3).cardWidth < bookShelfLayout(400, 1, 2).cardWidth);
 });
 
-test('large system text and narrow windows get a readable layout without changing the saved column preference', () => {
-  assert.equal(bookShelfLayout(400, 1.5, 3).columns, 1);
+test('large text adapts to available width while wide windows retain the requested shelf density', () => {
+  assert.equal(bookShelfLayout(400, 1.5, 3).columns, 2);
   assert.equal(bookShelfLayout(210, 1, 3).columns, 1);
-  assert.equal(bookShelfLayout(1024, 1.5, 2).columns, 1);
+  assert.equal(bookShelfLayout(320, 2, 3).columns, 1);
+  assert.equal(bookShelfLayout(1024, 1.5, 3).columns, 3);
+  assert.equal(bookShelfLayout(1024, 1.5, 2).columns, 2);
 });
 
 test('saved shelf density survives with query/filter/sort while old or invalid preferences default to two columns', () => {

@@ -161,7 +161,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           <Text style={styles.email}>{user?.email || 'Not signed in'}</Text>
           {hasLegacyData && <View style={{ gap: 4, paddingVertical: 12 }}>
             <Text style={[styles.backupDescription, { color: colors.onSurface }]}>Your older library is preserved on this device.</Text>
-            <Text style={styles.backupDescription}>It hasn’t been assigned to this reading space. Guest and accounts keep separate books and notes. Keep Folio Dev installed while reviewing Account help.</Text>
+            <Text style={styles.backupDescription}>It hasn’t been assigned to this reading space. Guest and accounts keep separate books and notes. Keep this app installed while reviewing Account help.</Text>
           </View>}
           {syncSummary && <Text accessibilityLiveRegion="polite" style={styles.backupDescription}>{syncSummary}</Text>}
           {onReviewConflicts && <Pressable accessibilityRole="button" accessibilityLabel="Review account changes" disabled={busy} onPress={() => { if (!pending.current) onReviewConflicts(); }} style={styles.helpRow}><Text style={styles.helpText}>Review conflicting versions</Text></Pressable>}

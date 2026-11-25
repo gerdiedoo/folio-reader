@@ -233,3 +233,10 @@ test('EPUB preparation does not return an unresolved original-file copy as a com
  await copyStarted;
  assert.ok(input.writes.includes('epub'));assert.equal(completed,false);release();assert.equal((await preparing).book.fileLocation,'file:///saved.epub');
 });
+
+test('EPUB ZIP import preserves inline-styled poetry and excludes hidden source material', async () => {
+ const result = await parser(await fixture('<p style="white-space:pre-wrap">First line\nSecond line\n\nFinal stanza</p><p>Visible text.<span hidden>Hidden material.</span></p>')).parse();
+ assert.deepEqual(paragraphs(result), ['First line\nSecond line\n\nFinal stanza', 'Visible text.']);
+ assert.equal(result.pages[0].rich[0].text, 'First line\nSecond line\n\nFinal stanza');
+ assert.equal(result.pages[0].rich[0].kind, 'paragraph');
+});

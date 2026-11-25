@@ -35,7 +35,32 @@ function flags(node: HTMLElement, inherited: Flags, chapter: string): Flags {
   if (tag === 'A') result.href = epubLink(chapter, node.getAttribute('href') ?? '');
   return result;
 }
-function normalize(parts: InlineRun[], pre: boolean): InlineRun[] {
+type WhiteSpace = 'normal' | 'nowrap' | 'pre' | 'pre-wrap' | 'pre-line' | 'break-spaces';
+type TextPart = InlineRun & { whiteSpace?: WhiteSpace };
+// Interpret supported inline declarations without executing publisher CSS.
+function inlineStyle(element: HTMLElement, property: string): string {
+  let result = '', important = false;
+  for (const declaration of (element.getAttribute('style') ?? '').replace(/\/\*[\s\S]*?\*\//g, '').split(';')) {
+    const colon = declaration.indexOf(':');
+    if (declaration.slice(0, colon).trim().toLowerCase() !== property) continue;
+    const raw = declaration.slice(colon + 1).trim().toLowerCase(), priority = /!\s*important\s*$/.test(raw);
+    if (important && !priority) continue;
+    result = raw.replace(/!\s*important\s*$/, '').trim(); important = priority;
+  }
+  return result;
+}
+function suppressed(node: Node): boolean {
+  if (node.nodeType !== NodeType.ELEMENT_NODE) return false;
+  const element = node as HTMLElement;
+  return SKIP.has(tagOf(node)) || element.hasAttribute('hidden') || inlineStyle(element, 'display') === 'none';
+}
+function whitespace(element: HTMLElement, inherited: WhiteSpace): WhiteSpace {
+  const value = inlineStyle(element, 'white-space');
+  if (['normal','nowrap','pre','pre-wrap','pre-line','break-spaces'].includes(value)) return value as WhiteSpace;
+  if (value === 'initial') return 'normal';
+  return tagOf(element) === 'PRE' && value !== 'inherit' && value !== 'unset' ? 'pre' : inherited;
+}
+function normalize(parts: TextPart[]): InlineRun[] {
   const runs: InlineRun[] = [];
   const append = (text: string, style: Flags) => {
     if (!text) return;
@@ -44,10 +69,15 @@ function normalize(parts: InlineRun[], pre: boolean): InlineRun[] {
     else runs.push({ ...style, text });
   };
   let space = false;
-  for (const { text, ...style } of parts) {
-    if (pre) { append(text.replace(/\r\n?/g, '\n'), style); continue; }
-    for (const chunk of text.match(/\s+|\S+/gu) ?? []) {
-      if (/^\s/u.test(chunk)) { space = runs.length > 0; continue; }
+  for (const { text, whiteSpace = 'normal', ...style } of parts) {
+    const value = text.replace(/\r\n?/g, '\n');
+    if (['pre','pre-wrap','break-spaces'].includes(whiteSpace)) {
+      if (space) append(' ', {});
+      append(value, style); space = false; continue;
+    }
+    for (const chunk of value.match(whiteSpace === 'pre-line' ? /[^\S\n]+|\n|[^\s]+/gu : /\s+|\S+/gu) ?? []) {
+      if (whiteSpace === 'pre-line' && chunk === '\n') { append('\n', style); space = false; continue; }
+      if (/^\s/u.test(chunk)) { space = runs.length > 0 && !runs[runs.length - 1].text.endsWith('\n'); continue; }
       if (space) append(' ', {});
       append(chunk, style); space = false;
     }
@@ -55,29 +85,37 @@ function normalize(parts: InlineRun[], pre: boolean): InlineRun[] {
   return runs;
 }
 function textRuns(root: HTMLElement, chapter: string): InlineRun[] {
-  const parts: InlineRun[] = [];
-  const visit = (node: Node, style: Flags) => {
-    if (node.nodeType === NodeType.TEXT_NODE) { parts.push({ ...style, text: node.text }); return; }
-    if (node.nodeType !== NodeType.ELEMENT_NODE || SKIP.has(tagOf(node))) return;
-    if (tagOf(node) === 'BR') parts.push({ text: ' ' });
-    else node.childNodes.forEach(child => visit(child, flags(node as HTMLElement, style, chapter)));
+  const ancestors: HTMLElement[] = [];
+  for (let parent = root.parentNode; parent; parent = parent.parentNode) ancestors.unshift(parent);
+  const inherited = ancestors.reduce((mode, element) => whitespace(element, mode), 'normal' as WhiteSpace);
+  const parts: TextPart[] = [];
+  const visit = (node: Node, style: Flags, mode: WhiteSpace) => {
+    if (node.nodeType === NodeType.TEXT_NODE) { parts.push({ ...style, text: node.text, whiteSpace: mode }); return; }
+    if (node.nodeType !== NodeType.ELEMENT_NODE || suppressed(node)) return;
+    const next = whitespace(node as HTMLElement, mode);
+    if (tagOf(node) === 'BR') parts.push({ text: '\n', whiteSpace: 'pre' });
+    else node.childNodes.forEach(child => visit(child, flags(node as HTMLElement, style, chapter), next));
   };
-  visit(root, {}); return normalize(parts, false);
+  visit(root, {}, inherited); return normalize(parts);
 }
 function firstTextPath(node: Node, path: string): string {
-  if (SKIP.has(tagOf(node))) return '';
+  if (suppressed(node)) return '';
   if (node.nodeType === NodeType.TEXT_NODE && clean(node.text)) return path;
   for (const [index, child] of node.childNodes.entries()) { const found = firstTextPath(child, `${path}/${index}`); if (found) return found; }
   return '';
 }
+function suppressedInTable(node: Node, table: HTMLElement): boolean {
+  for (let parent: Node | null = node; parent && parent !== table; parent = parent.parentNode) if (suppressed(parent)) return true;
+  return false;
+}
 export interface StructuredBlock { text: string; path: string; rich: RichBlock }
-interface Context { kind: RichBlock['kind']; level?: number; marker?: string; quoteDepth?: number; pre?: boolean }
+interface Context { kind: RichBlock['kind']; level?: number; marker?: string; quoteDepth?: number; whiteSpace?: WhiteSpace }
 export async function extractEpubStructure(body: HTMLElement, chapter: string, image: (node: HTMLElement) => Promise<NonNullable<RichBlock['image']>>): Promise<StructuredBlock[]> {
   const result: StructuredBlock[] = [];
-  let parts: InlineRun[] = [], firstPath = '', context: Context = { kind: 'paragraph' }, targets = new Set<string>();
+  let parts: TextPart[] = [], firstPath = '', context: Context = { kind: 'paragraph' }, targets = new Set<string>();
   const push = (block: StructuredBlock) => { if (result.length >= 50000 || block.text.length > 1000000) throw Error('This EPUB contains a chapter too large to prepare safely.'); result.push(block); };
   const flush = () => {
-    const runs = normalize(parts, Boolean(context.pre)), text = runs.map(run => run.text).join('');
+    const runs = normalize(parts), text = runs.map(run => run.text).join('');
     if (text.trim()) push({ text, path: firstPath, rich: { version: 1, kind: context.kind, text, runs, targets: [...targets],
       ...(context.level ? { level: context.level } : {}), ...(context.marker ? { marker: context.marker } : {}), ...(context.quoteDepth ? { quoteDepth: context.quoteDepth } : {}) } });
     parts = []; firstPath = ''; targets = new Set();
@@ -85,11 +123,11 @@ export async function extractEpubStructure(body: HTMLElement, chapter: string, i
   const visit = async (node: Node, path: string, inherited: Context, style: Flags, ids: string[]) => {
     if (node.nodeType === NodeType.TEXT_NODE) {
       if (!firstPath && clean(node.text)) { firstPath = path; context = inherited; }
-      parts.push({ ...style, text: node.text }); ids.forEach(id => targets.add(id)); return;
+      parts.push({ ...style, text: node.text, whiteSpace: inherited.whiteSpace }); ids.forEach(id => targets.add(id)); return;
     }
     if (node.nodeType !== NodeType.ELEMENT_NODE) return;
     const element = node as HTMLElement, tag = tagOf(node);
-    if (SKIP.has(tag)) return;
+    if (suppressed(element)) return;
     if (UNSUPPORTED.has(tag)) throw Error(`This EPUB uses ${tag.toLowerCase()} content that Folio cannot display faithfully yet. Choose another edition; the original file is unchanged.`);
     const id = element.getAttribute('id') || element.getAttribute('xml:id');
     const nextIds = id ? [...ids, id] : ids;
@@ -99,23 +137,24 @@ export async function extractEpubStructure(body: HTMLElement, chapter: string, i
     }
     if (tag === 'TABLE') {
       flush();
-      if (element.querySelectorAll('table, img, svg, math, audio, video, iframe, object, embed, canvas').length) throw Error('This EPUB uses nested tables or illustrated table cells that Folio cannot display faithfully yet.');
-      const rows = element.querySelectorAll('tr').map(row => row.childNodes.filter(n => ['TD','TH'].includes(tagOf(n))).map(cell => {
+      if (element.querySelectorAll('table, img, svg, math, audio, video, iframe, object, embed, canvas').some(node => !suppressedInTable(node, element))) throw Error('This EPUB uses nested tables or illustrated table cells that Folio cannot display faithfully yet.');
+      const rows = element.querySelectorAll('tr').filter(row => !suppressedInTable(row, element)).map(row => row.childNodes.filter(n => ['TD','TH'].includes(tagOf(n)) && !suppressed(n)).map(cell => {
         const e = cell as HTMLElement;
         if (Number(e.getAttribute('colspan') ?? '1') !== 1 || Number(e.getAttribute('rowspan') ?? '1') !== 1) throw Error('This EPUB uses merged table cells that Folio cannot display faithfully yet.');
         const runs = textRuns(e, chapter); return { text: runs.map(run => run.text).join(''), runs, header: tagOf(e) === 'TH' };
       })).filter(row => row.length);
       if (rows.length > 200 || rows.some(row => row.length > 16) || rows.reduce((sum, row) => sum + row.length, 0) > 1000) throw Error('This EPUB contains a table too large for the current reader.');
-      const caption = clean(element.querySelector('caption')?.text ?? '');
+      const captionElement = element.querySelector('caption');
+      const caption = captionElement && !suppressedInTable(captionElement, element) ? textRuns(captionElement, chapter).map(run => run.text).join('') : '';
       const text = [caption, ...rows.map(row => row.map(cell => cell.text).join(' | '))].filter(Boolean).join('\n');
       if (text) push({ text, path: firstTextPath(element, path) || path, rich: { version: 1, kind: 'table', text, runs: [{ text }], targets: nextIds, table: { caption, rows } } });
       return;
     }
-    if (tag === 'BR') { if (inherited.pre) parts.push({ text: '\n' }); else flush(); return; }
+    if (tag === 'BR') { if (inherited.whiteSpace && !['normal','nowrap'].includes(inherited.whiteSpace)) parts.push({ ...style, text: '\n', whiteSpace: 'pre' }); else flush(); return; }
     const block = BLOCKS.has(tag); if (block) flush();
-    let next = { ...inherited };
+    let next = { ...inherited, whiteSpace: whitespace(element, inherited.whiteSpace ?? 'normal') };
     if (/^H[1-6]$/.test(tag)) next = { ...next, kind: 'heading', level: Number(tag[1]) };
-    else if (tag === 'PRE') next = { ...next, kind: 'code', pre: true };
+    else if (tag === 'PRE') next = { ...next, kind: 'code' };
     else if (tag === 'BLOCKQUOTE') next = { ...next, kind: 'quote', quoteDepth: (next.quoteDepth ?? 0) + 1 };
     else if (tag === 'FIGCAPTION' || tag === 'CAPTION') next = { ...next, kind: 'caption' };
     else if (tag === 'LI') {

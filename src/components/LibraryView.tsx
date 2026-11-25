@@ -558,13 +558,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </Text>
         </View>
       )}
-      {!searching && <><View style={styles.goalCard}>
-        <View style={styles.readingTimeIcon}><Icon name="schedule" size={24} color={colors.primary} /></View>
-        <View style={{ flex: 1 }}><Text accessibilityRole="header" style={styles.goalTitle}>Today’s reading</Text><Text style={styles.goalSub}>{readingTimeLabel} read today</Text></View>
-      </View>
-      <View style={styles.readingStats}>
-        <View style={styles.readingStat}><Icon name="local_fire_department" size={22} color={colors.primary} /><View style={{ flexShrink: 1 }}><Text style={styles.statValue}>{readingGoal.streakDays}</Text><Text style={styles.statLabel}>day streak</Text></View></View>
-        <View style={styles.readingStat}><Icon name="menu_book" size={22} color={colors.primary} /><View style={{ flexShrink: 1 }}><Text style={styles.statValue}>{readingGoal.booksFinishedYear}</Text><Text style={styles.statLabel}>Books finished this year</Text></View></View>
+      {!searching && <><View testID="library-reading-summary" style={styles.goalCard}>
+        <View style={styles.readingToday}>
+          <View style={styles.readingTimeIcon}><Icon name="schedule" size={20} color={colors.primary} /></View>
+          <View style={{ flex: 1 }}><Text accessibilityRole="header" style={styles.goalTitle}>Today’s reading</Text><Text style={styles.goalSub}>{readingTimeLabel} read today</Text></View>
+        </View>
+        <View style={styles.readingStats}>
+          <View style={styles.readingStat}><Icon name="local_fire_department" size={18} color={colors.primary} /><Text style={styles.statLabel}><Text style={styles.statValue}>{readingGoal.streakDays}</Text> day streak</Text></View>
+          <View style={styles.readingStat}><Icon name="menu_book" size={18} color={colors.primary} /><Text style={styles.statLabel}><Text style={styles.statValue}>{readingGoal.booksFinishedYear}</Text> books finished this year</Text></View>
+        </View>
       </View>
 
       {/* Continue reading */}
@@ -619,17 +621,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           <Text style={styles.importText}>{importing ? 'Reading…' : 'Import EPUB'}</Text>
         </Pressable>
       </View>
-
-      <View style={styles.shortcutRow}>
-        <Pressable onPress={onOpenBookmarks} disabled={!onOpenBookmarks} accessibilityRole="button" accessibilityLabel={`Library bookmarks, ${bookmarkCount} saved`} style={styles.bookmarkTarget}>
-          <View pointerEvents="none" style={styles.bookmarkFace}><Icon name="bookmark" size={17} color={colors.primary} /><Text style={styles.bookmarkText}>Bookmarks</Text><View style={styles.bookmarkCount}><Text style={styles.bookmarkCountText}>{bookmarkCount}</Text></View></View>
-        </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="Search Library" accessibilityState={{ expanded: false }} onPress={openSearch} style={styles.smallAction}><Icon name="search" size={20} color={colors.muted} /></Pressable>
-      </View>
       </>}
 
-      {/* Filters */}
+      {/* Saved passages sit beside collection filters, without a separate shortcut row. */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+        <Pressable onPress={onOpenBookmarks} disabled={!onOpenBookmarks} accessibilityRole="button" accessibilityLabel={`Library bookmarks, ${bookmarkCount} saved`} accessibilityHint="Open saved bookmarks across your library" accessibilityState={{ disabled: !onOpenBookmarks }} style={styles.bookmarkTarget}>
+          <View pointerEvents="none" style={styles.bookmarkFace}><Icon name="bookmark" size={15} color={colors.primary} /><Text style={styles.bookmarkText}>Bookmarks</Text><Text style={styles.bookmarkCountText}>{bookmarkCount}</Text></View>
+        </Pressable>
         {FILTERS.map(f => renderShelfChip(colors, f.label, filter === f.id, () => setFilter(f.id)))}
       </ScrollView>
 
@@ -872,22 +870,19 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   smallAction: { minWidth: 48, minHeight: 48, justifyContent: 'center', alignItems: 'center' },
   resultCount: { ...type.bodySm, color: colors.muted },
   editBookAction: { position: 'absolute', right: 6, top: 6, minWidth: 48, minHeight: 48, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.surface, borderRadius: 24, borderWidth: 1, borderColor: colors.border },
-  readingStats: { flexDirection: 'row', flexWrap: 'wrap', gap: 16, paddingHorizontal: 20, paddingVertical: 14, borderRadius: 16, backgroundColor: colors.surfaceLow },
-  readingStat: { flex: 1, minWidth: 125, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
-  statValue: { fontFamily: F.sans, fontSize: 16, lineHeight: 21, color: colors.onSurface },
-  statLabel: { ...type.bodySm, fontSize: 11, lineHeight: 16, color: colors.muted },
-  shortcutRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  bookmarkTarget: { minHeight: 48, justifyContent: 'center', alignSelf: 'flex-start' },
-  bookmarkFace: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: colors.surfaceContainer },
-  bookmarkText: { ...type.labelMd, color: colors.primary },
-  bookmarkCount: { backgroundColor: colors.primaryContainer, minWidth: 21, minHeight: 21, paddingHorizontal: 5, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
-  bookmarkCountText: { ...type.labelSm, color: colors.onPrimaryContainer },
+  readingToday: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  readingStats: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.borderSoft },
+  readingStat: { flex: 1, minWidth: 125, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  statValue: { fontFamily: F.sansSemi, color: colors.onSurface },
+  statLabel: { ...type.bodySm, fontSize: 12, lineHeight: 18, color: colors.muted, flexShrink: 1 },
+  bookmarkTarget: { minHeight: 48, justifyContent: 'center', marginRight: 4 },
+  bookmarkFace: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+  bookmarkText: { ...type.labelMd, fontSize: 12, lineHeight: 18, color: colors.primary },
+  bookmarkCountText: { ...type.labelSm, color: colors.primary },
   filterTarget: { minHeight: 48, justifyContent: 'center' },
   filterFace: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20 },
   filterText: { ...type.labelMd, fontSize: 12, lineHeight: 18 },
   goalCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: 12,
     padding: 16,
     borderRadius: 16,
@@ -896,11 +891,11 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
     borderColor: colors.borderSoft,
   },
   readingTimeIcon: {
-    width: 56,
-    height: 56,
+    width: 40,
+    height: 40,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 28,
+    borderRadius: 20,
     backgroundColor: colors.primaryFixed,
   },
   goalTitle: { ...type.headlineSm, fontSize: 19, lineHeight: 24, color: colors.onSurface },

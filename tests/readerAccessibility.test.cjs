@@ -1911,7 +1911,7 @@ const pressLibraryFilter = (root, label) => labelled(root, label).onPress();
 
 test('Library search filters title/author and recovery rows; clearing results resets query and filter while keeping sort', () => {
   const f = libraryHarness(); let root = f.render();
-  labelled(root, 'Search Library').onPress(); root = f.render();
+  f.props.searchRequest = 1; f.render(); root = f.render();
   labelled(root, 'Search Library by title or author').onChangeText('zoe'); root = f.render();
   assert.equal(libraryRows(root).length, 1); assert.match(libraryRows(root)[0].props.accessibilityLabel, /^Amber by Zoë/);
   assert.ok(labelled(root, 'Re-import Café from a local EPUB'));
@@ -1987,7 +1987,7 @@ test('Library grid shows truthful percentage badges for unread and finished book
 
 test('book details and Android back retain Library search; cover edit is a separate named action', () => {
   const f = libraryHarness(); let root = f.render();
-  labelled(root, 'Search Library').onPress(); root = f.render();
+  f.props.searchRequest = 1; f.render(); root = f.render();
   labelled(root, 'Search Library by title or author').onChangeText('amber'); root = f.render();
   const row = libraryRows(root)[0]; assert.equal(row.props.accessibilityRole, 'button');
   assert.equal(elements(row).some(node => node.type === 'BookCover' && node.props.onEdit), false);
@@ -2694,12 +2694,12 @@ test('conflict review blocks duplicate choices and dismissal until the durable c
  labelled(root,'Close account change review').onPress();assert.equal(closed,1);h.unmount();
 });
 
-test('Library bookmarks shortcut forwards its action and local search can be expanded and cleared',()=>{
+test('Library bookmark chip stays with collection filters and header search can be expanded and cleared',()=>{
  let opened=0;const f=libraryHarness({bookmarkCount:2,onOpenBookmarks:()=>opened++});let root=f.render();
  labelled(root,'Library bookmarks, 2 saved').onPress();assert.equal(opened,1);
  assert.equal(elements(root).some(node=>node.props?.accessibilityLabel==='Search Library by title or author'),false);
- labelled(root,'Search Library').onPress();root=f.render();labelled(root,'Search Library by title or author').onChangeText('amber');root=f.render();assert.equal(libraryRows(root).length,1);
- labelled(root,'Hide Library search').onPress();root=f.render();assert.equal(libraryRows(root).length,4);assert.equal(labelled(root,'Search Library').accessibilityState.expanded,false);f.h.unmount();
+ f.props.searchRequest=1;f.render();root=f.render();labelled(root,'Search Library by title or author').onChangeText('amber');root=f.render();assert.equal(libraryRows(root).length,1);
+ labelled(root,'Hide Library search').onPress();root=f.render();assert.equal(libraryRows(root).length,4);assert.equal(elements(root).some(node=>node.props?.accessibilityLabel==='Search Library'),false);f.h.unmount();
 });
 
 test('Library-wide bookmarks name their book and open the selected book’s saved record',()=>{
@@ -2708,4 +2708,24 @@ test('Library-wide bookmarks name their book and open the selected book’s save
  const root=h.render(BookmarkSheet,{bookmarks:items,currentPage:0,bookTitles:{a:'First book',b:'Second book'},status:'ready',saving:false,onClose(){},onSelect:item=>selected.push(item),onRemove(){},onRetry(){}});
  const list=elements(root).find(node=>node.type==='FlatList');const row=list.props.renderItem({item:items[1]});const open=labelled(row,'Open bookmark, Second book, Opening, location 100. Second passage');
  assert.equal(open.accessibilityState.selected,false);open.onPress();assert.equal(selected[0],items[1]);h.unmount();
+});
+
+test('Library combines current reading totals and keeps bookmarks reachable while filtering or searching', () => {
+ let opened = 0;
+ const f = libraryHarness({ readingGoal: { minutesReadToday: 23, streakDays: 4, booksFinishedYear: 7 }, bookmarkCount: 2, onOpenBookmarks: () => opened++ });
+ let root = f.render();
+ const summary = elements(root).filter(node => node.props?.testID === 'library-reading-summary');
+ assert.equal(summary.length, 1);
+ const text = renderedText(summary[0]);
+ assert.match(text, /Today’s reading/); assert.match(text, /23 min\s+read today/);
+ assert.match(text, /4\s+day streak/); assert.match(text, /7\s+books finished this year/);
+ assert.equal(elements(root).some(node => node.props?.accessibilityLabel === 'Search Library'), false);
+ labelled(root, 'Finished').onPress(); root = f.render();
+ labelled(root, 'Library bookmarks, 2 saved').onPress(); assert.equal(opened, 1);
+ assert.equal(labelled(root, 'Finished').accessibilityState.selected, true);
+ f.props.searchRequest = 1; f.render(); root = f.render();
+ labelled(root, 'Library bookmarks, 2 saved').onPress(); assert.equal(opened, 2);
+ assert.ok(labelled(root, 'Search Library by title or author'));
+ labelled(root, 'Hide Library search').onPress(); root = f.render();
+ assert.ok(labelled(root, 'Resume Brook by An Author')); f.h.unmount();
 });

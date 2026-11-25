@@ -135,7 +135,13 @@ def check_free_books_controls():
 
 def run():
     ensure_emulator_root()
-    launch();find('Folio Library',timeout=60);screenshot('01-empty-library')
+    launch();find('Folio Library',timeout=60)
+    find('Today’s reading');find('0 day streak');find('0 books finished this year')
+    tap('Library bookmarks, 0 saved');find('No bookmarks yet.');tap('Close bookmarks')
+    screenshot('01-empty-library')
+    adb('shell','settings','put','system','font_scale','1.5');time.sleep(1)
+    find('Today’s reading');find('0 books finished this year');screenshot('01b-large-text-reading-summary')
+    adb('shell','settings','put','system','font_scale','1.0');time.sleep(1)
     tap('Import EPUB')
     # Recent files often already contains the pushed EPUB. Only navigate roots
     # if it is not visible; Android DocumentsUI varies across system images.
@@ -181,7 +187,7 @@ def run():
     find('Open book details for Folio device journey by Folio test fixture')
     screenshot('09-archive-search-results')
     tap('Open book details for Folio device journey by Folio test fixture');find('Read Folio device journey')
-    (OUT/'result.json').write_text(json.dumps({'passed':True,'checks':['native import','Library title/author search and typing focus','Library missing-result recovery','two/three-column grid with search retained','free-books search and column controls','rich reader render','bookmark persistence control','scroll close/reopen position','process restart position','reflection creation and restart','large text rendering capture','global archive book results and navigation'],'talkback':'requires phone testing','book':before['id']},indent=2))
+    (OUT/'result.json').write_text(json.dumps({'passed':True,'checks':['combined Library reading summary and large-text capture','Library bookmark chip opens saved passages','native import','Library title/author search and typing focus','Library missing-result recovery','two/three-column grid with search retained','free-books search and column controls','rich reader render','bookmark persistence control','scroll close/reopen position','process restart position','reflection creation and restart','large text rendering capture','global archive book results and navigation'],'talkback':'requires phone testing','book':before['id']},indent=2))
 try:run()
 except Exception as error:
     try:

@@ -34,7 +34,9 @@ export function paginateContent(
   const result: PaginatedPage[] = [];
 
   pages.forEach((source, sourceIndex) => {
-    if (source.rich?.some(block => block && ['image', 'table', 'code'].includes(block.kind))) {
+    // Keep explicit verse/indentation intact, as with tables and code, until
+    // native layout can split these blocks without normalizing their whitespace.
+    if (source.rich?.some(block => block && (['image', 'table', 'code'].includes(block.kind) || /\n|\t| {2}|^ | $/.test(block.text)))) {
       const text = source.dropCap + source.paragraph1 + ' ' + source.paragraph2Lead + source.highlightedText + source.paragraph2Rest;
       result.push({ sourceIndex, page: source, showChapterHeader: true, startWord: 0, endWord: text.trim().split(/\s+/).filter(Boolean).length });
       return;
