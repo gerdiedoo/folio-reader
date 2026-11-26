@@ -61,9 +61,15 @@ const normalizeTitle = (title: string) =>
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    .replace(/[^\w\s]/g, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+
+// An imported copy can belong to the library without a saved catalog shortcut.
+const workKey = (book: { title: string; author: string }): string | undefined => {
+  const title = normalizeTitle(book.title), author = typeof book.author === 'string' ? normalizeTitle(book.author) : '';
+  return title && author ? JSON.stringify([title, author]) : undefined;
+};
 
 // ---------------------------------------------------------------------------
 // One result row. Memoised: only re-renders when its own status changes.
@@ -74,7 +80,7 @@ interface RowProps {
   disabled: boolean;
   progressPercent: number | null;
   onGet: (item: CatalogBook) => void;
-  onRead: (item: CatalogBook) => void;
+  inLibrary?: boolean;
   onDetails: (item: CatalogBook) => void;
   viewMode: BrowseViewMode;
   cardWidth: number;
@@ -82,18 +88,19 @@ interface RowProps {
   dense?: boolean;
 }
 
-export const BookRow = React.memo<RowProps>(({ item, status, disabled, progressPercent, onGet, onRead, onDetails, viewMode, cardWidth, error, dense }) => {
+export const BookRow = React.memo<RowProps>(({ item, status, disabled, progressPercent = null, onGet, inLibrary = false, onDetails, viewMode, cardWidth, error, dense }) => {
   const palette = useAppTheme();
   const styles = useMemo(() => createStyles(palette), [palette]);
   const busy = status === 'downloading' || status === 'preparing';
 
   return (
     <View style={[styles.row, viewMode === 'grid' && styles.gridCard, viewMode === 'grid' && { width: cardWidth }]}>
-      <Pressable onPress={() => onDetails(item)} accessibilityRole="button" accessibilityLabel={`View details for ${item.title} by ${item.author}`}
+      <Pressable onPress={() => onDetails(item)} accessibilityRole="button" accessibilityLabel={`View details for ${item.title} by ${item.author}`} accessibilityHint={inLibrary ? 'Already in your library' : 'View book details and download options'}
         style={viewMode === 'grid' ? { width: '100%' } : { width: 64 }}>
       <BookCover
         book={{ title: item.title, author: item.author, coverUrl: item.coverUrl, coverAlt: `Cover for ${item.title}` }}
         style="image"
+        inLibrary={inLibrary}
         variant={viewMode === 'grid' ? 'library' : 'default'}
         size={viewMode === 'list' ? 'compact' : 'regular'}
         containerStyle={viewMode === 'list' ? { width: 64, aspectRatio: 2 / 3 } : { width: '100%', aspectRatio: 2 / 3 }}
@@ -109,31 +116,21 @@ export const BookRow = React.memo<RowProps>(({ item, status, disabled, progressP
           </Text>
           {viewMode === 'list' && <Text style={styles.rowMeta}>EPUB{item.downloads > 0 ? ` · ${compact(item.downloads)} downloads` : ''}</Text>}
         </Pressable>
-        <View style={styles.rowAction}>
-          {status === 'added' ? (
-            <Pressable onPress={() => onRead(item)} accessibilityRole="button" accessibilityLabel={`Read ${item.title}`} style={[styles.btn, styles.btnOutline, viewMode === 'grid' && styles.shelfAction]}>
-              <Icon name="check_circle" size={16} color={palette.primary} />
-              <Text style={[styles.btnText, viewMode === 'grid' && styles.shelfActionText, { color: palette.primary }]}>Read</Text>
-            </Pressable>
-          ) : (
-            <Pressable
-              onPress={() => onGet(item)}
-              disabled={disabled || busy}
-              style={[styles.btn, styles.btnFilled, viewMode === 'grid' && styles.shelfAction, (disabled && !busy) && { opacity: 0.45 }]}
-              accessibilityRole="button"
-              accessibilityState={{ disabled: disabled || busy, busy }}
-              accessibilityLabel={`${error ? 'Retry downloading' : 'Add'} ${item.title}${error ? '' : ' to library'}`}
-            >
-              <Icon name={busy ? 'sync' : 'download'} size={16} color={viewMode === 'grid' ? palette.primary : '#fff'} spin={busy} />
-              <Text style={[styles.btnText, viewMode === 'grid' && styles.shelfActionText, { color: viewMode === 'grid' ? palette.primary : '#fff' }]}>
-                {status === 'downloading' ? (viewMode === 'grid' ? `${progressPercent ?? 0}%` : 'Downloading…') : status === 'preparing' ? (viewMode === 'grid' ? 'Saving…' : 'Preparing…') : error ? 'Retry' : 'Get'}
-              </Text>
-            </Pressable>
-          )}
-        </View>
+        {error && !busy && status !== 'added' && <View style={styles.rowAction}>
+          <Pressable onPress={() => onGet(item)} disabled={disabled}
+            accessibilityRole="button" accessibilityLabel={`Retry downloading ${item.title}`} accessibilityState={{ disabled }}
+            style={[styles.btn, styles.btnOutline, viewMode === 'grid' && styles.shelfAction, disabled && { opacity: 0.45 }]}>
+            <Icon name="refresh" size={16} color={palette.primary} />
+            <Text style={[styles.btnText, viewMode === 'grid' && styles.shelfActionText, { color: palette.primary }]}>Retry</Text>
+          </Pressable>
+        </View>}
         {error && <Text accessibilityRole="alert" style={styles.rowError}>{error}</Text>}
         {busy ? (
-          <View style={styles.downloadProgress}>
+          <View accessible accessibilityRole="progressbar" accessibilityLabel={`${status === 'preparing' ? 'Preparing' : 'Downloading'} ${item.title}`}
+            accessibilityState={{ busy: true }} accessibilityValue={{ min: 0, max: 100,
+              ...(progressPercent !== null ? { now: progressPercent } : {}),
+              text: status === 'preparing' ? 'Preparing book' : progressPercent === null ? 'Starting download' : `${progressPercent}% downloaded` }}
+            style={styles.downloadProgress}>
             <ProgressBar percent={progressPercent ?? 0} height={3} />
             <Text style={styles.rowMeta}>
               {status === 'preparing'
@@ -239,6 +236,8 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     });
   }, [items, sortBy]);
 
+  const ownedWorks = useMemo(() => new Set(books.map(workKey).filter(Boolean)), [books]);
+  const ownedLibraryIds = useMemo(() => new Set(books.map(book => book.id)), [books]);
   const libraryIds = useMemo(() => new Set(books.filter(book => availableBookIds.includes(book.id)).map(book => book.id)), [books, availableBookIds]);
 
   // ---- load: first page whenever the search text / topic changes ----
@@ -388,16 +387,19 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   };
 
   // stable callbacks so memoised rows don't re-render on every state change
-  const latest = useRef({ handleGet, handleRead });
-  latest.current = { handleGet, handleRead };
+  const latest = useRef({ handleGet });
+  latest.current = { handleGet };
   const onGet = useCallback((i: CatalogBook) => latest.current.handleGet(i), []);
-  const onRead = useCallback((i: CatalogBook) => latest.current.handleRead(i), []);
 
   const statusOf = (item: CatalogBook): RowStatus => {
     if (active?.id === item.id) return active.phase;
     const bookId = added[item.id];
     return bookId && libraryIds.has(bookId) ? 'added' : 'get';
   };
+
+  const inLibrary = (item: CatalogBook) => Boolean(
+    added[item.id] && ownedLibraryIds.has(added[item.id]) || ownedWorks.has(workKey(item))
+  );
 
   const renderItem = ({ item }: { item: CatalogBook }) => (
     <BookRow
@@ -406,7 +408,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       disabled={!!active}
       progressPercent={active?.id === item.id ? active.progressPercent : null}
       onGet={onGet}
-      onRead={onRead}
+      inLibrary={inLibrary(item)}
       onDetails={setSelectedBook}
       viewMode={viewMode}
       cardWidth={cardWidth}
@@ -565,7 +567,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
           key={`${viewMode}-${columns}`}
           accessibilityLabel={`${CATALOG_SOURCES.find(item => item.id === source)?.label} books`}
           data={sortedItems}
-          extraData={[active, added, libraryIds, downloadErrors]}
+          extraData={[active, added, libraryIds, ownedLibraryIds, ownedWorks, downloadErrors]}
           numColumns={columns}
           columnWrapperStyle={columns > 1 ? styles.gridColumn : undefined}
           keyExtractor={(b) => b.id}
@@ -602,7 +604,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
           contentContainerStyle={[styles.detailsContent, { paddingBottom: insets.bottom + 28 }]}>
           <View style={styles.detailsCover}>
             <BookCover book={{ title: detailBook.title, author: detailBook.author, coverUrl: detailBook.coverUrl, coverAlt: `Cover for ${detailBook.title}` }} style="image"
-              containerStyle={{ width: 144, aspectRatio: 2 / 3 }} />
+              inLibrary={inLibrary(detailBook)} containerStyle={{ width: 144, aspectRatio: 2 / 3 }} />
           </View>
           <Text accessibilityRole="header" selectable style={styles.detailsTitle}>{detailBook.title}</Text>
           <Text selectable style={styles.detailsAuthor}>{detailBook.author}</Text>

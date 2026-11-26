@@ -83,3 +83,22 @@ The workspace network proxy denies live connections to these book hosts. Local
 fixtures and Android/iOS bundle exports cannot prove live service reachability,
 redirects, native storage or image decoding on the phone. Follow the
 [Android checklist](android-testing.md#free-books-and-initial-covers-step-20).
+
+## Browse shelf membership — 26 November 2026
+
+Browse cards show artwork, title and author, with no Get/Read footer. Opening a
+cover or title still shows details with the existing Add to Library/Read actions.
+Failed downloads retain their named Retry action and error; active transfers
+expose progress and preparation state.
+
+A small book-and-check badge at the cover's top left indicates library membership
+in grid, list and detail views. Saved catalog mappings identify known copies;
+normalized title plus author also recognizes imported works. Membership is
+separate from having readable EPUB text on this device. Metadata matches do not
+redirect Read to an unverified edition. Removed books lose their badge, and new
+downloads gain it only after the library save is confirmed.
+
+Regression coverage checks both shelf layouts, details navigation, imported and
+mapped membership, unavailable text, removal, deferred import acknowledgement,
+retry/progress accessibility and fallback-cover badges. 543 tests and TypeScript
+checks pass. This update is on development.

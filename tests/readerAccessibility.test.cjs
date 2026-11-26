@@ -2031,7 +2031,7 @@ test('Library and Notebook filter chips expose a named button and its selected s
   assert.equal(presses, 2);
 });
 
-function catalogHarness({ search, download, parse, save, remember, details } = {}) {
+function catalogHarness({ search, download, parse, save, remember, details, added = {} } = {}) {
   const calls = { searches: [], downloads: [], details: [], opened: [], saved: [], deleted: [], closed: 0, toasts: [] };
   const h = harness({ runEffects: true, moduleMocks: {
     '../lib/catalog': {
@@ -2040,7 +2040,7 @@ function catalogHarness({ search, download, parse, save, remember, details } = {
       searchCatalog: (opts, signal) => { calls.searches.push({ opts, signal }); return search ? search(opts, signal) : Promise.resolve({ books: [item], total: 1, hasMore: false }); },
       loadCatalogBookDetails: (book, signal) => { calls.details.push({ book, signal }); return details ? details(book, signal) : Promise.resolve({ ...book, description: '<p>A classic.</p>', languages: ['en'] }); },
       downloadEpub: async (...args) => { calls.downloads.push(args); return download ? download(...args) : 'file:///cache/book.epub'; },
-      deleteDownloaded: uri => calls.deleted.push(uri), loadAdded: async () => ({}),
+      deleteDownloaded: uri => calls.deleted.push(uri), loadAdded: async () => added,
       rememberAdded: remember ?? (async current => current),
     },
     '../lib/epubParser': { parseEpubFile: parse ?? (async () => ({ book: { id: 'epub-new', title: 'A Book', coverUrl: 'file:///embedded/cover.jpg' }, pages: [{ pageNumber: 1 }] })) },
@@ -2197,7 +2197,8 @@ test('free-book rows expose a named retry with persistent error and truthful bus
   const retry = labelled(root, 'Retry downloading A Book'); assert.equal(retry.accessibilityRole, 'button'); retry.onPress(); assert.equal(f.calls.downloads.length, 1);
   assert.ok(elements(root).some(node => node.props?.accessibilityRole === 'alert' && node.props.children === 'Source unavailable'));
   root = f.h.render(f.BookRow.type, { ...props, error: undefined, status: 'downloading' });
-  assert.deepEqual(labelled(root, 'Add A Book to library').accessibilityState, { disabled: true, busy: true });
+  assert.deepEqual(labelled(root, 'Downloading A Book').accessibilityState, { busy: true });
+  assert.equal(labelled(root, 'Downloading A Book').accessibilityRole, 'progressbar');
 });
 
 test('image covers show bundled illustrations when missing or failed; explicit cloth styling remains available', () => {
@@ -2741,4 +2742,53 @@ test('book-list restore distinguishes recovered books from unavailable reading p
  assert.match(renderedText(root), /account backup was kept unchanged/);
  assert.match(f.messages.at(-1), /2 saved passages were unavailable/);
  f.h.unmount();
+});
+
+test('free-book grid and list cards open details without Get or Read buttons and expose library membership', () => {
+ const f = catalogHarness();
+ for (const viewMode of ['grid', 'list']) for (const inLibrary of [false, true]) {
+  let details = 0;
+  const row = f.h.render(f.BookRow.type, { item: f.item, status: inLibrary ? 'added' : 'get', inLibrary, disabled: false, progressPercent: null, viewMode, cardWidth: 160, onDetails: () => details++, onGet: () => assert.fail('Details should own the download action') });
+  assert.equal(elements(row).find(node => node.type === 'BookCover').props.inLibrary, inLibrary);
+  assert.equal(elements(row).some(node => /^(Add |Read )/.test(node.props?.accessibilityLabel ?? '')), false);
+  const cover = labelled(row, 'View details for A Book by An Author');
+  assert.equal(cover.accessibilityHint, inLibrary ? 'Already in your library' : 'View book details and download options');
+  cover.onPress(); labelled(row, 'About A Book').onPress(); assert.equal(details, 2);
+ }
+ f.h.unmount();
+});
+
+test('catalog membership covers saved mappings and imported works without pretending unavailable EPUBs are readable', async () => {
+ const f = catalogHarness({ added: { 'gutenberg-1': 'owned' } });
+ f.props.books = [{ id: 'owned', title: 'A Book', author: 'An Author' }];
+ f.render(); await flushNative(); let root = f.render();
+ assert.equal(freeBookRow(f, root).inLibrary, true); assert.equal(freeBookRow(f, root).status, 'get');
+ f.props.availableBookIds = ['owned']; root = f.render();
+ assert.equal(freeBookRow(f, root).inLibrary, true); assert.equal(freeBookRow(f, root).status, 'added');
+ f.props.books = []; root = f.render(); assert.equal(freeBookRow(f, root).inLibrary, false);
+ f.props.books = [{ id: 'imported', title: 'A BOOK!', author: 'An Author' }]; root = f.render();
+ assert.equal(freeBookRow(f, root).inLibrary, true);
+ f.props.books = [{ id: 'another-work', title: 'A Book', author: 'Another Author' }]; root = f.render();
+ assert.equal(freeBookRow(f, root).inLibrary, false); f.h.unmount();
+});
+
+test('library membership only appears after a confirmed catalog import', async () => {
+ let finish;
+ const f = catalogHarness({ save: () => new Promise(done => { finish = done; }) });
+ f.render(); await flushNative(); let root = f.render();
+ freeBookRow(f, root).onGet(f.item); await flushNative(); fireNativeTimer(f.h, 60); await flushNative(); root = f.render();
+ assert.equal(freeBookRow(f, root).inLibrary, false);
+ finish(); await flushNative(); root = f.render(); assert.equal(freeBookRow(f, root).inLibrary, true);
+ f.h.unmount();
+});
+
+test('cover membership badge has a readable label and coexists with reading progress and fallback art', () => {
+ const h = harness({ runEffects: true, moduleMocks: { 'expo-linear-gradient': { LinearGradient: 'LinearGradient' } } });
+ const { BookCover } = h.load('../src/components/BookCover.tsx');
+ const props = { book: { title: 'A Book', author: 'An Author', coverUrl: '', coverAlt: 'A book cover' }, style: 'image', variant: 'library', inLibrary: true, badge: { kind: 'percent', value: 32 } };
+ let root = h.render(BookCover, props);
+ assert.ok(labelled(root, 'In your library')); assert.match(renderedText(root), /32/);
+ assert.ok(elements(root).some(node => node.type === 'CoverIllustration'));
+ root = h.render(BookCover, { ...props, inLibrary: false });
+ assert.equal(elements(root).some(node => node.props?.accessibilityLabel === 'In your library'), false); h.unmount();
 });

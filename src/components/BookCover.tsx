@@ -26,6 +26,7 @@ interface BookCoverProps {
   size?: 'compact' | 'regular';
   variant?: 'default' | 'library';
   badge?: { kind: 'read' } | { kind: 'percent'; value: number };
+  inLibrary?: boolean;
   onEdit?: () => void;
   containerStyle?: StyleProp<ViewStyle>;
 }
@@ -49,6 +50,7 @@ export const BookCover: React.FC<BookCoverProps> = ({
   size = 'regular',
   variant = 'default',
   badge,
+  inLibrary = false,
   onEdit,
   containerStyle,
 }) => {
@@ -112,6 +114,10 @@ export const BookCover: React.FC<BookCoverProps> = ({
         </View>
       )}
 
+      {inLibrary && <View pointerEvents="none" accessible accessibilityLabel="In your library" style={styles.libraryOwnership}>
+        <Icon name="library_add_check" size={16} color={colors.primary} />
+      </View>}
+
       {badge ? (
         badge.kind === 'read' ? (
           <View style={[styles.badge, { backgroundColor: colors.tertiaryContainer }]}>
@@ -161,6 +167,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
   },
   libraryArtwork: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, borderRadius: 8, elevation: 0, shadowOpacity: 0 },
+  libraryOwnership: { position: 'absolute', left: 6, top: 6, width: 26, height: 26, borderRadius: 6, backgroundColor: 'rgba(253,249,242,0.96)', alignItems: 'center', justifyContent: 'center', zIndex: 20 },
   libraryBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
   libraryBadgeText: { fontFamily: F.sansSemi, fontSize: 11, lineHeight: 14, letterSpacing: 0.1 },
   image: { width: '100%', height: '100%' },
