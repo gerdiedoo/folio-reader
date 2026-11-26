@@ -23,7 +23,10 @@ def adb(*args,check=True):
     return subprocess.run(['adb',*args],check=check,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=40).stdout
 
 def nodes():
-    adb('shell','uiautomator','dump','/data/local/tmp/folio-window.xml')
+    # A dump can fail without a nonzero exit status. Never read an older tree.
+    adb('shell','rm','-f','/data/local/tmp/folio-window.xml')
+    result=adb('shell','uiautomator','dump','/data/local/tmp/folio-window.xml')
+    (OUT/'last-dump-result.txt').write_bytes(result)
     raw=adb('exec-out','cat','/data/local/tmp/folio-window.xml')
     (OUT/'last-window.xml').write_bytes(raw)
     return list(ET.fromstring(raw).iter('node'))
@@ -108,19 +111,37 @@ def focused_field(label,timeout=20):
         time.sleep(.3)
     raise AssertionError('Android editor/keyboard was not ready: '+json.dumps({'field':label,'focused':node.get('focused'),'keyboard_ready':ready}))
 
+def field_text(label, expected, timeout=15):
+    # Input delivery and React Native's controlled-value commit are asynchronous.
+    # Send each keystroke only once, then observe fresh accessibility snapshots.
+    deadline=time.monotonic()+timeout;last=None
+    while time.monotonic()<deadline:
+        try:
+            last=find(label,timeout=3)
+            if last.get('text')==expected:return last
+        except (AssertionError,subprocess.SubprocessError,ET.ParseError):pass
+        time.sleep(.3)
+    state=adb('shell','dumpsys','input_method').decode(errors='replace')
+    (OUT/'failed-input-service.txt').write_text(state)
+    window=adb('shell','dumpsys','window','windows').decode(errors='replace')
+    diagnostic=[line.strip() for line in (state+'\n'+window).splitlines()
+                if any(key in line for key in ['mInputShown','mServedConnecting','packageName=', 'mCurrentFocus=', 'mFocusedApp='])]
+    raise AssertionError('Editor did not show the text sent once: '+json.dumps({'field':label,'expected':expected,'node':last.attrib if last is not None else None,'android':diagnostic})[:2200])
+
 def check_library_search():
     field='Search Library by title or author'
     book='Folio device journey by Folio test fixture.'
     tap('Search Library');tap(field);focused_field(field)
     adb('shell','input','text','Folio');time.sleep(.4)
-    initial=find(field)
-    assert initial.get('text')=='Folio', 'Library input lost the typed title: '+json.dumps(initial.attrib)
+    field_text(field,'Folio')
     adb('shell','input','text','%sdevice');time.sleep(.4)
-    assert find(field).get('text')=='Folio device', 'Library input lost focus between keystrokes'
+    field_text(field,'Folio device')
     find(book,contains=True)
     tap('Clear Library search');adb('shell','input','text','zzzzmissingbook');time.sleep(.4)
+    field_text(field,'zzzzmissingbook')
     find('No books match this search and filter. Try another title or author.')
     tap('Clear Library search');adb('shell','input','text','Folio%stest%sfixture');time.sleep(.4)
+    field_text(field,'Folio test fixture')
     normal=list(map(int,re.findall(r'\d+',find(book,contains=True).get('bounds',''))))
     tap('3-column grid')
     dense=list(map(int,re.findall(r'\d+',find(book,contains=True).get('bounds',''))))
@@ -133,6 +154,7 @@ def check_free_books_controls():
     tap('Browse free books')
     field='Search free books by title or author'
     tap(field);focused_field(field);adb('shell','input','text','shelley');time.sleep(.4)
+    field_text(field,'shelley')
     tap('3-column grid')
     assert find(field).get('text')=='shelley', 'Changing free-book columns reset the search'
     screenshot('02c-free-books-layout')
