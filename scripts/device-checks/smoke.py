@@ -14,6 +14,7 @@ import time
 import xml.etree.ElementTree as ET
 from adb_session import ensure_emulator_root
 from tap_geometry import exposed_book_point
+from input_readiness import keyboard_ready
 PACKAGE=os.environ.get('FOLIO_ANDROID_PACKAGE','com.folio.reader.dev')
 if PACKAGE not in ['com.folio.reader','com.folio.reader.dev']:
     raise ValueError('Only Folio packages on the disposable CI emulator are supported')
@@ -93,15 +94,19 @@ def pause_snapshot(expected_bookmark=None):
     adb('shell','input','keyevent','KEYCODE_HOME');time.sleep(1.5)
     return library_record(expected_bookmark)
 
-def focused_field(label,timeout=12):
-    # Seeing the view in the hierarchy does not mean Android has finished its
-    # input-focus handoff. Do not inject keys into a not-yet-focused window.
-    deadline=time.monotonic()+timeout
+def focused_field(label,timeout=20):
+    # View focus can precede Android's input-service handoff. Require the visible
+    # keyboard to serve this app twice before sending the first text event.
+    deadline=time.monotonic()+timeout;stable=0;ready=False
     while time.monotonic()<deadline:
         node=find(label,timeout=3)
-        if node.get('focused')=='true':return node
+        ready=keyboard_ready(adb('shell','dumpsys','input_method').decode(errors='replace'),PACKAGE)
+        if node.get('focused')=='true' and node.get('package')==PACKAGE and ready:
+            stable+=1
+            if stable>=2:return node
+        else:stable=0
         time.sleep(.3)
-    raise AssertionError('Search input did not receive native focus: '+json.dumps(node.attrib))
+    raise AssertionError('Android editor/keyboard was not ready: '+json.dumps({'field':label,'focused':node.get('focused'),'keyboard_ready':ready}))
 
 def check_library_search():
     field='Search Library by title or author'
