@@ -166,3 +166,18 @@ Phone checks remain necessary for each live provider and a valid Google key.
 Existing account book-list restoration still looks up Gutenberg titles. Use a
 portable safety copy with original EPUBs to preserve other providers' exact editions
 and generated exports. This feature adds no Supabase schema migration.
+
+### Native verification of this build
+
+[Development APK and successful Android run](https://github.com/gerdiedoo/folio-reader/actions/runs/45745025781)
+compiled application source `2a06f35`. All 568 regression tests, TypeScript checks,
+Android/iOS Hermes exports and the disposable PostgreSQL checks passed in CI.
+The Android 36 emulator imported the illustrated fixture, exercised Library/free
+book controls, saved a synthetic Google Books key through the actual setup UI,
+force-stopped/restarted Folio Dev, observed that the key was still saved, and
+removed it. The reading/bookmark/notebook restart journey also passed.
+
+The synthetic key is deliberately nonfunctional. This establishes native key
+storage and UI execution, not live Google authorization or provider downloads.
+Download `folio-dev-apk` from that run to try the sources with a real connection
+and your own Google key; the evidence artifact contains the synthetic journey.
