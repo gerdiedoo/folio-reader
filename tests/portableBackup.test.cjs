@@ -139,7 +139,7 @@ test('rejects unlisted entries, corrupt page JSON, CRC damage and dishonest ZIP 
   await assert.rejects(inspectPortableBackup(bomb));
 });
 
-const { removeBookWithRecovery } = load('backupRecovery');
+const { removeBookWithRecovery, removeBooksWithRecovery } = load('backupRecovery');
 const { retryRecordedDeletions } = load('deletionRetries');
 async function removalFixture() {
   const f = store(); await createLibraryStore(f.storage).add(book()); await createLibraryStore(f.storage).add(book('other'));
@@ -147,6 +147,84 @@ async function removalFixture() {
   f.set('lexiconArchive', { version: 1, items: [word], removedBookIds: [] }); f.set('bookmarks', [bookmark]);
   return f;
 }
+
+async function bulkRemovalFixture() {
+  const f = await removalFixture();
+  await createLibraryStore(f.storage).add(book('second'));
+  f.set('highlightArchive', { version: 1, items: [note, { ...note, id: 'second-note', bookId: 'second' }, { ...note, id: 'other-note', bookId: 'other' }], removedIds: ['old-note'], removedBookIds: ['old-book'] });
+  f.set('lexiconArchive', { version: 1, items: [word, { ...word, id: 'second-word', bookId: 'second' }, { ...word, id: 'other-word', bookId: 'other' }], removedBookIds: ['old-book'] });
+  f.set('bookmarks', [bookmark, { ...bookmark, id: 'second:1', bookId: 'second' }, { ...bookmark, id: 'other:1', bookId: 'other' }]);
+  return f;
+}
+
+for (const key of ['libraryArchive', 'highlightArchive', 'lexiconArchive', 'bookmarks', 'settingsArchive', 'goal', 'restoreJournal']) {
+  test(`one bulk-removal intent recovers all selected books after interruption at ${key}`, async () => {
+    const f = await bulkRemovalFixture();
+    // For the journal key, fail its final clearing write after the intent is saved.
+    if (key === 'restoreJournal') {
+      const save = f.storage.saveJSONStrict;
+      let failed = false;
+      f.storage.saveJSONStrict = async (name, value) => {
+        if (name === key && value === null && !failed) { failed = true; throw Error('Interrupted clearing journal'); }
+        return save(name, value);
+      };
+    } else f.fail(key);
+    await assert.rejects(removeBooksWithRecovery(f.storage, ['a', 'second', 'a']));
+    assert.equal(await hasPendingRestore(f.storage), true);
+    await recoverPortableRestore(f.storage);
+    await recoverPortableRestore(f.storage);
+    const saved = await readBackupSnapshot(f.storage);
+    assert.deepEqual(saved.books.map(b => b.id), ['other']);
+    assert.deepEqual(saved.highlights.map(n => n.id), ['other-note']);
+    assert.deepEqual(saved.lexicon.map(n => n.id), ['other-word']);
+    assert.deepEqual(saved.bookmarks.map(n => n.bookId), ['other']);
+    const library = await createLibraryStore(f.storage).load();
+    assert.deepEqual(library.removedBookIds, ['a', 'second']);
+    assert.deepEqual(new Set(library.pendingFileRemovals.map(b => b.id)), new Set(['a', 'second']));
+    assert.deepEqual(f.get('highlightArchive').removedIds, ['old-note', note.id, 'second-note']);
+    assert.deepEqual(f.get('lexiconArchive').removedBookIds, ['old-book', 'a', 'second']);
+    assert.equal(await hasPendingRestore(f.storage), false);
+  });
+}
+
+test('bulk removal never changes unselected books and aborts an invalid/stale selection before saving its intent', async () => {
+  for (const ids of [[], ['a', 'gone'], ['a', '../other'], ['a', null]]) {
+    const f = await bulkRemovalFixture();
+    const before = JSON.stringify([...f.data]);
+    await assert.rejects(removeBooksWithRecovery(f.storage, ids));
+    assert.equal(JSON.stringify([...f.data]), before);
+    assert.equal(await hasPendingRestore(f.storage), false);
+  }
+});
+
+test('a failed bulk intent write leaves every selected book and its saved work intact', async () => {
+  const f = await bulkRemovalFixture(), before = await readBackupSnapshot(f.storage);
+  f.fail('restoreJournal');
+  await assert.rejects(removeBooksWithRecovery(f.storage, ['a', 'second']));
+  assert.deepEqual(await readBackupSnapshot(f.storage), before);
+  const titles = await removeBooksWithRecovery(f.storage, ['a', 'second', 'a']);
+  assert.equal(titles.length, 2);
+  const calls = [];
+  let archive = await createLibraryStore(f.storage).cleanupFiles(id => { calls.push(id); return id === 'a'; });
+  assert.deepEqual(archive.pendingFileRemovals.map(book => book.id), ['second']);
+  assert.deepEqual(new Set(calls), new Set(['a', 'second']));
+  archive = await createLibraryStore(f.storage).cleanupFiles(() => true);
+  assert.equal(archive.pendingFileRemovals.length, 0);
+  assert.deepEqual((await readBackupSnapshot(f.storage)).books.map(b => b.id), ['other']);
+});
+
+test('bulk removal stays within its account and records each selected book for offline cleanup retries', async () => {
+  const f = await bulkRemovalFixture(), other = await bulkRemovalFixture();
+  const untouched = await readBackupSnapshot(other.storage);
+  await removeBooksWithRecovery(f.storage, ['a', 'second']);
+  const deleted = [];
+  const cloud = { deleteBookFromSupabase: async id => { deleted.push(id); return false; }, deleteHighlightFromSupabase: async () => false };
+  assert.ok((await retryRecordedDeletions(f.storage, cloud)).pending > 0);
+  assert.deepEqual(new Set(deleted), new Set(['a', 'second']));
+  cloud.deleteBookFromSupabase = async () => true; cloud.deleteHighlightFromSupabase = async () => true;
+  assert.equal((await retryRecordedDeletions(f.storage, cloud)).pending, 0);
+  assert.deepEqual(await readBackupSnapshot(other.storage), untouched);
+});
 for (const key of ['libraryArchive', 'highlightArchive', 'lexiconArchive', 'bookmarks', 'settingsArchive', 'goal']) {
   test(`book-removal journal resumes after interruption at ${key}, preserving other books and saved work`, async () => {
     const f = await removalFixture(); f.fail(key);

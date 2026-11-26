@@ -1047,3 +1047,33 @@ These device checks have **not** been run in this workspace. Android/iOS JavaScr
 bundle exports do not establish native file sharing, process recovery, source-anchor
 scroll accuracy, screen-reader usability or memory behavior. Multi-device revision
 conflict handling and full publisher-layout EPUB rendering remain unimplemented.
+
+## Library multiple selection and removal
+
+Use expendable EPUBs in Folio Dev. Export a safety copy before testing removal of
+saved work you care about. This change adds a native haptics module and requires
+a fresh APK; it cannot be tested by reusing the previous signed APK.
+
+1. With Android touch feedback enabled, hold a cover for about half a second.
+   Confirm one brief haptic, a checkmark and the selection toolbar. Releasing the
+   hold must keep selection open without opening details or the cover editor.
+2. Tap two more books, then deselect one. Verify each checkmark and the count.
+   Repeat in two/three columns and list view. Further taps should not repeat the
+   initial long-press feedback. Disable system haptics and confirm selection still
+   works without vibration.
+3. Change sort, filter and search. Verify selected IDs stay selected, hidden
+   selections are counted, and Select shown / Deselect shown affect only matching
+   books. Recovery placeholders must not be included. Zero selected disables Remove.
+4. Tap Remove. Verify the confirmation names exactly the selected books and
+   explains removal of their saved work. Cancel and Android Back must not delete
+   anything. Exiting selection restores normal tap-to-details and cover editing.
+5. Create bookmarks, notes and vocabulary in two expendable books; leave a third
+   book unselected. Remove the pair with one confirmation. After Open Library and
+   a process restart, verify only that pair and its saved work are gone. Confirm
+   the unselected book's progress, cover and annotations are unchanged.
+6. On a disposable test device, interrupt a confirmed removal with a process
+   stop. Reopen and allow recovery to finish. It must complete the recorded batch
+   before allowing new library edits, with no stranded half-restored annotations.
+7. With TalkBack and large text enabled, enter selection using the Select book
+   accessibility action, check/uncheck books, inspect the count and confirmation,
+   cancel and exit. Verify focus order and readable, reachable toolbar actions.

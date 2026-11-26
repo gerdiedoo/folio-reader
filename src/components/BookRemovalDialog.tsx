@@ -5,10 +5,11 @@ import { type } from '../theme';
 import type { BookRemovalResult } from '../lib/bookRemoval';
 import { ModalShell } from './ui/ModalShell';
 
-export function BookRemovalDialog({ title, onRemove, onClose }: {
-  title: string; onRemove: () => Promise<BookRemovalResult>; onClose: () => void;
+export function BookRemovalDialog({ title, titles, onRemove, onClose }: ({ title: string; titles?: never } | { titles: readonly string[]; title?: never }) & {
+  onRemove: () => Promise<BookRemovalResult>; onClose: () => void;
 }) {
   const palette = useAppTheme(), styles = useMemo(() => createStyles(palette), [palette]);
+  const names = titles ?? [title!], multiple = names.length > 1;
   const [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
   const pending = useRef(false), mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -20,18 +21,19 @@ export function BookRemovalDialog({ title, onRemove, onClose }: {
       const result = await onRemove();
       if (!mounted.current) return;
       if (result.removed) onClose(); else setError(result.message);
-    } catch { if (mounted.current) setError('Removal could not be confirmed. Check this book in Library before trying again.'); }
+    } catch { if (mounted.current) setError(`Removal could not be confirmed. Check ${multiple ? 'these books' : 'this book'} in Library before trying again.`); }
     finally { pending.current = false; if (mounted.current) setBusy(false); }
   };
   return <ModalShell onClose={close} maxWidth={400}>
     <ScrollView contentContainerStyle={styles.body}>
-      <Text accessibilityRole="header" style={styles.title}>Remove book?</Text>
-      <Text style={styles.text}>Remove “{title}” and its saved files, bookmarks, highlights, notes and vocabulary from this Library.</Text>
-      <Text style={styles.text}>Export notes or cards you want to keep first. Cloud cleanup is attempted when signed in; an unremoved cloud copy may return after reloading.</Text>
+      <Text accessibilityRole="header" style={styles.title}>{multiple ? `Remove ${names.length} books?` : 'Remove book?'}</Text>
+      <Text style={styles.text}>{multiple ? 'Remove these books and their' : `Remove “${names[0]}” and its`} saved files, bookmarks, highlights, notes and vocabulary from this Library.</Text>
+      {multiple && names.map((name, index) => <Text key={index} style={styles.text}>• {name}</Text>)}
+      <Text style={styles.text}>Export notes or cards you want to keep first. Account removals sync when connected; other devices may keep downloaded files.</Text>
       {error && <Text accessibilityRole="alert" style={styles.text}>{error}</Text>}
       <View style={styles.actions}>
-        <Pressable onPress={close} disabled={busy} accessibilityRole="button" accessibilityLabel="Keep this book" accessibilityState={{ disabled: busy }} style={styles.button}><Text style={styles.text}>Cancel</Text></Pressable>
-        <Pressable onPress={remove} disabled={busy} accessibilityRole="button" accessibilityLabel={`Remove ${title} from Library`} accessibilityState={{ disabled: busy, busy }} style={[styles.button, { backgroundColor: palette.danger }]}><Text style={styles.remove}>{busy ? 'Removing…' : 'Remove'}</Text></Pressable>
+        <Pressable onPress={close} disabled={busy} accessibilityRole="button" accessibilityLabel={multiple ? 'Keep these books' : 'Keep this book'} accessibilityState={{ disabled: busy }} style={styles.button}><Text style={styles.text}>Cancel</Text></Pressable>
+        <Pressable onPress={remove} disabled={busy} accessibilityRole="button" accessibilityLabel={`Remove ${multiple ? `${names.length} books` : names[0]} from Library`} accessibilityState={{ disabled: busy, busy }} style={[styles.button, { backgroundColor: palette.danger }]}><Text style={styles.remove}>{busy ? 'Removing…' : multiple ? `Remove ${names.length}` : 'Remove'}</Text></Pressable>
       </View>
     </ScrollView>
   </ModalShell>;
