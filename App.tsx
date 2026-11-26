@@ -39,7 +39,7 @@ import { saveBookCover, type BookCoverDraft, type CoverSaveResult } from './src/
 import { type BookRemovalResult } from './src/lib/bookRemoval';
 import { applyReadingPosition, createReadingProgressWriter } from './src/lib/readingPosition';
 import { backupBookKey, backupProgressNotice, hasBackupReadingProgress, libraryBackupEntry, matchingLibraryBackupEntry, restoreLibraryProgress } from './src/lib/libraryBackup';
-import { hasPendingRestore, recoverPortableRestore, removeBookWithRecovery } from './src/lib/backupRecovery';
+import { hasPendingRestore, recoverPortableRestore, removeBooksWithRecovery } from './src/lib/backupRecovery';
 import { choosePortableBackup, exportPortableBackup, importPortableBackup } from './src/lib/portableBackupNative';
 import type { PreparedBackup } from './src/lib/portableBackup';
 import { useReaderSettings } from './src/lib/useReaderSettings';
@@ -98,9 +98,9 @@ function getLocalDateKey(): string {
   return `${today.getFullYear()}-${month}-${day}`;
 }
 
-type PortableJob = { kind: 'export'; includeOriginals: boolean } | { kind: 'restore'; backup: PreparedBackup; preferences: boolean; recoverMatching?: boolean } | { kind: 'remove'; bookId: string };
+type PortableJob = { kind: 'export'; includeOriginals: boolean } | { kind: 'restore'; backup: PreparedBackup; preferences: boolean; recoverMatching?: boolean } | { kind: 'remove'; bookIds: readonly string[] };
 interface ReadingSpaceProps { user: UserProfile | null; scope: string; hasLegacyData: boolean; authError?: string; onClearAuthError?: () => void }
-function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onPortableJob, onRemovalJob }: ReadingSpaceProps & { onPortableJob: (job: PortableJob) => void; onRemovalJob: (bookId: string) => Promise<BookRemovalResult> }) {
+function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onPortableJob, onRemovalJob }: ReadingSpaceProps & { onPortableJob: (job: PortableJob) => void; onRemovalJob: (bookIds: readonly string[]) => Promise<BookRemovalResult> }) {
   const storage = useMemo(() => createReplicatedStore(createLocalStore(scope), randomUUID, Boolean(user)), [scope]);
   const { loadJSON, removeBookFiles, saveJSON, savePages } = storage;
   const pageCache = useMemo(() => createBookPageCache(storage.loadPages, 2), [storage]);
@@ -769,9 +769,8 @@ function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onP
     } finally { savingCover.current = false; }
   };
 
-  const handleRemoveBook = async (bookId: string): Promise<BookRemovalResult> => {
-    const book = booksRef.current.find(item => item.id === bookId);
-    if (!spaceActive.current || !book) return { removed: false, message: 'This book is no longer available in this Library.' };
+  const handleRemoveBooks = async (bookIds: readonly string[]): Promise<BookRemovalResult> => {
+    if (!spaceActive.current || !bookIds.length || bookIds.some(id => !booksRef.current.some(item => item.id === id))) return { removed: false, message: 'A selected book is no longer available in this Library. Check your selection.' };
     if (savingCover.current) return { removed: false, message: 'The book cover is still saving. Try removal again shortly.' };
     if (removingBook.current) return { removed: false, message: 'Another book removal is still in progress. Try again shortly.' };
     if (libraryLoadState.current !== 'ready') {
@@ -789,7 +788,7 @@ function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onP
     }
     removingBook.current = true;
     try {
-      return await onRemovalJob(bookId);
+      return await onRemovalJob([...new Set(bookIds)]);
     } finally { removingBook.current = false; }
   };
 
@@ -853,7 +852,8 @@ function FolioApp({ user, scope, hasLegacyData, authError, onClearAuthError, onP
             onRestoreImportedProgress={handleRestoreImportedProgress}
             onReimportRecoveryBook={handleReimportRecoveryBook}
             onUpdateBookCover={handleUpdateBookCover}
-            onRemoveBook={handleRemoveBook}
+            onRemoveBook={id => handleRemoveBooks([id])}
+            onRemoveBooks={handleRemoveBooks}
             showToast={showToast}
             bottomInset={insets.bottom}
           />
@@ -1086,10 +1086,10 @@ function ReadingSpace(props: ReadingSpaceProps) {
           await importPortableBackup(storage, job.backup, job.preferences, job.recoverMatching);
           if (active) { setMessage(job.recoverMatching ? 'Safety copy recovered. Matching editions retain their current progress and saved work.' : 'Safety copy restored as separate books and saved work.'); setPhase('done'); }
         } else if (job?.kind === 'remove') {
-          const title = await removeBookWithRecovery(storage, job.bookId);
+          const titles = await removeBooksWithRecovery(storage, job.bookIds);
           let filesRemain = true;
           try { filesRemain = (await createLibraryStore(storage).cleanupFiles(storage.removeBookFiles)).pendingFileRemovals.length > 0; } catch { /* Retry on reopening. */ }
-          const result = { removed: true, message: `“${title}” removed on this device.${filesRemain ? ' Some local files still need cleanup.' : ''}` };
+          const result = { removed: true, message: `${titles.length === 1 ? `“${titles[0]}”` : `${titles.length} books`} removed on this device.${filesRemain ? ' Some local files still need cleanup.' : ''}` };
           removalReply.current?.(result); removalReply.current = null;
           if (active) { setMessage(result.message); setPhase('done'); }
         } else setPhase('ready');
@@ -1109,9 +1109,9 @@ function ReadingSpace(props: ReadingSpaceProps) {
     if (running.current) return;
     running.current = true; setPhase('working'); setJob(next);
   };
-  const requestRemoval = (bookId: string): Promise<BookRemovalResult> => {
+  const requestRemoval = (bookIds: readonly string[]): Promise<BookRemovalResult> => {
     if (running.current) return Promise.resolve({ removed: false, message: 'Another library operation is still in progress.' });
-    return new Promise(resolve => { removalReply.current = resolve; requestJob({ kind: 'remove', bookId }); });
+    return new Promise(resolve => { removalReply.current = resolve; requestJob({ kind: 'remove', bookIds: [...bookIds] }); });
   };
   if (phase === 'ready') return <FolioApp {...props} onPortableJob={requestJob} onRemovalJob={requestRemoval} />;
   return <View style={[styles.app, styles.center, { padding: 24, gap: 16 }]}>

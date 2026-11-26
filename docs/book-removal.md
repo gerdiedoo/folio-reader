@@ -1,57 +1,69 @@
-# Confirmed local book removal: step 17
+# Library book removal
 
-This step improves the removal confirmation in the Library's book editor.
-Install over Folio Dev without uninstalling or clearing data. No SQL is needed.
+## Select several books
 
-## Confirmation and failure
+Hold a book for 400 ms to enter selection mode. The first hold requests Android's
+native long-press haptic (a light impact on iOS). Feedback respects system/device
+support; unavailable haptics do not prevent selection. A screen-reader action
+named **Select book** offers the same entry without requiring a held gesture.
 
-The dialog previously closed as soon as Remove was tapped, even if the operation
-later kept the book because bookmarks, notes or vocabulary could not be removed.
-It now waits for a structured result. While pending it displays **Removing…** and
-blocks duplicate taps, Cancel, close, backdrop dismissal and Android back through
-the modal's close handler. A local failure leaves the confirmation open with an
-inline error and permits retry or cancellation. Unexpected exceptions say removal
-could not be confirmed, rather than claiming the book/data were definitely kept.
-Leaving the screen through an account change does not let a late result close a
-different screen.
+Tap more books to select or deselect them. Selected books have a checkmark and
+expose a checked checkbox state. The compact toolbar shows the selected count,
+**Select shown / Deselect shown**, **Remove**, and an exit button. Selection works
+in two/three-column grids and list view. Sorting, filtering and search retain
+selection by book ID. A warning counts selected books outside the current view;
+Select shown affects only matching Library books, preserving other selections.
+Recovery placeholders needing re-import are not selectable and are disabled
+while selecting. Cover customization stays available outside selection mode.
 
-The confirmation names the book and the affected local data. It no longer promises
-that a connected database will always be cleaned up. Its content scrolls for large
-text, and the buttons expose names, disabled/busy states and 48-point targets.
+Android Back or the exit button leaves selection without removing anything.
+Selection is temporary and does not cross account boundaries or process restarts.
+Disappearing books are pruned from selection. Library loading/errors prevent entry.
 
-## Local order
+## Confirm removal
 
-Removal waits for readable, idle library/bookmark/note/vocabulary state. It then
-removes bookmarks, highlights/reflections and vocabulary through their existing
-stores. After those writes, it saves the filtered library with strict storage
-acknowledgement. Only then does it remove the visible entry/loaded text and attempt
-deleting the owned local files. Failed index storage keeps the entry and book files.
-The in-memory update filters the current list so other entries completed during
-annotation cleanup are retained.
+Remove opens one confirmation listing the selected titles and explaining that
+saved files, bookmarks, highlights, notes and vocabulary will be removed too.
+Cancellation keeps the selection. Zero selected books disables Remove. The dialog
+blocks repeated submission and dismissal while the operation is pending. Singular
+removal from book details uses the same persistence path.
 
-These are separate writes, not one transaction. If a later stage fails, earlier
-bookmark/note/card removals may already have completed. The error identifies that
-partial outcome. Cancel does not restore those records, and their existing
-book-removal markers can prevent new notes/cards on the kept book until removal
-is completed or the EPUB is imported under a new ID. Export important records
-before confirming removal.
+Before starting, the app checks library/bookmark/note/vocabulary readiness and
+rejects concurrent cover saves or removals. The reading UI unmounts during the job
+so background archive hooks cannot overwrite it. A completed job reports the book
+count and offers **Open Library**. An error leads to recovery instead of claiming
+that all selected books have been kept or removed.
 
-If the index was saved but some file deletions fail, removal is still confirmed
-and a separate warning says files remain. There is no orphan-file cleanup UI in
-this step. Cloud cleanup starts only after local completion and does not hold the
-dialog open while offline. A cloud failure is reported separately, retaining any
-local-file warning. Guest removal never requests a server deletion.
+## Recovery and synchronization
 
-## Limits and checks
+`removeBooksWithRecovery` validates the entire selection against the latest saved
+library and creates one account-scoped recovery journal for the whole batch.
+Duplicate IDs are deduplicated. Missing or invalid IDs abort before recording a
+new removal intent.
 
-Cloud cleanup remains best effort. This does not add a durable book-deletion
-journal, retry queue, server deletion protocol or full library storage migration.
-A surviving/stale cloud book row can return at startup, and other devices may
-retain their copies. The existing generic library persistence/concurrent mutation
-paths are not converted into an atomic transaction by this step.
+The journal contains the resulting library, saved-work archives, bookmarks,
+preferences and goal. It records each removed book, note and pending file cleanup
+while retaining all unselected work and older deletion markers. The intent is
+saved before applying those archive writes. If interrupted, startup rolls it
+forward before mounting the reading UI. File cleanup follows confirmed archive
+writes; failed deletions stay queued for another attempt. This is recoverable
+roll-forward, not a single native database transaction.
 
-Tests cover pending/duplicate/dismissal behavior, failures at each local stage,
-storage acknowledgement before file deletion, retry, unexpected errors, offline
-cloud requests, partial file cleanup and unmounted dialogs. Native storage faults,
-actual cloud deletion, TalkBack focus and device layout still need the
-[phone checklist](android-testing.md#book-removal-confirmation-step-17).
+Signed-in account removals use the existing queued synchronization and legacy
+cleanup retries; Guest removal stays local. Other devices may retain downloaded
+files. There is no Undo or promise of immediate deletion on an offline server.
+No Supabase schema change is required.
+
+## Validation
+
+587 regression tests and TypeScript pass, and the Android/Hermes bundle exports.
+Tests exercise actual component handlers for long-press haptics, checked state,
+selection across layouts/filters, hidden selections, cancel/Back, one batch
+submission, pending/duplicate actions, missing haptics and unmounted callbacks.
+Storage tests interrupt each journaled write and final journal clearing, recover
+repeatedly, preserve unrelated books/work, reject stale selections, retain failed
+file cleanup, and retry offline account removals within the original account.
+
+These checks do not establish native focus, TalkBack speech or physical vibration.
+A fresh APK is required for the new `expo-haptics` native module. Follow the
+[phone checklist](android-testing.md#library-multiple-selection-and-removal).

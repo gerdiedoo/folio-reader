@@ -56,24 +56,31 @@ export async function recoverPortableRestore(storage: Storage): Promise<void> {
 
 /** Run with archive hooks unmounted. A saved intent completes before reopening Library. */
 export async function removeBookWithRecovery(storage: Storage, bookId: string): Promise<string> {
+  return (await removeBooksWithRecovery(storage, [bookId]))[0];
+}
+
+/** One durable intent covers the entire selection, including its saved work. */
+export async function removeBooksWithRecovery(storage: Storage, bookIds: readonly string[]): Promise<string[]> {
+  if (!bookIds.length || bookIds.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,200}$/.test(id))) throw Error('Select books from this Library before removing them.');
+  const ids = new Set(bookIds);
   await recoverPortableRestore(storage);
   const [library, notes, words] = await Promise.all([createLibraryStore(storage).load(), createHighlightArchive(storage).load(), createLexiconArchive(storage).load()]);
   const current = await readBackupSnapshot(storage);
-  const book = library.books.find(item => item.id === bookId);
-  if (!book) throw Error('This book is no longer in this reading space.');
+  const selected = library.books.filter(item => ids.has(item.id));
+  if (selected.length !== ids.size) throw Error('A selected book is no longer in this reading space. Check the selection before removing books.');
   const journal: Journal = { version: 1, kind: 'book-removal', values: {
-    libraryArchive: { ...library, books: library.books.filter(item => item.id !== bookId), removedBookIds: [...new Set([...library.removedBookIds, bookId])],
-      pendingFileRemovals: [...library.pendingFileRemovals.filter(item => item.id !== bookId), { id: bookId, coverUrl: book.coverUrl }] },
-    highlightArchive: { ...notes, items: notes.items.filter(item => item.bookId !== bookId), removedBookIds: [...new Set([...notes.removedBookIds, bookId])],
-      removedIds: [...new Set([...notes.removedIds, ...notes.items.filter(item => item.bookId === bookId).map(item => item.id)])] },
-    lexiconArchive: { ...words, items: words.items.filter(item => item.bookId !== bookId), removedBookIds: [...new Set([...words.removedBookIds, bookId])] },
-    bookmarks: current.bookmarks.filter(item => item.bookId !== bookId),
+    libraryArchive: { ...library, books: library.books.filter(item => !ids.has(item.id)), removedBookIds: [...new Set([...library.removedBookIds, ...ids])],
+      pendingFileRemovals: [...library.pendingFileRemovals.filter(item => !ids.has(item.id)), ...selected.map(book => ({ id: book.id, coverUrl: book.coverUrl }))] },
+    highlightArchive: { ...notes, items: notes.items.filter(item => !ids.has(item.bookId)), removedBookIds: [...new Set([...notes.removedBookIds, ...ids])],
+      removedIds: [...new Set([...notes.removedIds, ...notes.items.filter(item => ids.has(item.bookId)).map(item => item.id)])] },
+    lexiconArchive: { ...words, items: words.items.filter(item => !ids.has(item.bookId)), removedBookIds: [...new Set([...words.removedBookIds, ...ids])] },
+    bookmarks: current.bookmarks.filter(item => !ids.has(item.bookId)),
     settingsArchive: { version: 1, settings: current.settings }, goal: current.goal,
   } };
   await validateJournal(journal);
   await storage.saveJSONStrict(KEY, journal);
   await recoverPortableRestore(storage);
-  return book.title;
+  return selected.map(book => book.title);
 }
 
 /** Add independently identified copies; existing books, annotations and deletion markers survive. */

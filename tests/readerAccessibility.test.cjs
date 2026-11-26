@@ -100,6 +100,7 @@ function harness({ runEffects = false, reducedMotion: initialReducedMotion = tru
   const dependencies = {
     react,
     'react-native': native,
+    'expo-haptics': { AndroidHaptics: { Long_Press: 'long-press' }, ImpactFeedbackStyle: { Light: 'light' }, performAndroidHapticsAsync: async () => {}, impactAsync: async () => {} },
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
     '../AppTheme': { useAppTheme: () => palette },
     '../../AppTheme': { useAppTheme: () => palette },
@@ -1884,11 +1885,13 @@ test('an unexpected cover callback error keeps the draft open without claiming a
 });
 
 function libraryHarness(overrides = {}) {
-  const selected = [], opened = [];
-  let pickerCalls = 0;
+  const selected = [], opened = [], removed = [], hapticCalls = [];
+  let pickerCalls = 0, failFeedback = false;
   const h = harness({ runEffects: true, moduleMocks: {
     'expo-document-picker': { getDocumentAsync: async () => { pickerCalls++; return { canceled: true }; } },
     'expo-image-picker': {}, '../lib/epubParser': {},
+    'expo-haptics': { AndroidHaptics: { Long_Press: 'long-press' }, ImpactFeedbackStyle: { Light: 'light' },
+      performAndroidHapticsAsync: async value => { hapticCalls.push(value); if (failFeedback) throw Error('Haptics unavailable'); }, impactAsync: async value => { hapticCalls.push(value); } },
     './BrowseBooksScreen': { BrowseBooksScreen: 'BrowseBooksScreen' },
     './BookCover': { BookCover: 'BookCover', CLOTH: {} },
     './ui/Chip': { Chip: 'Chip' }, './ui/ProgressBar': { ProgressBar: 'ProgressBar' },
@@ -1903,11 +1906,117 @@ function libraryHarness(overrides = {}) {
     onSelectBook: id => selected.push(id), onOpenBook: id => opened.push(id),
     onAddEpubBook: async () => assert.fail('Unexpected import'), onRestoreImportedProgress: async book => book,
     onReimportRecoveryBook: async () => assert.fail('Unexpected recovery'),
-    onUpdateBookCover: async () => ({ saved: true, message: 'Saved' }), onRemoveBook: async () => ({ removed: true, message: 'Removed' }), showToast() {}, ...overrides };
-  return { h, props, selected, opened, CoverEditor, pickerCalls: () => pickerCalls, render: () => h.render(LibraryView, props) };
+    onUpdateBookCover: async () => ({ saved: true, message: 'Saved' }), onRemoveBook: async () => ({ removed: true, message: 'Removed' }),
+    onRemoveBooks: async ids => { removed.push(ids); return { removed: true, message: 'Removed' }; }, showToast() {}, ...overrides };
+  return { h, props, selected, opened, removed, hapticCalls, failFeedback: () => { failFeedback = true; }, CoverEditor, pickerCalls: () => pickerCalls, render: () => h.render(LibraryView, props) };
 }
 const libraryRows = root => elements(root).filter(node => node.props?.accessibilityHint === 'Open book details');
+const selectionRows = root => elements(root).filter(node => node.props?.accessibilityRole === 'checkbox' && node.props.onLongPress);
 const pressLibraryFilter = (root, label) => labelled(root, label).onPress();
+
+test('holding a Library book enters selection with one native haptic, and further taps select without opening details', async () => {
+  const f = libraryHarness(); let root = f.render();
+  libraryRows(root).find(node => node.props.accessibilityLabel.startsWith('Amber by')).props.onLongPress(); root = f.render();
+  assert.deepEqual(f.hapticCalls, ['long-press']); assert.deepEqual(f.selected, []);
+  assert.equal(selectionRows(root).find(node => node.props.accessibilityLabel.startsWith('Amber by')).props.accessibilityState.checked, true);
+  assert.equal(elements(root).some(node => node.type === f.CoverEditor), false);
+  assert.equal(elements(root).some(node => node.props?.accessibilityLabel === 'Customize cover for Amber'), false);
+  selectionRows(root).find(node => node.props.accessibilityLabel.startsWith('Brook by')).props.onPress(); root = f.render();
+  assert.ok(labelled(root, 'Remove 2 selected books'));
+  selectionRows(root).find(node => node.props.accessibilityLabel.startsWith('Cloud by')).props.onLongPress(); root = f.render();
+  assert.ok(labelled(root, 'Remove 3 selected books')); assert.deepEqual(f.hapticCalls, ['long-press']);
+  selectionRows(root).find(node => node.props.accessibilityLabel.startsWith('Amber by')).props.onPress(); root = f.render();
+  assert.equal(selectionRows(root).find(node => node.props.accessibilityLabel.startsWith('Amber by')).props.accessibilityState.checked, false);
+  assert.deepEqual(f.selected, []); assert.deepEqual(f.removed, []);
+  labelled(root, 'Exit book selection').onPress(); root = f.render();
+  assert.equal(libraryRows(root).length, 4);
+  libraryRows(root)[0].props.onPress(); assert.equal(f.selected.length, 1); f.h.unmount();
+});
+
+test('selection survives sorting, two/three columns, list view and search; hidden selections are explicitly counted', async () => {
+  const f = libraryHarness(); let root = f.render();
+  libraryRows(root).find(node => node.props.accessibilityLabel.startsWith('Amber by')).props.onLongPress(); root = f.render();
+  labelled(root, '3-column grid').onPress(); labelled(root, 'Sort Library by Title').onPress(); root = f.render();
+  assert.equal(selectionRows(root)[0].props.accessibilityState.checked, true);
+  labelled(root, 'List view').onPress(); root = f.render();
+  assert.equal(selectionRows(root)[0].props.accessibilityState.checked, true);
+  f.props.searchRequest = 1; f.render(); root = f.render();
+  labelled(root, 'Search Library by title or author').onChangeText('brook'); root = f.render();
+  assert.equal(selectionRows(root).length, 1); assert.ok(labelled(root, 'Remove 1 selected book'));
+  assert.match(elements(root).flatMap(node => node.props?.children).filter(value => typeof value === 'string' || typeof value === 'number').join('').replace(/\s+/g, ' '), /1 selected book is outside this view/);
+  labelled(root, 'Select all shown books').onPress(); root = f.render();
+  assert.ok(labelled(root, 'Remove 2 selected books'));
+  labelled(root, 'Deselect all shown books').onPress(); root = f.render();
+  assert.ok(labelled(root, 'Remove 1 selected book'));
+  assert.equal(f.h.hardwareBack(), true); root = f.render();
+  assert.equal(selectionRows(root).length, 0); assert.equal(f.h.hardwareBack(), false); f.h.unmount();
+});
+
+test('Select shown excludes recovery placeholders and zero selected books cannot open removal', () => {
+  const f = libraryHarness(); let root = f.render(); libraryRows(root)[0].props.onLongPress(); root = f.render();
+  labelled(root, 'Select all shown books').onPress(); root = f.render();
+  assert.ok(labelled(root, 'Remove 4 selected books'));
+  assert.equal(labelled(root, 'Re-import Café from a local EPUB').disabled, true);
+  labelled(root, 'Deselect all shown books').onPress(); root = f.render();
+  const remove = labelled(root, 'Remove 0 selected books'); assert.equal(remove.disabled, true); remove.onPress(); root = f.render();
+  assert.equal(elements(root).some(node => node.props?.titles), false);
+  assert.deepEqual(f.removed, []); f.h.unmount();
+});
+
+test('bulk confirmation is cancellable, names only the selection, and submits one batch rather than separate removals', async () => {
+  const f = libraryHarness(); let root = f.render();
+  libraryRows(root).find(node => node.props.accessibilityLabel.startsWith('Amber by')).props.onLongPress(); root = f.render();
+  selectionRows(root).find(node => node.props.accessibilityLabel.startsWith('Brook by')).props.onPress(); root = f.render();
+  labelled(root, 'Remove 2 selected books').onPress(); root = f.render();
+  let dialog = elements(root).find(node => node.props?.titles);
+  assert.deepEqual(new Set(dialog.props.titles), new Set(['Amber', 'Brook']));
+  dialog.props.onClose(); root = f.render(); assert.deepEqual(f.removed, []);
+  assert.ok(labelled(root, 'Remove 2 selected books'));
+  labelled(root, 'Remove 2 selected books').onPress(); root = f.render();
+  dialog = elements(root).find(node => node.props?.titles);
+  assert.equal((await dialog.props.onRemove()).removed, true); root = f.render();
+  assert.deepEqual(f.removed, [['Amber', 'Brook']]); assert.equal(selectionRows(root).length, 0); f.h.unmount();
+});
+
+test('failed bulk removals retain selection and late results cannot update an unmounted Library', async () => {
+  let complete;
+  const f = libraryHarness({ onRemoveBooks: () => new Promise(resolve => { complete = resolve; }) });
+  let root = f.render(); libraryRows(root)[0].props.onLongPress(); root = f.render();
+  labelled(root, 'Remove 1 selected book').onPress(); root = f.render();
+  let dialog = elements(root).find(node => node.props?.titles);
+  const pending = dialog.props.onRemove(); complete({ removed: false, message: 'Library could not be saved.' });
+  assert.equal((await pending).removed, false); root = f.render();
+  assert.ok(labelled(root, 'Remove 1 selected book')); dialog = elements(root).find(node => node.props?.titles); assert.ok(dialog);
+  const later = dialog.props.onRemove(); f.h.unmount(); const writes = f.h.stateWrites();
+  complete({ removed: true, message: 'Removed' }); await later; assert.equal(f.h.stateWrites(), writes);
+});
+
+test('unavailable haptics do not prevent selection, and accessibility actions can enter selection without holding', async () => {
+  const f = libraryHarness(); f.failFeedback(); let root = f.render();
+  libraryRows(root).find(node => node.props.accessibilityLabel.startsWith('Amber by')).props.onAccessibilityAction({ nativeEvent: { actionName: 'longpress' } }); await flushNative(); root = f.render();
+  assert.ok(labelled(root, 'Remove 1 selected book')); assert.deepEqual(f.selected, []);
+  f.props.books = f.props.books.slice(1); f.render(); root = f.render();
+  assert.ok(labelled(root, 'Remove 0 selected books')); f.h.unmount();
+  for (const libraryStatus of ['loading', 'error']) {
+    const blocked = libraryHarness({ libraryStatus }); let tree = blocked.render(); libraryRows(tree)[0].props.onLongPress(); tree = blocked.render();
+    assert.equal(selectionRows(tree).length, 0); assert.equal(blocked.hapticCalls.length, 0); blocked.h.unmount();
+  }
+});
+
+test('bulk confirmation blocks duplicate deletion and dismissal until acknowledged, and displays all selected titles', async () => {
+  let complete, calls = 0, closed = 0;
+  const h = harness({ runEffects: true }), { BookRemovalDialog } = h.load('../src/components/BookRemovalDialog.tsx');
+  const props = { titles: ['Amber', 'Brook'], onClose: () => { closed++; }, onRemove: () => { calls++; return new Promise(resolve => { complete = resolve; }); } };
+  let root = h.render(BookRemovalDialog, props);
+  const content = elements(root).flatMap(node => node.props?.children).filter(value => typeof value === 'string').join(' ');
+  assert.match(content, /Remove 2 books/); assert.match(content, /Amber/); assert.match(content, /Brook/);
+  const pending = labelled(root, 'Remove 2 books from Library').onPress(); labelled(root, 'Remove 2 books from Library').onPress(); root = h.render(BookRemovalDialog, props);
+  labelled(root, 'Keep these books').onPress(); root.props.onClose(); assert.equal(closed, 0); assert.equal(calls, 1);
+  assert.equal(labelled(root, 'Remove 2 books from Library').disabled, true);
+  complete({ removed: false, message: 'Recovery needed. Saved intent retained.' }); await pending; root = h.render(BookRemovalDialog, props);
+  assert.match(elements(root).find(node => node.props?.accessibilityRole === 'alert').props.children, /Recovery needed/); assert.equal(closed, 0);
+  labelled(root, 'Keep these books').onPress(); assert.equal(closed, 1); h.unmount();
+});
 
 test('Library search filters title/author and recovery rows; clearing results resets query and filter while keeping sort', () => {
   const f = libraryHarness(); let root = f.render();

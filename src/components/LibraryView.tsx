@@ -1,5 +1,6 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
+import * as Haptics from 'expo-haptics';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BackHandler,
@@ -59,6 +60,7 @@ interface LibraryViewProps {
   ) => Promise<void>;
   onUpdateBookCover: (bookId: string, draft: BookCoverDraft) => Promise<CoverSaveResult>;
   onRemoveBook: (bookId: string) => Promise<BookRemovalResult>;
+  onRemoveBooks: (bookIds: readonly string[]) => Promise<BookRemovalResult>;
   showToast: (msg: string) => void;
   bottomInset: number;
 }
@@ -113,6 +115,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onReimportRecoveryBook,
   onUpdateBookCover,
   onRemoveBook,
+  onRemoveBooks,
   showToast,
   bottomInset,
 }) => {
@@ -151,6 +154,33 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [browseOpen, setBrowseOpen] = useState(false);
   const [editing, setEditing] = useState<Book | null>(null);
   const [removingBook, setRemovingBook] = useState<Book | null>(null);
+  const [selection, setSelection] = useState<string[] | null>(null);
+  const [removingSelection, setRemovingSelection] = useState<Book[] | null>(null);
+  const selecting = selection !== null;
+  const selectedIds = new Set(selection ?? []);
+  const selectedBooks = books.filter(book => selectedIds.has(book.id));
+  const toggleSelection = (id: string) => setSelection(current => current?.includes(id) ? current.filter(value => value !== id) : [...(current ?? []), id]);
+  const selectBook = (id: string) => {
+    if (libraryStatus !== 'ready') return;
+    searchInput.current?.blur();
+    if (!selecting) {
+      // Native haptics respect Android's system feedback setting. Selection still
+      // works on devices that have no haptic engine or have feedback disabled.
+      const feedback = Platform.OS === 'android'
+        ? Haptics.performAndroidHapticsAsync(Haptics.AndroidHaptics.Long_Press)
+        : Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      void feedback.catch(() => undefined);
+    }
+    toggleSelection(id);
+  };
+  useEffect(() => {
+    setSelection(current => {
+      if (current === null) return current;
+      const remaining = current.filter(id => books.some(book => book.id === id));
+      return remaining.length === current.length ? current : remaining;
+    });
+  }, [books]);
+  useEffect(() => { if (libraryStatus !== 'ready') setSelection(null); }, [libraryStatus]);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const libraryMounted = useRef(true);
   useEffect(() => { libraryMounted.current = true; return () => { libraryMounted.current = false; }; }, []);
@@ -160,7 +190,21 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     if (result.removed && libraryMounted.current) { setRemovingBook(null); onSelectBook(null); }
     return result;
   }} /> : null;
+  const selectionDialog = removingSelection ? <BookRemovalDialog titles={removingSelection.map(book => book.title)} onClose={() => setRemovingSelection(null)} onRemove={async () => {
+    const result = await onRemoveBooks(removingSelection.map(book => book.id));
+    if (result.removed && libraryMounted.current) { setRemovingSelection(null); setSelection(null); }
+    return result;
+  }} /> : null;
   const selectedBook = books.find((book) => book.id === selectedBookId) ?? null;
+
+  useEffect(() => {
+    if (!selecting) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      setSelection(null);
+      return true;
+    });
+    return () => subscription.remove();
+  }, [selecting]);
 
   useEffect(() => {
     if (!selectedBook) return;
@@ -177,6 +221,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const results = useMemo(() => browseLibrary(books, recoveryBooks, query, filter, sort, available), [books, recoveryBooks, query, filter, sort, available]);
   const visible = results.books;
   const visibleRecoveryBooks = results.recovery;
+  const allShownSelected = visible.length > 0 && visible.every(book => selectedIds.has(book.id));
+  const hiddenSelectedCount = selectedBooks.filter(book => !visible.some(shown => shown.id === book.id)).length;
   const filtered = Boolean(query.trim()) || filter !== 'all';
   const resetFilters = () => { setQuery(''); setFilter('all'); };
   const textStatus = (id: string) => libraryStatus === 'loading' ? 'Checking saved text.' : libraryStatus === 'error' ? 'Saved text could not be checked.' : available.has(id) ? 'Text saved on this device.' : 'EPUB needed on this device.';
@@ -400,12 +446,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const renderBook = (b: Book) => (
             <View key={b.id} style={viewMode === 'grid' ? { width: cardWidth } : { width: '100%' }}>
               <Pressable
-                onPress={() => onSelectBook(b.id)}
-                onLongPress={() => { if (libraryStatus === 'ready') setEditing(b); }}
+                onPress={() => selecting ? toggleSelection(b.id) : onSelectBook(b.id)}
+                onLongPress={() => selectBook(b.id)}
                 delayLongPress={400}
-                accessibilityRole="button"
+                accessibilityRole={selecting ? 'checkbox' : 'button'}
+                accessibilityState={selecting ? { checked: selectedIds.has(b.id) } : undefined}
                 accessibilityLabel={`${b.title} by ${b.author}. ${libraryBookStatus(b)}. ${textStatus(b.id)}`}
-                accessibilityHint="Open book details"
+                accessibilityHint={selecting ? 'Select or deselect this book' : 'Open book details'}
+                accessibilityActions={[{ name: 'longpress', label: selecting ? 'Toggle book selection' : 'Select book' }]}
+                onAccessibilityAction={event => { if (event.nativeEvent.actionName === 'longpress') selectBook(b.id); }}
                 style={viewMode === 'grid' ? undefined : [styles.libraryListCard, { paddingRight: 60 }]}
               >
                 <BookCover
@@ -428,6 +477,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       : undefined
                   }
                 />
+                {selecting && <View pointerEvents="none" accessible={false} importantForAccessibility="no-hide-descendants" style={[styles.selectionMark, selectedIds.has(b.id) && styles.selectionMarkChecked]}>
+                  {selectedIds.has(b.id) && <Icon name="check" size={18} color={colors.white} />}
+                </View>}
                 <View style={viewMode === 'list' ? styles.libraryListCopy : undefined}>
                   <Text style={[viewMode === 'grid' ? styles.shelfTitle : styles.cardTitle, viewMode === 'grid' && columns === 3 && shelfStyles.denseTitle]} numberOfLines={2} ellipsizeMode="tail">{b.title}</Text>
                   <Text style={[viewMode === 'grid' ? styles.shelfAuthor : styles.cardAuthor, viewMode === 'grid' && columns === 3 && shelfStyles.denseAuthor]} numberOfLines={viewMode === 'grid' ? 2 : 1} ellipsizeMode="tail">{b.author}</Text>
@@ -439,7 +491,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   {libraryStatus === 'ready' && !available.has(b.id) && <Text style={styles.listBookProgress}>EPUB needed on this device</Text>}
                 </View>
               </Pressable>
-              <View pointerEvents="box-none" style={viewMode === 'grid' ? styles.coverActions : StyleSheet.absoluteFill}>
+              {!selecting && <View pointerEvents="box-none" style={viewMode === 'grid' ? styles.coverActions : StyleSheet.absoluteFill}>
                 <Pressable onPress={() => { if (libraryStatus === 'ready') setEditing(b); }} disabled={libraryStatus !== 'ready'}
                   accessibilityRole="button" accessibilityLabel={`Customize cover for ${b.title}`} accessibilityState={{ disabled: libraryStatus !== 'ready' }}
                   style={viewMode === 'grid' ? styles.shelfEditTarget : styles.editBookAction}>
@@ -447,7 +499,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     <Icon name="palette" size={20} color={viewMode === 'grid' ? '#605e5a' : colors.primary} />
                   </View>
                 </Pressable>
-              </View>
+              </View>}
             </View>
   );
   const renderRecovery = (recovery: LibraryRecoveryBook) => {
@@ -456,13 +508,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               <Pressable
                 key={`recovery-${recovery.id}`}
                 onPress={() => void handleReimportRecovery(recovery)}
-                disabled={!canImport}
+                disabled={!canImport || selecting}
                 style={[
                   viewMode === 'grid' ? { width: cardWidth } : styles.libraryListCard,
                   { opacity: reimportingId && !isReimporting ? 0.55 : 1 },
                 ]}
                 accessibilityRole="button"
-                accessibilityState={{ disabled: !canImport, busy: isReimporting }}
+                accessibilityState={{ disabled: !canImport || selecting, busy: isReimporting }}
                 accessibilityLabel={`Re-import ${recovery.title} from a local EPUB`}
               >
                 <View style={viewMode === 'list' ? styles.libraryListCover : undefined}>
@@ -528,6 +580,21 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   for (let index = 0; index < entries.length; index += rowSize) rows.push(entries.slice(index, index + rowSize));
   return <>
     <View style={{ flex: 1 }}>
+    {selecting && <View style={styles.selectionDock}>
+      <View style={styles.selectionBar}>
+        <Pressable onPress={() => setSelection(null)} accessibilityRole="button" accessibilityLabel="Exit book selection" style={styles.smallAction}><Icon name="close" size={22} color={colors.onSurface} /></Pressable>
+        <Text accessibilityLiveRegion="polite" style={styles.selectionCount}>{selectedBooks.length} selected</Text>
+        <Pressable onPress={() => setSelection(current => allShownSelected ? (current ?? []).filter(id => !visible.some(book => book.id === id)) : [...new Set([...(current ?? []), ...visible.map(book => book.id)])])}
+          disabled={!visible.length} accessibilityRole="button" accessibilityLabel={allShownSelected ? 'Deselect all shown books' : 'Select all shown books'} accessibilityState={{ disabled: !visible.length }} style={styles.selectionAction}>
+          <Text style={styles.selectionActionText}>{allShownSelected ? 'Deselect shown' : 'Select shown'}</Text>
+        </Pressable>
+        <Pressable onPress={() => { if (selectedBooks.length) setRemovingSelection(selectedBooks); }} disabled={!selectedBooks.length}
+          accessibilityRole="button" accessibilityLabel={`Remove ${selectedBooks.length} selected ${selectedBooks.length === 1 ? 'book' : 'books'}`} accessibilityState={{ disabled: !selectedBooks.length }} style={[styles.selectionAction, !selectedBooks.length && { opacity: 0.4 }]}>
+          <Icon name="delete_outline" size={20} color={colors.danger} /><Text style={styles.selectionRemoveText}>Remove</Text>
+        </Pressable>
+      </View>
+      {hiddenSelectedCount > 0 && <Text accessibilityLiveRegion="polite" style={styles.selectionHint}>{hiddenSelectedCount} selected {hiddenSelectedCount === 1 ? 'book is' : 'books are'} outside this view.</Text>}
+    </View>}
     {searching && <View style={styles.searchDock}>
       <View style={styles.librarySearch}>
         <Icon name="search" size={20} color={colors.muted} />
@@ -559,7 +626,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </Text>
         </View>
       )}
-      {!searching && <><View testID="library-reading-summary" style={[styles.goalCard, summaryStacked && styles.goalCardStacked]}>
+      {!searching && !selecting && <><View testID="library-reading-summary" style={[styles.goalCard, summaryStacked && styles.goalCardStacked]}>
         <View style={[styles.readingToday, summaryStacked && styles.readingTodayStacked]}>
           <View style={styles.readingTimeIcon}><Icon name="schedule" size={20} color={colors.primary} /></View>
           <View style={{ flex: 1 }}><Text accessibilityRole="header" style={styles.goalTitle}>Today’s reading</Text><Text style={styles.goalSub}>{readingTimeLabel} read today</Text></View>
@@ -632,7 +699,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
       {/* Saved passages sit beside collection filters, without a separate shortcut row. */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-        <Pressable onPress={onOpenBookmarks} disabled={!onOpenBookmarks} accessibilityRole="button" accessibilityLabel={`Library bookmarks, ${bookmarkCount} saved`} accessibilityHint="Open saved bookmarks across your library" accessibilityState={{ disabled: !onOpenBookmarks }} style={styles.bookmarkTarget}>
+        <Pressable onPress={onOpenBookmarks} disabled={!onOpenBookmarks || selecting} accessibilityRole="button" accessibilityLabel={`Library bookmarks, ${bookmarkCount} saved`} accessibilityHint="Open saved bookmarks across your library" accessibilityState={{ disabled: !onOpenBookmarks || selecting }} style={styles.bookmarkTarget}>
           <View pointerEvents="none" style={styles.bookmarkFace}><Icon name="bookmark" size={15} color={colors.primary} /><Text style={styles.bookmarkText}>Bookmarks</Text><Text style={styles.bookmarkCountText}>{bookmarkCount}</Text></View>
         </Pressable>
         {FILTERS.map(f => renderShelfChip(colors, f.label, filter === f.id, () => setFilter(f.id)))}
@@ -692,6 +759,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       )}
 
       {removalDialog}
+      {selectionDialog}
       {editing && (
         <CoverEditor
           book={editing}
@@ -872,6 +940,15 @@ const createStyles = (colors: AppPalette) => StyleSheet.create({
   statusCard: { padding: 16, borderRadius: 12, backgroundColor: colors.surfaceContainer },
   statusText: { ...type.bodyMd, color: colors.onSurface },
   searchDock: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingBottom: 8 },
+  selectionDock: { paddingHorizontal: 12, paddingBottom: 8, backgroundColor: colors.surfaceLow },
+  selectionBar: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4 },
+  selectionCount: { ...type.labelMd, color: colors.onSurface, flexGrow: 1 },
+  selectionAction: { minHeight: 48, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  selectionActionText: { ...type.labelSm, color: colors.primary },
+  selectionRemoveText: { ...type.labelSm, color: colors.danger },
+  selectionHint: { ...type.bodySm, color: colors.muted, paddingHorizontal: 8, paddingBottom: 4 },
+  selectionMark: { position: 'absolute', top: 8, left: 8, width: 28, height: 28, borderRadius: 7, borderWidth: 2, borderColor: colors.onSurfaceVariant, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
+  selectionMarkChecked: { borderColor: colors.primary, backgroundColor: colors.primary },
   librarySearch: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceContainer, borderRadius: 12, paddingLeft: 12 },
   librarySearchInput: { ...type.bodyMd, flex: 1, color: colors.onSurface, minHeight: 48, paddingVertical: 8 },
   smallAction: { minWidth: 48, minHeight: 48, justifyContent: 'center', alignItems: 'center' },
