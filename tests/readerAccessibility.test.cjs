@@ -2031,16 +2031,17 @@ test('Library and Notebook filter chips expose a named button and its selected s
   assert.equal(presses, 2);
 });
 
-function catalogHarness({ search, download, parse, save, remember, details } = {}) {
+function catalogHarness({ search, download, parse, save, remember, details, added = {} } = {}) {
   const calls = { searches: [], downloads: [], details: [], opened: [], saved: [], deleted: [], closed: 0, toasts: [] };
   const h = harness({ runEffects: true, moduleMocks: {
+    '../lib/googleBooksKeyNative': { googleBooksKeyStore: () => ({ load: async () => null, save: async key => key, remove: async () => {} }) },
     '../lib/catalog': {
-      CATALOG_SOURCES: [{ id: 'gutenberg', label: 'Project Gutenberg' }, { id: 'standard', label: 'Standard Ebooks' }, { id: 'archive', label: 'Internet Archive' }],
+      CATALOG_SOURCES: [{ id: 'gutenberg', label: 'Project Gutenberg' }, { id: 'standard', label: 'Standard Ebooks' }, { id: 'archive', label: 'Internet Archive' }, { id: 'google', label: 'Google Books' }],
       TOPICS: [{ id: 'popular', label: 'Popular', topic: '' }],
       searchCatalog: (opts, signal) => { calls.searches.push({ opts, signal }); return search ? search(opts, signal) : Promise.resolve({ books: [item], total: 1, hasMore: false }); },
       loadCatalogBookDetails: (book, signal) => { calls.details.push({ book, signal }); return details ? details(book, signal) : Promise.resolve({ ...book, description: '<p>A classic.</p>', languages: ['en'] }); },
       downloadEpub: async (...args) => { calls.downloads.push(args); return download ? download(...args) : 'file:///cache/book.epub'; },
-      deleteDownloaded: uri => calls.deleted.push(uri), loadAdded: async () => ({}),
+      deleteDownloaded: uri => calls.deleted.push(uri), loadAdded: async () => added,
       rememberAdded: remember ?? (async current => current),
     },
     '../lib/epubParser': { parseEpubFile: parse ?? (async () => ({ book: { id: 'epub-new', title: 'A Book', coverUrl: 'file:///embedded/cover.jpg' }, pages: [{ pageNumber: 1 }] })) },
@@ -2048,7 +2049,7 @@ function catalogHarness({ search, download, parse, save, remember, details } = {
   } });
   const item = { id: 'gutenberg-1', title: 'A Book', author: 'An Author', source: 'gutenberg', coverUrl: 'https://www.gutenberg.org/cover.jpg', downloads: 10, subjects: [] };
   const { BrowseBooksScreen, BookRow } = h.load('../src/components/BrowseBooksScreen.tsx');
-  const props = { storage: { removeBookFiles: id => calls.deleted.push(id) }, books: [], availableBookIds: [], viewMode: 'grid', gridColumns: 2,
+  const props = { storage: { storageKey: key => `test:${key}`, removeBookFiles: id => calls.deleted.push(id) }, books: [], availableBookIds: [], viewMode: 'grid', gridColumns: 2,
     onViewModeChange: mode => { props.viewMode = mode; }, onGridColumnsChange: count => { props.gridColumns = count; },
     onAddEpubBook: async (book, pages) => { calls.saved.push({ book, pages }); if (save) await save(book, pages); props.books = [...props.books, book]; props.availableBookIds = [...props.availableBookIds, book.id]; },
     onOpenBook: id => calls.opened.push(id), onClose: () => calls.closed++, showToast: message => calls.toasts.push(message) };
@@ -2197,7 +2198,8 @@ test('free-book rows expose a named retry with persistent error and truthful bus
   const retry = labelled(root, 'Retry downloading A Book'); assert.equal(retry.accessibilityRole, 'button'); retry.onPress(); assert.equal(f.calls.downloads.length, 1);
   assert.ok(elements(root).some(node => node.props?.accessibilityRole === 'alert' && node.props.children === 'Source unavailable'));
   root = f.h.render(f.BookRow.type, { ...props, error: undefined, status: 'downloading' });
-  assert.deepEqual(labelled(root, 'Add A Book to library').accessibilityState, { disabled: true, busy: true });
+  assert.deepEqual(labelled(root, 'Downloading A Book').accessibilityState, { busy: true });
+  assert.equal(labelled(root, 'Downloading A Book').accessibilityRole, 'progressbar');
 });
 
 test('image covers show bundled illustrations when missing or failed; explicit cloth styling remains available', () => {
@@ -2741,4 +2743,103 @@ test('book-list restore distinguishes recovered books from unavailable reading p
  assert.match(renderedText(root), /account backup was kept unchanged/);
  assert.match(f.messages.at(-1), /2 saved passages were unavailable/);
  f.h.unmount();
+});
+
+test('free-book grid and list cards open details without Get or Read buttons and expose library membership', () => {
+ const f = catalogHarness();
+ for (const viewMode of ['grid', 'list']) for (const inLibrary of [false, true]) {
+  let details = 0;
+  const row = f.h.render(f.BookRow.type, { item: f.item, status: inLibrary ? 'added' : 'get', inLibrary, disabled: false, progressPercent: null, viewMode, cardWidth: 160, onDetails: () => details++, onGet: () => assert.fail('Details should own the download action') });
+  assert.equal(elements(row).find(node => node.type === 'BookCover').props.inLibrary, inLibrary);
+  assert.equal(elements(row).some(node => /^(Add |Read )/.test(node.props?.accessibilityLabel ?? '')), false);
+  const cover = labelled(row, 'View details for A Book by An Author');
+  assert.equal(cover.accessibilityHint, inLibrary ? 'Already in your library' : 'View book details and download options');
+  cover.onPress(); labelled(row, 'About A Book').onPress(); assert.equal(details, 2);
+ }
+ f.h.unmount();
+});
+
+test('catalog membership covers saved mappings and imported works without pretending unavailable EPUBs are readable', async () => {
+ const f = catalogHarness({ added: { 'gutenberg-1': 'owned' } });
+ f.props.books = [{ id: 'owned', title: 'A Book', author: 'An Author' }];
+ f.render(); await flushNative(); let root = f.render();
+ assert.equal(freeBookRow(f, root).inLibrary, true); assert.equal(freeBookRow(f, root).status, 'get');
+ f.props.availableBookIds = ['owned']; root = f.render();
+ assert.equal(freeBookRow(f, root).inLibrary, true); assert.equal(freeBookRow(f, root).status, 'added');
+ f.props.books = []; root = f.render(); assert.equal(freeBookRow(f, root).inLibrary, false);
+ f.props.books = [{ id: 'imported', title: 'A BOOK!', author: 'An Author' }]; root = f.render();
+ assert.equal(freeBookRow(f, root).inLibrary, true);
+ f.props.books = [{ id: 'another-work', title: 'A Book', author: 'Another Author' }]; root = f.render();
+ assert.equal(freeBookRow(f, root).inLibrary, false); f.h.unmount();
+});
+
+test('library membership only appears after a confirmed catalog import', async () => {
+ let finish;
+ const f = catalogHarness({ save: () => new Promise(done => { finish = done; }) });
+ f.render(); await flushNative(); let root = f.render();
+ freeBookRow(f, root).onGet(f.item); await flushNative(); fireNativeTimer(f.h, 60); await flushNative(); root = f.render();
+ assert.equal(freeBookRow(f, root).inLibrary, false);
+ finish(); await flushNative(); root = f.render(); assert.equal(freeBookRow(f, root).inLibrary, true);
+ f.h.unmount();
+});
+
+test('cover membership badge has a readable label and coexists with reading progress and fallback art', () => {
+ const h = harness({ runEffects: true, moduleMocks: { 'expo-linear-gradient': { LinearGradient: 'LinearGradient' } } });
+ const { BookCover } = h.load('../src/components/BookCover.tsx');
+ const props = { book: { title: 'A Book', author: 'An Author', coverUrl: '', coverAlt: 'A book cover' }, style: 'image', variant: 'library', inLibrary: true, badge: { kind: 'percent', value: 32 } };
+ let root = h.render(BookCover, props);
+ assert.ok(labelled(root, 'In your library')); assert.match(renderedText(root), /32/);
+ assert.ok(elements(root).some(node => node.type === 'CoverIllustration'));
+ root = h.render(BookCover, { ...props, inLibrary: false });
+ assert.equal(elements(root).some(node => node.props?.accessibilityLabel === 'In your library'), false); h.unmount();
+});
+
+test('Google Books opens key setup instead of sending unauthenticated searches; replace/remove cancel old access', async () => {
+ const f = catalogHarness(); f.render(); await flushNative(); let root = f.render();
+ labelled(root, 'Google Books').onPress(); root = f.render();
+ assert.ok(labelled(elements(root).find(node => node.type === 'FlatList').props.ListEmptyComponent, 'Set up Google Books'));
+ assert.equal(f.calls.searches.filter(call => call.opts.source === 'google').length, 0);
+ labelled(root, 'Google Books setup').onPress(); root = f.render();
+ const setup = elements(root).find(node => node.type?.name === 'GoogleBooksSetup').props;
+ setup.onSaved('reader-key-01234567890123456789'); setup.onClose(); f.render(); await flushNative(); root = f.render();
+ const request = f.calls.searches.find(call => call.opts.source === 'google');
+ assert.equal(request.opts.googleBooksKey, 'reader-key-01234567890123456789');
+ labelled(root, 'Google Books setup').onPress(); root = f.render();
+ const remove = elements(root).find(node => node.type?.name === 'GoogleBooksSetup').props;
+ remove.onSaved(null); remove.onClose(); root = f.render();
+ assert.equal(request.signal.aborted, true);
+ assert.ok(labelled(elements(root).find(node => node.type === 'FlatList').props.ListEmptyComponent, 'Set up Google Books')); f.h.unmount();
+});
+
+function googleSetupHarness(overrides={}) {
+ const h=harness({runEffects:true});const {GoogleBooksSetup}=h.load('../src/components/GoogleBooksSetup.tsx');const events=[];
+ const props={store:{save:async key=>key,remove:async()=>{}},hasKey:false,loading:false,loadError:false,onRetry:()=>events.push('retry'),onSaved:key=>events.push(key),onClose:()=>events.push('close'),...overrides};
+ return{h,props,events,render:()=>h.render(GoogleBooksSetup,props)};
+}
+test('Google key entry is masked, validates drafts and blocks repeated writes/dismissal until confirmed',async()=>{
+ let finish,calls=0;const f=googleSetupHarness({store:{save:key=>{calls++;return new Promise(done=>{finish=()=>done(key);});},remove:async()=>{}}});let root=f.render();
+ assert.equal(labelled(root,'Google Books API key').secureTextEntry,true);assert.equal(labelled(root,'Save Google Books key').disabled,true);
+ labelled(root,'Google Books API key').onChangeText('reader-key-01234567890123456789');root=f.render();
+ const pending=labelled(root,'Save Google Books key').onPress();labelled(root,'Save Google Books key').onPress();labelled(root,'Close Google Books setup').onPress();
+ assert.equal(calls,1);assert.deepEqual(f.events,[]);finish();await pending;
+ assert.deepEqual(f.events,['reader-key-01234567890123456789','close']);f.h.unmount();
+});
+test('Google key failures retain the draft and late success cannot update another reading space',async()=>{
+ const f=googleSetupHarness({store:{save:async()=>{throw Error('Native acknowledgement failed');},remove:async()=>{}}});let root=f.render();
+ labelled(root,'Google Books API key').onChangeText('reader-key-01234567890123456789');root=f.render();await labelled(root,'Save Google Books key').onPress();root=f.render();
+ assert.equal(labelled(root,'Google Books API key').value,'reader-key-01234567890123456789');assert.ok(elements(root).some(node=>node.props?.accessibilityRole==='alert'));assert.deepEqual(f.events,[]);f.h.unmount();
+ let done;const other=googleSetupHarness({hasKey:true,store:{save:async key=>key,remove:()=>new Promise(resolve=>{done=resolve;})}});root=other.render();
+ const pending=labelled(root,'Remove Google Books key').onPress();other.h.unmount();done();await pending;assert.deepEqual(other.events,[]);
+});
+test('an unreadable key cannot be replaced or removed until secure storage is checked again',async()=>{
+ const f=googleSetupHarness({hasKey:true,loadError:true});let root=f.render();
+ assert.equal(labelled(root,'Google Books API key').editable,false);assert.equal(labelled(root,'Remove Google Books key').disabled,true);
+ await labelled(root,'Remove Google Books key').onPress();assert.deepEqual(f.events,[]);
+ labelled(root,'Retry loading Google Books key').onPress();assert.deepEqual(f.events,['retry']);f.h.unmount();
+});
+
+test('informational source notices do not pretend a healthy catalog needs recovery',async()=>{
+ const f=catalogHarness({search:async()=>({books:[],hasMore:true,total:null,notice:'Only confirmed EPUBs are shown.',noticeKind:'info'})});f.render();await flushNative();const root=f.render();
+ const list=freeBookList(root);assert.equal(elements(list.ListHeaderComponent).some(node=>node.props?.accessibilityLabel==='Retry live catalog'),false);
+ assert.match(renderedText(list.ListEmptyComponent),/No eligible EPUBs on this page/);assert.equal(list.onEndReached,undefined);f.h.unmount();
 });

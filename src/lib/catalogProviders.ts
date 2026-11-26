@@ -5,6 +5,12 @@ export const CATALOG_SOURCES: { id: CatalogSource; label: string; description: s
   { id: 'gutenberg', label: 'Project Gutenberg', description: 'Public-domain classics · English EPUBs' },
   { id: 'standard', label: 'Standard Ebooks', description: 'Carefully edited classics with illustrated covers' },
   { id: 'archive', label: 'Internet Archive', description: 'Unrestricted EPUBs from editions dated before 1931' },
+  { id: 'openlibrary', label: 'Open Library', description: 'Public-access books · EPUBs checked with Internet Archive' },
+  { id: 'google', label: 'Google Books', description: 'Free, fully viewable EPUBs · use your own API key' },
+  { id: 'oapen', label: 'OAPEN', description: 'Open-access academic books · EPUB editions only' },
+  { id: 'doab', label: 'DOAB', description: 'Open-access directory · EPUBs hosted by OAPEN' },
+  { id: 'wikisource', label: 'Wikisource', description: 'English transcribed works · EPUB generated on request' },
+  { id: 'feedbooks', label: 'Feedbooks', description: 'Legacy public-domain OPDS catalog · availability varies' },
 ];
 export const record = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const text = (value: unknown) => typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';

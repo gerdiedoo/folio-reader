@@ -27,7 +27,8 @@
         {
           "photosPermission": "Folio needs access to your photos so you can choose custom book covers."
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "extra": {
       "eas": {

@@ -133,6 +133,36 @@ def check_free_books_controls():
     screenshot('02c-free-books-layout')
     tap('2-column grid');tap('Back to library')
 
+def tap_google_books_source():
+    size=adb('shell','wm','size').decode()
+    width,height=map(int,re.findall(r'(\d+)x(\d+)',size)[-1])
+    first=find('Project Gutenberg')
+    box=list(map(int,re.findall(r'\d+',first.get('bounds',''))));y=(box[1]+box[3])//2
+    for _ in range(5):
+        try:
+            target=find('Google Books',timeout=2)
+            bounds=list(map(int,re.findall(r'\d+',target.get('bounds',''))))
+            if len(bounds)==4 and bounds[2]-bounds[0]>30 and 0<(bounds[0]+bounds[2])//2<width:
+                tap_node(target);return
+        except AssertionError:pass
+        adb('shell','input','swipe',str(int(width*.85)),str(y),str(int(width*.15)),str(y),'350');time.sleep(.4)
+    raise AssertionError('Google Books source chip was not reachable')
+
+def check_google_books_key():
+    # This is a synthetic, nonfunctional key. The test does not authenticate
+    # with Google or claim successful provider search/download behavior.
+    tap('Browse free books');tap_google_books_source();tap('Google Books setup')
+    field='Google Books API key';tap(field);focused_field(field)
+    adb('shell','input','text','folio-test-key-01234567890123456789')
+    adb('shell','input','keyevent','KEYCODE_BACK');tap('Save Google Books key')
+    find('Google Books key saved',contains=True);tap('Back to library')
+    adb('shell','am','force-stop',PACKAGE);launch();find('Folio Library')
+    tap('Browse free books');tap_google_books_source();tap('Google Books setup')
+    find('A key is saved on this device.',contains=True)
+    screenshot('02d-google-books-key-after-restart')
+    tap('Remove Google Books key');find('Connect Google Books')
+    screenshot('02e-google-books-key-removed');tap('Back to library')
+
 def run():
     ensure_emulator_root()
     launch();find('Folio Library',timeout=60)
@@ -162,6 +192,7 @@ def run():
     find('Folio device journey by Folio test fixture.',contains=True,timeout=45)
     check_library_search()
     check_free_books_controls()
+    check_google_books_key()
     book_point=reveal_library_book('Folio device journey by Folio test fixture.')
     screenshot('02-imported-library')
     adb('shell','input','tap',*map(str,book_point));time.sleep(.4)
@@ -193,7 +224,7 @@ def run():
     find('Open book details for Folio device journey by Folio test fixture')
     screenshot('09-archive-search-results')
     tap('Open book details for Folio device journey by Folio test fixture');find('Read Folio device journey')
-    (OUT/'result.json').write_text(json.dumps({'passed':True,'checks':['combined Library reading summary and large-text capture','Library bookmark chip opens saved passages','native import','Library title/author search and typing focus','Library missing-result recovery','two/three-column grid with search retained','free-books search and column controls','rich reader render','bookmark persistence control','scroll close/reopen position','process restart position','reflection creation and restart','large text rendering capture','global archive book results and navigation'],'talkback':'requires phone testing','book':before['id']},indent=2))
+    (OUT/'result.json').write_text(json.dumps({'passed':True,'checks':['combined Library reading summary and large-text capture','Library bookmark chip opens saved passages','native import','Library title/author search and typing focus','Library missing-result recovery','two/three-column grid with search retained','free-books search and column controls','encrypted synthetic Google Books key save, process restart and removal','rich reader render','bookmark persistence control','scroll close/reopen position','process restart position','reflection creation and restart','large text rendering capture','global archive book results and navigation'],'talkback':'requires phone testing','book':before['id']},indent=2))
 try:run()
 except Exception as error:
     try:
