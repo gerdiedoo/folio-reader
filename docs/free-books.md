@@ -181,3 +181,21 @@ The synthetic key is deliberately nonfunctional. This establishes native key
 storage and UI execution, not live Google authorization or provider downloads.
 Download `folio-dev-apk` from that run to try the sources with a real connection
 and your own Google key; the evidence artifact contains the synthetic journey.
+
+### Main APK keyboard-input verification
+
+The first main verification at application source `6eb1bc3` stopped when ADB's
+initial Library query did not arrive, even though the native editor reported
+focus. The emulator now enables the on-screen keyboard and requires two stable
+observations of both the focused Folio editor and Android's visible input service
+serving that package before injecting text. The original continuous-typing,
+missing-result, filter and density assertions remain unchanged; failed text is
+not silently retried.
+
+For this automation-only correction, both workflows can reuse their known signed
+APK only when the complete application inputs and the corresponding compiler
+steps/environment match. Main additionally compares its production build/config
+helper scripts. Its package and signature are verified again. Changed/unknown
+inputs or an unavailable artifact fall back to compilation. Manual main builds
+always compile afresh to pick up current production environment values. Workflow
+summaries identify application-source and verification-source commits separately.

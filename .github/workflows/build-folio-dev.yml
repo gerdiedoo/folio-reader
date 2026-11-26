@@ -73,7 +73,7 @@ jobs:
       - name: Check whether application inputs match the compiled APK
         id: matching-apk
         run: |
-          baseline=078c834f08608d3df3e89ed907a22b4be1dbbb5a
+          baseline=2a06f35f410708abdd73af862aaad9442e4c22f8
           if git fetch --no-tags --depth=1 origin "$baseline"; then
             if [ "$(node scripts/compare-apk-inputs.cjs "$baseline")" = true ]; then echo 'eligible=true' >> "$GITHUB_OUTPUT"; fi
           fi
@@ -84,7 +84,7 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7, Node 24
         with:
           name: folio-dev-apk
-          run-id: 45029834863
+          run-id: 45745025781
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}
       - name: Check Expo token is configured

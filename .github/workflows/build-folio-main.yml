@@ -14,6 +14,7 @@ on:
       - plugins/**
       - scripts/build-main-apk.cjs
       - scripts/read-main-client-settings.cjs
+      - scripts/compare-apk-inputs.cjs
       - scripts/report-eas-build-error.cjs
       - scripts/device-checks/**
       - assets/**
@@ -51,7 +52,28 @@ jobs:
         run: npm test
       - name: Check TypeScript
         run: npm run typecheck
+      # Reuse an APK only for unchanged application inputs and compiler settings.
+      # Manual builds always compile afresh, including current production values.
+      - name: Check whether main application inputs match the signed APK
+        id: matching-apk
+        if: github.event_name == 'push'
+        run: |
+          baseline=6eb1bc3da8cda7f7efeb0796bb54cbcb80d59ae0
+          if git fetch --no-tags --depth=1 origin "$baseline"; then
+            if [ "$(node scripts/compare-apk-inputs.cjs "$baseline" main)" = true ]; then echo 'eligible=true' >> "$GITHUB_OUTPUT"; fi
+          fi
+      - name: Reuse the matching signed main APK when still available
+        id: reused-apk
+        if: steps.matching-apk.outputs.eligible == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7, Node 24
+        with:
+          name: folio-main-apk
+          run-id: 45752097217
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}
       - name: Check Expo authentication is configured
+        if: steps.reused-apk.outcome != 'success'
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
@@ -60,6 +82,7 @@ jobs:
             exit 1
           fi
       - name: Set up authenticated EAS CLI
+        if: steps.reused-apk.outcome != 'success'
         uses: expo/expo-github-action@5273c2136bd09c2a341fe3340d3e767ce5a13015 # v9.0.2
         with:
           eas-version: 24.13.0
@@ -72,6 +95,7 @@ jobs:
           distribution: temurin
           java-version: '17'
       - name: Build signed main APK with the Expo production environment
+        if: steps.reused-apk.outcome != 'success'
         env:
           GRADLE_OPTS: -Dorg.gradle.workers.max=2
           CMAKE_BUILD_PARALLEL_LEVEL: '2'
@@ -109,6 +133,7 @@ jobs:
       - name: Show main APK download
         env:
           APK_ARTIFACT_URL: ${{ steps.apk.outputs.artifact-url }}
+          APK_SOURCE_SHA: ${{ steps.reused-apk.outcome == 'success' && '6eb1bc3da8cda7f7efeb0796bb54cbcb80d59ae0' || github.sha }}
         run: |
           node <<'JS'
           const fs = require('node:fs');
@@ -120,7 +145,7 @@ jobs:
             'Keep Folio Dev installed. Do not uninstall Folio or clear its data.',
             'Android requires the same signing certificate as your installed main app. If it refuses the update, keep the installed app and report the message.', '',
             'Package: com.folio.reader. Backend: Expo production environment.',
-            `Source: main at ${process.env.GITHUB_SHA}. Artifact retained for 7 days.`,
+            `Application source: ${process.env.APK_SOURCE_SHA}. Verification source: main at ${process.env.GITHUB_SHA}. Artifact retained for 7 days.`,
             'Built locally on GitHub with remote EAS signing credentials; no Expo cloud build slot used.', '',
             'The separate emulator job checks a disposable Guest reading journey. Google consent and account backup still need a signed-in phone check.', '',
           ].join('\n'));
