@@ -2034,8 +2034,9 @@ test('Library and Notebook filter chips expose a named button and its selected s
 function catalogHarness({ search, download, parse, save, remember, details, added = {} } = {}) {
   const calls = { searches: [], downloads: [], details: [], opened: [], saved: [], deleted: [], closed: 0, toasts: [] };
   const h = harness({ runEffects: true, moduleMocks: {
+    '../lib/googleBooksKeyNative': { googleBooksKeyStore: () => ({ load: async () => null, save: async key => key, remove: async () => {} }) },
     '../lib/catalog': {
-      CATALOG_SOURCES: [{ id: 'gutenberg', label: 'Project Gutenberg' }, { id: 'standard', label: 'Standard Ebooks' }, { id: 'archive', label: 'Internet Archive' }],
+      CATALOG_SOURCES: [{ id: 'gutenberg', label: 'Project Gutenberg' }, { id: 'standard', label: 'Standard Ebooks' }, { id: 'archive', label: 'Internet Archive' }, { id: 'google', label: 'Google Books' }],
       TOPICS: [{ id: 'popular', label: 'Popular', topic: '' }],
       searchCatalog: (opts, signal) => { calls.searches.push({ opts, signal }); return search ? search(opts, signal) : Promise.resolve({ books: [item], total: 1, hasMore: false }); },
       loadCatalogBookDetails: (book, signal) => { calls.details.push({ book, signal }); return details ? details(book, signal) : Promise.resolve({ ...book, description: '<p>A classic.</p>', languages: ['en'] }); },
@@ -2048,7 +2049,7 @@ function catalogHarness({ search, download, parse, save, remember, details, adde
   } });
   const item = { id: 'gutenberg-1', title: 'A Book', author: 'An Author', source: 'gutenberg', coverUrl: 'https://www.gutenberg.org/cover.jpg', downloads: 10, subjects: [] };
   const { BrowseBooksScreen, BookRow } = h.load('../src/components/BrowseBooksScreen.tsx');
-  const props = { storage: { removeBookFiles: id => calls.deleted.push(id) }, books: [], availableBookIds: [], viewMode: 'grid', gridColumns: 2,
+  const props = { storage: { storageKey: key => `test:${key}`, removeBookFiles: id => calls.deleted.push(id) }, books: [], availableBookIds: [], viewMode: 'grid', gridColumns: 2,
     onViewModeChange: mode => { props.viewMode = mode; }, onGridColumnsChange: count => { props.gridColumns = count; },
     onAddEpubBook: async (book, pages) => { calls.saved.push({ book, pages }); if (save) await save(book, pages); props.books = [...props.books, book]; props.availableBookIds = [...props.availableBookIds, book.id]; },
     onOpenBook: id => calls.opened.push(id), onClose: () => calls.closed++, showToast: message => calls.toasts.push(message) };
@@ -2791,4 +2792,54 @@ test('cover membership badge has a readable label and coexists with reading prog
  assert.ok(elements(root).some(node => node.type === 'CoverIllustration'));
  root = h.render(BookCover, { ...props, inLibrary: false });
  assert.equal(elements(root).some(node => node.props?.accessibilityLabel === 'In your library'), false); h.unmount();
+});
+
+test('Google Books opens key setup instead of sending unauthenticated searches; replace/remove cancel old access', async () => {
+ const f = catalogHarness(); f.render(); await flushNative(); let root = f.render();
+ labelled(root, 'Google Books').onPress(); root = f.render();
+ assert.ok(labelled(elements(root).find(node => node.type === 'FlatList').props.ListEmptyComponent, 'Set up Google Books'));
+ assert.equal(f.calls.searches.filter(call => call.opts.source === 'google').length, 0);
+ labelled(root, 'Google Books setup').onPress(); root = f.render();
+ const setup = elements(root).find(node => node.type?.name === 'GoogleBooksSetup').props;
+ setup.onSaved('reader-key-01234567890123456789'); setup.onClose(); f.render(); await flushNative(); root = f.render();
+ const request = f.calls.searches.find(call => call.opts.source === 'google');
+ assert.equal(request.opts.googleBooksKey, 'reader-key-01234567890123456789');
+ labelled(root, 'Google Books setup').onPress(); root = f.render();
+ const remove = elements(root).find(node => node.type?.name === 'GoogleBooksSetup').props;
+ remove.onSaved(null); remove.onClose(); root = f.render();
+ assert.equal(request.signal.aborted, true);
+ assert.ok(labelled(elements(root).find(node => node.type === 'FlatList').props.ListEmptyComponent, 'Set up Google Books')); f.h.unmount();
+});
+
+function googleSetupHarness(overrides={}) {
+ const h=harness({runEffects:true});const {GoogleBooksSetup}=h.load('../src/components/GoogleBooksSetup.tsx');const events=[];
+ const props={store:{save:async key=>key,remove:async()=>{}},hasKey:false,loading:false,loadError:false,onRetry:()=>events.push('retry'),onSaved:key=>events.push(key),onClose:()=>events.push('close'),...overrides};
+ return{h,props,events,render:()=>h.render(GoogleBooksSetup,props)};
+}
+test('Google key entry is masked, validates drafts and blocks repeated writes/dismissal until confirmed',async()=>{
+ let finish,calls=0;const f=googleSetupHarness({store:{save:key=>{calls++;return new Promise(done=>{finish=()=>done(key);});},remove:async()=>{}}});let root=f.render();
+ assert.equal(labelled(root,'Google Books API key').secureTextEntry,true);assert.equal(labelled(root,'Save Google Books key').disabled,true);
+ labelled(root,'Google Books API key').onChangeText('reader-key-01234567890123456789');root=f.render();
+ const pending=labelled(root,'Save Google Books key').onPress();labelled(root,'Save Google Books key').onPress();labelled(root,'Close Google Books setup').onPress();
+ assert.equal(calls,1);assert.deepEqual(f.events,[]);finish();await pending;
+ assert.deepEqual(f.events,['reader-key-01234567890123456789','close']);f.h.unmount();
+});
+test('Google key failures retain the draft and late success cannot update another reading space',async()=>{
+ const f=googleSetupHarness({store:{save:async()=>{throw Error('Native acknowledgement failed');},remove:async()=>{}}});let root=f.render();
+ labelled(root,'Google Books API key').onChangeText('reader-key-01234567890123456789');root=f.render();await labelled(root,'Save Google Books key').onPress();root=f.render();
+ assert.equal(labelled(root,'Google Books API key').value,'reader-key-01234567890123456789');assert.ok(elements(root).some(node=>node.props?.accessibilityRole==='alert'));assert.deepEqual(f.events,[]);f.h.unmount();
+ let done;const other=googleSetupHarness({hasKey:true,store:{save:async key=>key,remove:()=>new Promise(resolve=>{done=resolve;})}});root=other.render();
+ const pending=labelled(root,'Remove Google Books key').onPress();other.h.unmount();done();await pending;assert.deepEqual(other.events,[]);
+});
+test('an unreadable key cannot be replaced or removed until secure storage is checked again',async()=>{
+ const f=googleSetupHarness({hasKey:true,loadError:true});let root=f.render();
+ assert.equal(labelled(root,'Google Books API key').editable,false);assert.equal(labelled(root,'Remove Google Books key').disabled,true);
+ await labelled(root,'Remove Google Books key').onPress();assert.deepEqual(f.events,[]);
+ labelled(root,'Retry loading Google Books key').onPress();assert.deepEqual(f.events,['retry']);f.h.unmount();
+});
+
+test('informational source notices do not pretend a healthy catalog needs recovery',async()=>{
+ const f=catalogHarness({search:async()=>({books:[],hasMore:true,total:null,notice:'Only confirmed EPUBs are shown.',noticeKind:'info'})});f.render();await flushNative();const root=f.render();
+ const list=freeBookList(root);assert.equal(elements(list.ListHeaderComponent).some(node=>node.props?.accessibilityLabel==='Retry live catalog'),false);
+ assert.match(renderedText(list.ListEmptyComponent),/No eligible EPUBs on this page/);assert.equal(list.onEndReached,undefined);f.h.unmount();
 });

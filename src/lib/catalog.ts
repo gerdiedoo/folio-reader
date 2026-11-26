@@ -7,6 +7,7 @@ import { starterBooks } from '../data/freeBooks';
 import { archiveEpubLinks, archiveSearchUrl, gutenbergBook, parseArchivePage, parseGutenbergPage, parseStandardPage, standardEpubLinks, standardSearchUrl, sourceUrl } from './catalogProviders';
 import { CatalogError, catalogCancelled, catalogRequest } from './catalogRequest';
 import { archiveBookDetails, standardBookDetails } from './catalogDetails';
+import { extraBookDetails, extraEpubLinks, extraSource, searchExtraCatalog, type CatalogAccess } from './extraCatalog';
 export { CATALOG_SOURCES } from './catalogProviders';
 
 const API = 'https://gutendex.com/books/';
@@ -14,9 +15,12 @@ const EPUB_MIME = 'application/epub+zip';
 const CACHE_TTL_MS = 2 * 60 * 1000;
 const MAX_CACHED_PAGES = 60;
 const pageCache = new Map<string, { page: CatalogPage; cachedAt: number }>();
-export type CatalogSource = 'gutenberg' | 'standard' | 'archive';
+export type CatalogSource = 'gutenberg' | 'standard' | 'archive' | 'openlibrary' | 'google' | 'oapen' | 'doab' | 'wikisource' | 'feedbooks';
 
 export interface CatalogBook {
+  sourceRecordId?: string;
+  archiveIds?: string[];
+  exportTitle?: string;
   /** Stable id across sessions, e.g. "gutenberg-1342". */
   id: string;
   source?: CatalogSource;
@@ -77,6 +81,7 @@ export interface CatalogPage {
   hasMore: boolean;
   total: number | null;
   notice?: string;
+  noticeKind?: 'info' | 'recovery';
 }
 
 export type CatalogSort = 'popular' | 'ascending' | 'descending';
@@ -108,7 +113,7 @@ export const TOPICS: CatalogTopic[] = [
 // ---------------------------------------------------------------------------
 
 export async function searchCatalog(
-  opts: { query?: string; topic?: string; page?: number; sort?: CatalogSort; source?: CatalogSource },
+  opts: { query?: string; topic?: string; page?: number; sort?: CatalogSort; source?: CatalogSource; googleBooksKey?: string | null },
   signal?: AbortSignal
 ): Promise<CatalogPage> {
   if (signal?.aborted) throw catalogCancelled();
@@ -117,6 +122,7 @@ export async function searchCatalog(
   const topic = opts.topic ?? '';
   const pageNumber = Number.isSafeInteger(opts.page) && opts.page! > 0 ? opts.page! : 1;
   const sort = opts.sort ?? 'popular';
+  if (extraSource(source)) return searchExtraCatalog(source, query, topic, pageNumber, sort, { googleBooksKey: opts.googleBooksKey }, signal);
   const params = new URLSearchParams({ languages: 'en', mime_type: EPUB_MIME, sort, page: String(pageNumber) });
   if (query) params.set('search', query);
   if (topic) params.set('topic', topic);
@@ -156,8 +162,10 @@ export async function getCatalogBook(gutenbergId: number): Promise<CatalogBook |
 }
 
 const detailCache = new Map<string, { book: CatalogBook; cachedAt: number }>();
-export async function loadCatalogBookDetails(book: CatalogBook, signal?: AbortSignal): Promise<CatalogBook> {
+export async function loadCatalogBookDetails(book: CatalogBook, signal?: AbortSignal, access: CatalogAccess = {}): Promise<CatalogBook> {
   if (signal?.aborted) throw catalogCancelled();
+  // A Google key belongs to one reader; do not reuse an earlier reader's access check.
+  if (book.source && extraSource(book.source)) return extraBookDetails(book, access, signal);
   const cached = detailCache.get(book.id);
   if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return cached.book;
   let details: CatalogBook;
@@ -211,7 +219,8 @@ export async function findCatalogBook(title: string, author: string): Promise<Ca
  * Downloads the EPUB into the cache folder and returns its file:// URI, ready for
  * `parseEpubFile`. The caller should `deleteDownloaded` it once the book is imported.
  */
-async function epubLinks(book: CatalogBook, signal?: AbortSignal): Promise<string[]> {
+async function epubLinks(book: CatalogBook, signal?: AbortSignal, access: CatalogAccess = {}): Promise<string[]> {
+  if (book.source && extraSource(book.source)) return extraEpubLinks(book, access, signal);
   if (book.source === 'standard') {
     const detail = sourceUrl(book.detailUrl, ['standardebooks.org']);
     if (!detail) throw new CatalogError('unavailable');
@@ -232,9 +241,9 @@ async function epubLinks(book: CatalogBook, signal?: AbortSignal): Promise<strin
 }
 
 /** Bounded, cancellable transfers. Reject HTML error pages before EPUB parsing. */
-export async function downloadEpub(book: CatalogBook, onProgress?: (percent: number) => void, signal?: AbortSignal): Promise<string> {
+export async function downloadEpub(book: CatalogBook, onProgress?: (percent: number) => void, signal?: AbortSignal, access: CatalogAccess = {}): Promise<string> {
   if (signal?.aborted) throw catalogCancelled();
-  const links = await epubLinks(book, signal);
+  const links = await epubLinks(book, signal, access);
   if (!links.length) throw new CatalogError('unavailable');
   let lastError: unknown;
   for (const [attempt, url] of links.entries()) {
@@ -250,7 +259,7 @@ export async function downloadEpub(book: CatalogBook, onProgress?: (percent: num
       rejectStopped = reject;
       onAbort = () => { expired = true; reject(catalogCancelled()); controller.abort(); };
       signal?.addEventListener('abort', onAbort, { once: true });
-      timer = setTimeout(() => { expired = true; reject(new CatalogError('timeout')); controller.abort(); }, 60000);
+      timer = setTimeout(() => { expired = true; reject(new CatalogError('timeout')); controller.abort(); }, book.source === 'wikisource' ? 120000 : 60000);
     });
     let task: ReturnType<typeof File.createDownloadTask> | undefined;
     try {
@@ -306,11 +315,11 @@ export function deleteDownloaded(uri: string): void {
 
 const ADDED_KEY = 'catalog.added';
 
-/** catalog id → library book id, persisted so the Browse screen can show "Read" instead of "Get". */
+/** catalog id → library book id, persisted for Browse membership badges and the Read action in details. */
 export async function loadAdded(storage: Pick<LocalStore, 'loadJSON' | 'saveJSON'> = { loadJSON, saveJSON }): Promise<Record<string, string>> {
   const value = await storage.loadJSON<unknown>(ADDED_KEY);
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.fromEntries(Object.entries(value).filter(([key, id]) => /^(gutenberg-|standard-|archive-)/.test(key) && typeof id === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(id)));
+  return Object.fromEntries(Object.entries(value).filter(([key, id]) => /^(gutenberg-|standard-|archive-|openlibrary-|google-|oapen-|doab-|wikisource-|feedbooks-)/.test(key) && typeof id === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(id)));
 }
 
 export async function rememberAdded(

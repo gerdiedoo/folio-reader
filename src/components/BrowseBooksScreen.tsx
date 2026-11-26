@@ -27,6 +27,8 @@ import { BookDescription } from './BookDescription';
 import { Icon } from './ui/Icon';
 import { renderShelfChip, renderShelfSort, renderShelfViewOptions, shelfStyles } from './ui/ShelfControls';
 import { ProgressBar } from './ui/ProgressBar';
+import { GoogleBooksSetup } from './GoogleBooksSetup';
+import { googleBooksKeyStore } from '../lib/googleBooksKeyNative';
 
 interface Props {
   storage: LocalStore;
@@ -171,8 +173,19 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   const columns = viewMode === 'grid' ? layout.columns : 1;
   const cardWidth = layout.cardWidth;
 
+  const keyStore = useMemo(() => googleBooksKeyStore(storage.storageKey('googleBooksKey')), [storage]);
+  const [googleKey, setGoogleKey] = useState<string | null>(null);
+  const [keyLoading, setKeyLoading] = useState(true), [keyLoadError, setKeyLoadError] = useState(false);
+  const [keyRetry, setKeyRetry] = useState(0), [keySetupOpen, setKeySetupOpen] = useState(false);
+  useEffect(() => {
+    let current = true; setKeyLoading(true); setKeyLoadError(false);
+    keyStore.load().then(key => { if (current) { setGoogleKey(key); setKeyLoading(false); } })
+      .catch(() => { if (current) { setKeyLoadError(true); setKeyLoading(false); } });
+    return () => { current = false; };
+  }, [keyStore, keyRetry]);
   const [source, setSource] = useState<CatalogSource>('gutenberg');
   const [notice, setNotice] = useState<string | null>(null);
+  const [noticeKind, setNoticeKind] = useState<'info' | 'recovery' | undefined>();
   const [downloadErrors, setDownloadErrors] = useState<Record<string, string>>({});
   const [queryInput, setQueryInput] = useState('');
   const [query, setQuery] = useState('');
@@ -200,14 +213,14 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     if (!selectedBook) return;
     const controller = new AbortController();
     setDetailState({ id: selectedBook.id, loading: true });
-    loadCatalogBookDetails(selectedBook, controller.signal).then(book => {
+    loadCatalogBookDetails(selectedBook, controller.signal, { googleBooksKey: googleKey }).then(book => {
       if (!controller.signal.aborted) setDetailState({ id: selectedBook.id, book, loading: false });
     }).catch((error: unknown) => {
       if (!controller.signal.aborted) setDetailState({ id: selectedBook.id, loading: false,
         error: error instanceof Error ? error.message : 'Could not load book details.' });
     });
     return () => controller.abort();
-  }, [selectedBook, detailRetry]);
+  }, [selectedBook, detailRetry, googleKey]);
   const pendingGet = useRef(false);
   const alive = useRef(true);
   const transfer = useRef<AbortController | null>(null);
@@ -240,6 +253,8 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   const ownedLibraryIds = useMemo(() => new Set(books.map(book => book.id)), [books]);
   const libraryIds = useMemo(() => new Set(books.filter(book => availableBookIds.includes(book.id)).map(book => book.id)), [books, availableBookIds]);
 
+  const sourceGoogleKey = source === 'google' ? googleKey : null;
+  const sourceKeyLoading = source === 'google' && keyLoading;
   // ---- load: first page whenever the search text / topic changes ----
   const generation = useRef(0);
   const moreRequest = useRef<AbortController | null>(null);
@@ -257,13 +272,17 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     setItems([]);
     setPage(1);
     setHasMore(false);
-    searchCatalog({ query, topic: effectiveTopic, page: 1, sort: catalogSort, source }, ctrl.signal)
+    if (source === 'google' && (sourceKeyLoading || !sourceGoogleKey)) {
+      setLoading(sourceKeyLoading);
+      return () => ctrl.abort();
+    }
+    searchCatalog({ query, topic: effectiveTopic, page: 1, sort: catalogSort, source, googleBooksKey: sourceGoogleKey }, ctrl.signal)
       .then((res) => {
         if (!alive.current || ctrl.signal.aborted || gen !== generation.current) return;
         setItems(res.books);
         setHasMore(res.hasMore);
         setTotal(res.total);
-        setNotice(res.notice ?? null);
+        setNotice(res.notice ?? null); setNoticeKind(res.noticeKind);
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -277,7 +296,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       moreRequest.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, effectiveTopic, catalogSort, source, reloadNonce]);
+  }, [query, effectiveTopic, catalogSort, source, reloadNonce, sourceGoogleKey, sourceKeyLoading]);
 
   // debounce the search box
   useEffect(() => {
@@ -298,7 +317,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     setLoadingMore(true);
     setLoadMoreError(false);
     try {
-      const res = await searchCatalog({ query, topic: effectiveTopic, page: page + 1, sort: catalogSort, source }, ctrl.signal);
+      const res = await searchCatalog({ query, topic: effectiveTopic, page: page + 1, sort: catalogSort, source, googleBooksKey: sourceGoogleKey }, ctrl.signal);
       if (!alive.current || ctrl.signal.aborted || gen !== generation.current) return;
       setItems((prev) => {
         const seen = new Set(prev.map((b) => b.id));
@@ -317,7 +336,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
         setLoadingMore(false);
       }
     }
-  }, [loading, loadingMore, hasMore, error, query, effectiveTopic, catalogSort, source, page, showToast]);
+  }, [loading, loadingMore, hasMore, error, query, effectiveTopic, catalogSort, source, sourceGoogleKey, page, showToast]);
 
   // ---- download + import ----
   const downloadAndImport = async (item: CatalogBook) => {
@@ -330,7 +349,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     try {
       uri = await downloadEpub(item, (progressPercent) => {
         if (alive.current && !ctrl.signal.aborted) setActive(current => current?.id === item.id ? { ...current, progressPercent } : current);
-      }, ctrl.signal);
+      }, ctrl.signal, { googleBooksKey: googleKey });
       if (!alive.current || ctrl.signal.aborted) return;
       phase.current = 'preparing';
       setActive({ id: item.id, phase: 'preparing', progressPercent: 100 });
@@ -436,6 +455,13 @@ export const BrowseBooksScreen: React.FC<Props> = ({
         </View>
       ))}
     </View>
+  ) : source === 'google' && !googleKey ? (
+    <View style={styles.state}>
+      <Icon name="menu_book" size={40} color={palette.secondaryFixedDim} />
+      <Text style={styles.stateTitle}>{keyLoadError ? 'Couldn’t check your saved key' : 'Connect Google Books'}</Text>
+      <Text style={styles.stateBody}>Use your own Google Books API key to browse free EPUBs. Other book sources work without it.</Text>
+      <Pressable onPress={() => setKeySetupOpen(true)} accessibilityRole="button" accessibilityLabel="Set up Google Books" style={[styles.btn, styles.btnFilled]}><Text style={{ color: palette.white }}>Google Books setup</Text></Pressable>
+    </View>
   ) : error ? (
     <View style={styles.state}>
       <Icon name="cloud_off" size={40} color={palette.secondaryFixedDim} />
@@ -451,16 +477,23 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       <Icon name="search" size={40} color={palette.secondaryFixedDim} />
       <Text style={styles.stateTitle}>No books found</Text>
       <Text style={styles.stateBody}>
-        {query ? `Nothing matched “${query}”. ` : ''}Try an author’s name or a word from the title.
+        {hasMore ? 'No eligible EPUBs on this page. Load more to check the next results, or try another search.' : `${query ? `Nothing matched “${query}”. ` : ''}Try an author’s name or a word from the title.`}
       </Text>
     </View>
   );
 
+  const newestSources = ['gutenberg', 'standard', 'archive', 'openlibrary', 'google'];
+  const sortOptions = SORT_OPTIONS.filter(option => option.id !== 'releaseDate' || newestSources.includes(source)).map(option => option.id === 'popularity' && !['gutenberg', 'standard', 'archive'].includes(source) ? { ...option, label: 'Source order' } : option);
   const browserHeader = <View style={{ gap: 6, paddingBottom: 8 }}>
     <View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow} keyboardShouldPersistTaps="handled">
-        {CATALOG_SOURCES.map(item => renderShelfChip(palette, item.label, source === item.id, () => setSource(item.id)))}
+        {CATALOG_SOURCES.map(item => renderShelfChip(palette, item.label, source === item.id, () => { setSource(item.id); if (sortBy === 'releaseDate' && !newestSources.includes(item.id)) setSortBy('popularity'); }))}
       </ScrollView>
+      {source === 'google' && <Pressable onPress={() => setKeySetupOpen(true)} disabled={!!active}
+        accessibilityRole="button" accessibilityLabel="Google Books setup" accessibilityState={{ disabled: !!active }} style={styles.smallAction}>
+        <Text style={[styles.rowMeta, { color: palette.primary }]}>{keyLoading ? 'Checking saved key…' : keyLoadError ? 'Retry Google Books setup' : googleKey ? 'Google Books key saved · Manage' : 'Add your Google Books key'}</Text>
+      </Pressable>}
+
     </View>
     {/* Search lives outside the virtualized results so typing keeps focus. */}
     {/* Topics */}
@@ -475,7 +508,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       <View style={styles.sortGroup}>
         <Icon name="sort" size={16} color={palette.muted} />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sortOptions} keyboardShouldPersistTaps="handled">
-          {SORT_OPTIONS.map(option => renderShelfSort(palette, option.label, `Sort free books by ${option.label}`, sortBy === option.id, () => setSortBy(option.id)))}
+          {sortOptions.map(option => renderShelfSort(palette, option.label, `Sort free books by ${option.label}`, sortBy === option.id, () => setSortBy(option.id)))}
         </ScrollView>
       </View>
       {renderShelfViewOptions(palette, viewMode, gridColumns, onViewModeChange, onGridColumnsChange)}
@@ -487,7 +520,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
 
     {notice && <View style={[styles.notice, { marginHorizontal: 0 }]}>
       <Text accessibilityLiveRegion="polite" style={styles.noticeText}>{notice}</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel="Retry live catalog" onPress={() => setReloadNonce(value => value + 1)} style={styles.smallAction}><Text style={styles.sortActive}>Retry live catalog</Text></Pressable>
+      {noticeKind !== 'info' && <Pressable accessibilityRole="button" accessibilityLabel="Retry live catalog" onPress={() => setReloadNonce(value => value + 1)} style={styles.smallAction}><Text style={styles.sortActive}>Retry live catalog</Text></Pressable>}
     </View>}
     <View style={styles.countRow}>
       {!loading && !error && items.length > 0 ? (
@@ -586,7 +619,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
               </Pressable>
             ) : null
           }
-          onEndReached={loadMore}
+          onEndReached={items.length ? loadMore : undefined}
           onEndReachedThreshold={0.6}
           contentContainerStyle={[
             styles.resultsContent,
@@ -600,6 +633,8 @@ export const BrowseBooksScreen: React.FC<Props> = ({
           windowSize={7}
         />
         </View>
+        {keySetupOpen && <GoogleBooksSetup store={keyStore} hasKey={Boolean(googleKey)} loading={keyLoading} loadError={keyLoadError}
+          onRetry={() => setKeyRetry(value => value + 1)} onSaved={key => { setGoogleKey(key); setKeyLoadError(false); }} onClose={() => setKeySetupOpen(false)} />}
         {detailBook && <ScrollView key={detailBook.id} style={[StyleSheet.absoluteFill, { backgroundColor: palette.background }]}
           contentContainerStyle={[styles.detailsContent, { paddingBottom: insets.bottom + 28 }]}>
           <View style={styles.detailsCover}>

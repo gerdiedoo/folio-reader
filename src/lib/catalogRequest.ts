@@ -1,6 +1,8 @@
 export class CatalogError extends Error {
-  constructor(public readonly kind: 'network' | 'timeout' | 'service' | 'rate' | 'invalid' | 'file' | 'unavailable' | 'size', public readonly status?: number) {
+  constructor(public readonly kind: 'network' | 'timeout' | 'service' | 'rate' | 'invalid' | 'file' | 'unavailable' | 'size' | 'configuration' | 'credentials', public readonly status?: number) {
     super({
+      credentials: 'Google Books could not authorize this request. Check the saved key’s Books API access and quota in Google Books setup.',
+      configuration: 'Google Books needs your own API key. Open Google Books setup to add one, or choose another source.',
       size: 'This EPUB exceeds the 40 MB download limit. Try a smaller edition, or import an EPUB file from your device.',
       network: 'Could not reach this book source. Check your connection, retry, or choose another source.',
       timeout: 'This book source took too long. Retry or choose another source.',
@@ -29,8 +31,8 @@ export async function catalogRequest(url: string, format: 'json' | 'text', signa
     try {
       const request = Promise.resolve().then(async () => {
         if (controller.signal.aborted) throw catalogCancelled();
-        const res = await fetch(url, { signal: controller.signal, headers: { Accept: format === 'json' ? 'application/json' : 'text/html' } });
-        if (!res.ok) throw new CatalogError(res.status === 429 ? 'rate' : res.status === 404 || res.status === 410 ? 'unavailable' : 'service', res.status);
+        const res = await fetch(url, { signal: controller.signal, headers: { Accept: format === 'json' ? 'application/json' : 'text/html, application/atom+xml;q=0.9, application/xml;q=0.8', 'User-Agent': 'Folio/1.0 (https://github.com/gerdiedoo/folio-reader)' } });
+        if (!res.ok) throw new CatalogError(/^https:\/\/www\.googleapis\.com\/books\/v1\//.test(url) && [401, 403].includes(res.status) ? 'credentials' : res.status === 429 ? 'rate' : res.status === 404 || res.status === 410 ? 'unavailable' : 'service', res.status);
         try { return await (format === 'json' ? res.json() : res.text()); }
         catch { throw new CatalogError('invalid'); }
       });

@@ -46,7 +46,7 @@ function fixture({ fetcher = async () => { throw Error('offline'); }, transfers 
     loaded._compile("const {fetcher: fetch, Date, setTimeout, clearTimeout} = require('__env');\n" + ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, esModuleInterop: true } }).outputText, filename);
     return loaded.exports;
   }
-  return { ...load('../src/lib/catalog.ts'), providers: load('../src/lib/catalogProviders.ts'), request: load('../src/lib/catalogRequest.ts').catalogRequest,
+  return { ...load('../src/lib/catalog.ts'), providers: load('../src/lib/catalogProviders.ts'), extras: load('../src/lib/extraCatalogProviders.ts'), request: load('../src/lib/catalogRequest.ts').catalogRequest,
     timers, files, attempts, writes, advance: ms => { now += ms; }, fire: ms => { const entry = [...timers].find(([, t]) => t.ms === ms); assert.ok(entry, 'Missing deadline'); timers.delete(entry[0]); entry[1].fn(); } };
 }
 const response = data => ({ ok: true, status: 200, json: async () => data, text: async () => data });
@@ -203,4 +203,169 @@ test('oversized downloads stop promptly with a useful limit message and clean pa
   const f = fixture({ transfers: [(dest, options) => { options.onProgress({ bytesWritten: 1, totalBytes: 41 * 1024 * 1024 }); return Promise.resolve(dest); }] });
   await assert.rejects(f.downloadEpub(catalogBook()), error => error.kind === 'size' && /40 MB/.test(error.message));
   assert.equal(f.attempts.length, 1); assert.ok([...f.files.values()].every(file => !file.exists)); assert.equal(f.timers.size, 0);
+});
+
+const freeGoogle = (id = 'volume_1') => ({ id, volumeInfo: { title: 'A Free Book', authors: ['An Author'], description: '<p>Free text.</p>', language: 'en' },
+ accessInfo: { viewability: 'ALL_PAGES', publicDomain: true, epub: { isAvailable: true, downloadLink: 'https://books.google.com/books/download/free.epub?output=epub' } }, saleInfo: { saleability: 'FREE' } });
+const googleKeyA = 'reader-A-key-0123456789012345', googleKeyB = 'reader-B-key-0123456789012345';
+const oapenItem = (id = 'item-1', file = 'book.epub') => ({ uuid: id, name: 'An Academic Book', metadata: [{ key: 'dc.title', value: 'An Academic Book' }, { key: 'dc.contributor.author', value: 'An Author' }, { key: 'dc.description.abstract', value: '<p>Open research.</p>' }], bitstreams: [{ uuid: 'file-1', name: file, mimeType: file.endsWith('.epub') ? 'application/epub+zip' : 'application/pdf', retrieveLink: `https://library.oapen.org/rest/bitstreams/file-1/retrieve` }] });
+
+test('source registry contains each requested source once, with existing Gutendex under Gutenberg', () => {
+ const { CATALOG_SOURCES } = fixture().providers;
+ assert.deepEqual(CATALOG_SOURCES.map(source => source.id), ['gutenberg','standard','archive','openlibrary','google','oapen','doab','wikisource','feedbooks']);
+ assert.equal(new Set(CATALOG_SOURCES.map(source => source.id)).size, CATALOG_SOURCES.length);
+});
+
+test('Open Library only accepts public-access works and keeps safe Archive IDs for EPUB checking', async () => {
+ const f = fixture({ fetcher: async url => {
+  const u = new URL(url); assert.match(u.searchParams.get('q'), /ebook_access:public AND public_scan_b:true/);
+  return response({ numFound: 4, docs: [
+   { key: '/works/OL1W', title: 'Public work', author_name: ['Author'], public_scan_b: true, ebook_access: 'public', ia: ['public-book', '../outside'], cover_i: 12 },
+   { key: '/works/OL2W', title: 'Borrow only', public_scan_b: false, ebook_access: 'borrowable', ia: ['borrow'] },
+   { key: '/works/OL3W', title: 'No scan', public_scan_b: true, ebook_access: 'public', ia: [] },
+  ] });
+ } });
+ const page = await f.searchCatalog({ source: 'openlibrary', query: 'Public' });
+ assert.equal(page.books.length, 1); assert.equal(page.books[0].id, 'openlibrary-OL1W'); assert.deepEqual(page.books[0].archiveIds, ['public-book']);
+});
+
+test('Open Library downloads recheck Archive restrictions and do not send borrow-only files to native storage', async () => {
+ const book = { id: 'openlibrary-OL1W', source: 'openlibrary', sourceRecordId: 'OL1W', title: 'Public work', author: 'Author', archiveIds: ['public-book'] };
+ for (const restricted of [true, false]) {
+  const f = fixture({ fetcher: async () => response({ metadata: { 'access-restricted-item': restricted }, files: [{ name: 'book.epub', format: 'EPUB', source: 'original' }] }) });
+  if (restricted) { await assert.rejects(f.downloadEpub(book), /unrestricted EPUB/); assert.equal(f.attempts.length, 0); }
+  else { await f.downloadEpub(book); assert.equal(f.attempts[0].url, 'https://archive.org/download/public-book/book.epub'); }
+ }
+});
+
+test('Google Books uses the current reader key and never reuses another reader’s access check', async () => {
+ const requests = [];
+ const f = fixture({ fetcher: async url => { requests.push(new URL(url)); return response({ totalItems: 1, items: [freeGoogle()] }); } });
+ await assert.rejects(f.searchCatalog({ source: 'google' }), /own API key/); assert.equal(requests.length, 0);
+ for (const key of [googleKeyA, googleKeyB]) {
+  const page = await f.searchCatalog({ source: 'google', query: 'Free', googleBooksKey: key });
+  assert.equal(page.books.length, 1); assert.equal(JSON.stringify(page).includes(key), false);
+  assert.equal(requests.at(-1).searchParams.get('key'), key); assert.equal(requests.at(-1).searchParams.get('filter'), 'free-ebooks'); assert.equal(requests.at(-1).searchParams.get('download'), 'epub');
+ }
+ await assert.rejects(f.searchCatalog({ source: 'google' }), /own API key/); assert.equal(requests.length, 2);
+});
+
+test('Google excludes previews, purchases, token-only DRM and unrelated download hosts', () => {
+ const p = fixture().extras, good = freeGoogle(); assert.ok(p.googleBook(good));
+ for (const access of [
+  { ...good.accessInfo, viewability: 'PARTIAL' },
+  { ...good.accessInfo, publicDomain: false },
+  { ...good.accessInfo, epub: { isAvailable: true, acsTokenLink: 'https://books.google.com/book.acsm' } },
+  { ...good.accessInfo, epub: { isAvailable: true, downloadLink: 'https://evil.test/book.epub' } },
+  { ...good.accessInfo, downloadAccess: { restricted: true } },
+ ]) assert.equal(p.googleBook({ ...good, saleInfo: { saleability: 'FOR_SALE' }, accessInfo: access }), null);
+});
+
+test('Google rejection errors do not expose a reader’s key or raw API response', async () => {
+ const f = fixture({ fetcher: async () => ({ ok: false, status: 403, json: async () => ({ error: { message: 'Private '+googleKeyA } }) }) });
+ await assert.rejects(f.searchCatalog({ source: 'google', googleBooksKey: googleKeyA }), error => error.kind === 'credentials' && !error.message.includes(googleKeyA));
+});
+
+test('Google availability is rechecked before a native EPUB download', async () => {
+ const f = fixture({ fetcher: async url => { assert.equal(new URL(url).searchParams.get('key'), googleKeyA); return response(freeGoogle()); } });
+ await f.downloadEpub(f.extras.googleBook(freeGoogle()), undefined, undefined, { googleBooksKey: googleKeyA });
+ assert.equal(f.attempts[0].url, freeGoogle().accessInfo.epub.downloadLink);
+});
+
+test('OAPEN search returns confirmed EPUBs, excluding PDF-only and withdrawn books', async () => {
+ const f = fixture({ fetcher: async url => { assert.equal(new URL(url).pathname, '/rest/search'); return response([oapenItem(), oapenItem('pdf-item','book.pdf'), { ...oapenItem('withdrawn'), withdrawn: true }]); } });
+ const page = await f.searchCatalog({ source: 'oapen', query: 'research' });
+ assert.equal(page.books.length, 1); assert.equal(page.books[0].source, 'oapen'); assert.equal(page.books[0].author, 'An Author');
+ assert.equal(page.books[0].description, '<p>Open research.</p>'); assert.equal(page.hasMore, false);
+});
+
+test('DOAB resolves an OAPEN file rather than treating directory metadata as an EPUB', async () => {
+ const requests = [];
+ const item = { uuid: 'doab-1', name: 'An Academic Book', metadata: [{ key: 'dc.identifier.uri', value: 'https://library.oapen.org/handle/20.500.12657/1234' }] };
+ const f = fixture({ fetcher: async url => { requests.push(url); return response(url.includes('/rest/handle/') ? oapenItem() : [item]); } });
+ const page = await f.searchCatalog({ source: 'doab' });
+ assert.equal(page.books.length, 1); assert.equal(page.books[0].source, 'doab');
+ assert.match(page.books[0].epubUrl, /^https:\/\/library\.oapen\.org\/rest\/bitstreams\//);
+ assert.ok(requests.some(url => url.includes('/rest/handle/20.500.12657/1234')));
+ const skipped = fixture({ fetcher: async () => response([{ ...item, metadata: [{ key: 'dc.identifier.uri', value: 'http://127.0.0.1/private.epub' }] }]) });
+ assert.equal((await skipped.searchCatalog({ source: 'doab' })).books.length, 0);
+});
+
+test('modern DSpace discovery follows original bundles and allows only same-source EPUB content', async () => {
+ const item = { uuid: 'modern-1', name: 'Modern research', metadata: {} };
+ const f = fixture({ fetcher: async url => {
+  if (url.includes('/rest/search')) return { ok: false, status: 404 };
+  if (url.includes('/discover/search/objects')) return response({ _embedded: { searchResult: { _embedded: { objects: [{ _embedded: { indexableObject: item } }] }, page: { number: 0, totalPages: 1 } } } });
+  if (url.includes('/items/modern-1/bundles')) return response({ _embedded: { bundles: [{ uuid: 'bundle-1', name: 'ORIGINAL' }] } });
+  if (url.includes('/bundles/bundle-1/bitstreams')) return response({ _embedded: { bitstreams: [{ uuid: 'bit-1', name: 'research.epub', _links: { content: { href: 'https://library.oapen.org/server/api/core/bitstreams/bit-1/content' } } }] } });
+  assert.fail('Unexpected repository request');
+ } });
+ const page = await f.searchCatalog({ source: 'oapen' }); assert.equal(page.books.length, 1);
+ assert.equal(page.books[0].epubUrl, 'https://library.oapen.org/server/api/core/bitstreams/bit-1/content');
+});
+
+test('Wikisource discovery excludes non-work namespaces, missing pages and disambiguation', async () => {
+ const f = fixture({ fetcher: async () => response({ query: { pages: {
+  1: { pageid: 1, ns: 0, title: 'A Transcribed Work', links: [{ ns: 102, title: 'Author:Jane Doe' }] },
+  2: { pageid: 2, ns: 102, title: 'Author:Jane Doe' },
+  3: { pageid: 3, ns: 0, title: 'A Work/Chapter 1' },
+  4: { pageid: 4, ns: 0, title: 'Missing', missing: '' },
+  5: { pageid: 5, ns: 0, title: 'Ambiguous', pageprops: { disambiguation: '' } },
+ } }, continue: { gsroffset: 20 } }) });
+ const page = await f.searchCatalog({ source: 'wikisource' });
+ assert.equal(page.books.length, 1); assert.equal(page.books[0].author, 'Jane Doe'); assert.equal(page.hasMore, true);
+ const url = new URL(f.extras.wikiEpub(page.books[0])); assert.equal(url.hostname, 'ws-export.wmcloud.org'); assert.equal(url.searchParams.get('page'), 'A Transcribed Work'); assert.equal(url.searchParams.get('format'), 'epub-3');
+});
+
+const feed = (title='Free &amp; Clear', extra='') => `<feed xmlns="http://www.w3.org/2005/Atom"><entry><id>urn:feedbooks:book:123</id><title>${title}</title><author><name>An Author</name></author><link rel="http://opds-spec.org/acquisition/open-access" type="application/epub+zip" href="https://www.feedbooks.com/book/123.epub"/></entry>${extra}</feed>`;
+test('Feedbooks accepts only free EPUB acquisition links and safe OPDS navigation', async () => {
+ const f = fixture({ fetcher: async () => response(feed('Free &amp; Clear', '<entry><title>Buy me</title><link rel="http://opds-spec.org/acquisition/buy" type="application/epub+zip" href="https://www.feedbooks.com/book/456.epub"/></entry>')) });
+ const page = await f.searchCatalog({ source: 'feedbooks' }); assert.equal(page.books.length, 1); assert.equal(page.books[0].title, 'Free & Clear');
+ await f.downloadEpub(page.books[0]); assert.equal(f.attempts[0].url, 'https://www.feedbooks.com/book/123.epub');
+ assert.throws(() => f.extras.feedXml('<!DOCTYPE feed [<!ENTITY x "bad">]><feed/>'));
+ assert.throws(() => f.extras.feedbooksPage('<html>Service retired</html>', 'https://www.feedbooks.com'));
+});
+
+test('Feedbooks OpenSearch templates and next links preserve query pagination without guessing endpoints', async () => {
+ const urls=[];
+ const f=fixture({fetcher:async url=>{
+  urls.push(url);
+  if(url.endsWith('catalog.atom'))return response('<feed><link rel="search" href="https://catalog.feedbooks.com/search.xml"/></feed>');
+  if(url.endsWith('search.xml'))return response('<OpenSearchDescription><Url type="application/atom+xml" template="https://catalog.feedbooks.com/search?query={searchTerms}&amp;page={startPage}"/></OpenSearchDescription>');
+  return response(feed('Free',new URL(url).searchParams.get('page')==='1'?'<link rel="next" href="https://catalog.feedbooks.com/search?query=poetry&amp;page=2"/>':''));
+ }});
+ assert.equal((await f.searchCatalog({source:'feedbooks',query:'poetry'})).hasMore,true);
+ assert.equal((await f.searchCatalog({source:'feedbooks',query:'poetry',page:2})).hasMore,false);
+ assert.ok(urls.at(-1).includes('page=2'));assert.equal(urls.filter(url=>url.endsWith('catalog.atom')).length,1);
+});
+
+test('new source catalog mappings survive restart and still reject unknown or malformed IDs', async () => {
+ const storage={loadJSON:async()=>({'google-volume_1':'local-1','openlibrary-OL1W':'local-2','wikisource-en-12':'local-3','oapen-item':'local-4','doab-item':'local-5','feedbooks-123':'local-6','unknown-1':'local-7'}),saveJSON:async()=>{}};
+ assert.equal(Object.keys(await fixture().loadAdded(storage)).length,6);
+});
+
+test('repository catalogs bound follow-up requests even when a server ignores the requested page size', async () => {
+ let lookups = 0;
+ const f = fixture({ fetcher: async url => {
+  if (url.includes('/rest/handle/')) { lookups++; return response(oapenItem()); }
+  return response(Array.from({length:25},(_,i)=>({uuid:`doab-${i}`,name:'Book',metadata:[{key:'dc.identifier.uri',value:`https://library.oapen.org/handle/20.500.12657/${i+1}`}]})));
+ } });
+ const page = await f.searchCatalog({source:'doab'});assert.equal(lookups,20);assert.equal(page.books.length,20);assert.equal(page.hasMore,true);
+});
+test('a source change cancels repository follow-ups before publishing partial results',async()=>{
+ const abort=new AbortController();let started;
+ const f=fixture({fetcher:async url=>{
+  if(url.includes('/rest/handle/')){started=true;abort.abort();return response(oapenItem());}
+  return response([{uuid:'doab-1',name:'Book',metadata:[{key:'dc.identifier.uri',value:'https://library.oapen.org/handle/20.500.12657/1'}]}]);
+ }});
+ await assert.rejects(f.searchCatalog({source:'doab'},abort.signal),error=>error.name==='AbortError');assert.equal(started,true);
+});
+
+test('Feedbooks handles optional OpenSearch parameters with the standard one-based start index',async()=>{
+ const f=fixture({fetcher:async url=>{
+  if(url.endsWith('catalog.atom'))return response('<feed><link rel="search" href="https://catalog.feedbooks.com/search.xml"/></feed>');
+  if(url.endsWith('search.xml'))return response('<OpenSearchDescription><Url type="application/atom+xml" template="https://catalog.feedbooks.com/search?q={searchTerms}&amp;start={startIndex?}"/></OpenSearchDescription>');
+  assert.equal(new URL(url).searchParams.get('start'),'1');return response(feed());
+ }});
+ assert.equal((await f.searchCatalog({source:'feedbooks',query:'classic'})).books.length,1);
 });
