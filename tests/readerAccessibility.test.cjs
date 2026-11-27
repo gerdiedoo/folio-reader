@@ -2073,7 +2073,7 @@ test('Library restores and saves three columns and passes the same choice to fre
   const f = libraryHarness({ storage }); f.render(); await flushNative(); let root = f.render();
   assert.equal(labelled(root, '3-column grid').accessibilityState.selected, true);
   assert.equal(elements(root).find(node => node.props?.testID === 'library-collection').props.data[0].length, 3);
-  labelled(root, 'Browse free books').onPress(); root = f.render();
+  labelled(root, 'Browse books').onPress(); root = f.render();
   const browse = elements(root).find(node => node.type === 'BrowseBooksScreen').props;
   assert.equal(browse.gridColumns, 3); browse.onGridColumnsChange(2); browse.onClose(); root = f.render();
   assert.equal(labelled(root, '2-column grid').accessibilityState.selected, true);
@@ -2140,15 +2140,15 @@ test('Library and Notebook filter chips expose a named button and its selected s
   assert.equal(presses, 2);
 });
 
-function catalogHarness({ search, download, parse, save, remember, details, added = {} } = {}) {
+function catalogHarness({ search, download, parse, save, remember, details, added = {}, item: itemPatch = {} } = {}) {
   const calls = { searches: [], downloads: [], details: [], opened: [], saved: [], deleted: [], closed: 0, toasts: [] };
   const h = harness({ runEffects: true, moduleMocks: {
     '../lib/googleBooksKeyNative': { googleBooksKeyStore: () => ({ load: async () => null, save: async key => key, remove: async () => {} }) },
     '../lib/catalog': {
       CATALOG_SOURCES: [{ id: 'gutenberg', label: 'Project Gutenberg' }, { id: 'standard', label: 'Standard Ebooks' }, { id: 'archive', label: 'Internet Archive' }, { id: 'google', label: 'Google Books' }],
       TOPICS: [{ id: 'popular', label: 'Popular', topic: '' }],
-      searchCatalog: (opts, signal) => { calls.searches.push({ opts, signal }); return search ? search(opts, signal) : Promise.resolve({ books: [item], total: 1, hasMore: false }); },
-      loadCatalogBookDetails: (book, signal) => { calls.details.push({ book, signal }); return details ? details(book, signal) : Promise.resolve({ ...book, description: '<p>A classic.</p>', languages: ['en'] }); },
+      searchDiscovery: (opts, signal) => { calls.searches.push({ opts, signal }); return search ? search(opts, signal) : Promise.resolve({ books: [item], total: 1, hasMore: false }); },
+      loadDiscoveryDetails: (book, signal) => { calls.details.push({ book, signal }); return details ? details(book, signal) : Promise.resolve({ ...book, description: '<p>A classic.</p>', languages: ['en'] }); },
       downloadEpub: async (...args) => { calls.downloads.push(args); return download ? download(...args) : 'file:///cache/book.epub'; },
       deleteDownloaded: uri => calls.deleted.push(uri), loadAdded: async () => added,
       rememberAdded: remember ?? (async current => current),
@@ -2156,7 +2156,7 @@ function catalogHarness({ search, download, parse, save, remember, details, adde
     '../lib/epubParser': { parseEpubFile: parse ?? (async () => ({ book: { id: 'epub-new', title: 'A Book', coverUrl: 'file:///embedded/cover.jpg' }, pages: [{ pageNumber: 1 }] })) },
     './BookCover': { BookCover: 'BookCover' }, './ui/Chip': { Chip: 'Chip' }, './ui/ProgressBar': { ProgressBar: 'ProgressBar' },
   } });
-  const item = { id: 'gutenberg-1', title: 'A Book', author: 'An Author', source: 'gutenberg', coverUrl: 'https://www.gutenberg.org/cover.jpg', downloads: 10, subjects: [] };
+  const item = { id: 'gutenberg-1', title: 'A Book', author: 'An Author', source: 'gutenberg', coverUrl: 'https://www.gutenberg.org/cover.jpg', downloads: 10, subjects: [], ...itemPatch };
   const { BrowseBooksScreen, BookRow } = h.load('../src/components/BrowseBooksScreen.tsx');
   const props = { storage: { storageKey: key => `test:${key}`, removeBookFiles: id => calls.deleted.push(id) }, books: [], availableBookIds: [], viewMode: 'grid', gridColumns: 2,
     onViewModeChange: mode => { props.viewMode = mode; }, onGridColumnsChange: count => { props.gridColumns = count; },
@@ -2193,8 +2193,8 @@ test('already-imported Library descriptions use the formatter without rewriting 
 
 test('free-book covers and titles open details without downloading; Back retains catalog search and sort', async () => {
   const f = catalogHarness(); f.render(); await flushNative(); let root = f.render();
-  labelled(root, 'Sort free books by Title').onPress();
-  labelled(root, 'Search free books by title or author').onChangeText('A Book');
+  labelled(root, 'Sort books by Title').onPress();
+  labelled(root, 'Search books by title or author').onChangeText('A Book');
   root = f.render(); fireNativeTimer(f.h, 450); f.render(); await flushNative(); root = f.render();
   const rowProps = freeBookRow(f, root), rowHarness = harness();
   const row = rowHarness.render(f.BookRow.type, rowProps);
@@ -2204,21 +2204,21 @@ test('free-book covers and titles open details without downloading; Back retains
   assert.equal(f.calls.details.length, 1); assert.ok(labelled(root, 'Add A Book to library'));
   assert.match(renderedText(root), /About this book/);
   const catalogList = freeBookList(root);
-  labelled(root, 'Back to free books').onPress(); root = f.render();
+  labelled(root, 'Back to books').onPress(); root = f.render();
   assert.equal(f.calls.closed, 0); assert.equal(freeBookList(root).data, catalogList.data);
   assert.equal(f.calls.searches.length, 2); assert.ok(labelled(root, 'Back to library'));
-  assert.equal(labelled(root, 'Search free books by title or author').value, 'A Book');
-  assert.equal(labelled(root, 'Sort free books by Title').accessibilityState.selected, true);
+  assert.equal(labelled(root, 'Search books by title or author').value, 'A Book');
+  assert.equal(labelled(root, 'Sort books by Title').accessibilityState.selected, true);
   f.h.unmount(); rowHarness.unmount();
 });
 
 test('free books share two/three columns and keep search outside the results list when density changes', async () => {
   const f = catalogHarness(); f.render(); await flushNative(); let root = f.render();
   assert.equal(freeBookList(root).numColumns, 2);
-  labelled(root, 'Search free books by title or author').onChangeText('A Book'); root = f.render();
+  labelled(root, 'Search books by title or author').onChangeText('A Book'); root = f.render();
   labelled(root, '3-column grid').onPress(); root = f.render();
   assert.equal(freeBookList(root).numColumns, 3); assert.equal(freeBookRow(f, root).dense, true);
-  assert.equal(labelled(root, 'Search free books by title or author').value, 'A Book');
+  assert.equal(labelled(root, 'Search books by title or author').value, 'A Book');
   assert.equal(elements(freeBookList(root).ListHeaderComponent).some(node => node.type === 'TextInput'), false);
   assert.ok(freeBookRow(f, root).cardWidth < 120);
   labelled(root, 'List view').onPress(); root = f.render(); assert.equal(freeBookList(root).numColumns, 1);
@@ -2229,7 +2229,7 @@ test('details requests are cancelled on Back; failures offer retry while keeping
   let late;
   const f = catalogHarness({ details: () => new Promise(done => { late = done; }) });
   f.render(); await flushNative(); let root = f.render(); freeBookRow(f, root).onDetails(f.item); root = f.render();
-  labelled(root, 'Back to free books').onPress(); f.render();
+  labelled(root, 'Back to books').onPress(); f.render();
   assert.equal(f.calls.details[0].signal.aborted, true);
   const writes = f.h.stateWrites(); late({ ...f.item, description: 'Late description' }); await flushNative();
   assert.equal(f.h.stateWrites(), writes); f.h.unmount();
@@ -2254,7 +2254,7 @@ test('downloading from free-book details keeps confirmed save, retry and Read be
 
 test('free-book source changes cancel old results; provider errors keep retry and other sources available', async () => {
   let first;
-  const f = catalogHarness({ search: opts => opts.source === 'gutenberg' ? new Promise(done => { first = done; }) : Promise.reject(Error('Source unavailable')) });
+  const f = catalogHarness({ search: opts => opts.source === 'all' ? new Promise(done => { first = done; }) : Promise.reject(Error('Source unavailable')) });
   let root = f.render();
   labelled(root, 'Standard Ebooks').onPress(); root = f.render();
   assert.equal(f.calls.searches[0].signal.aborted, true);
@@ -2948,7 +2948,84 @@ test('an unreadable key cannot be replaced or removed until secure storage is ch
 });
 
 test('informational source notices do not pretend a healthy catalog needs recovery',async()=>{
- const f=catalogHarness({search:async()=>({books:[],hasMore:true,total:null,notice:'Only confirmed EPUBs are shown.',noticeKind:'info'})});f.render();await flushNative();const root=f.render();
+ const f=catalogHarness({search:async()=>({books:[],hasMore:true,total:null,notice:'Only confirmed EPUBs are shown.',noticeKind:'info'})});f.render();await flushNative();labelled(f.render(),'Standard Ebooks').onPress();f.render();await flushNative();const root=f.render();
  const list=freeBookList(root);assert.equal(elements(list.ListHeaderComponent).some(node=>node.props?.accessibilityLabel==='Retry live catalog'),false);
- assert.match(renderedText(list.ListEmptyComponent),/No eligible EPUBs on this page/);assert.equal(list.onEndReached,undefined);f.h.unmount();
+ assert.match(renderedText(list.ListEmptyComponent),/No EPUB listings on this page/);assert.equal(list.onEndReached,undefined);assert.ok(labelled(list.ListFooterComponent,'Load more books'));f.h.unmount();
+});
+
+function epubSourcesHarness(checker, overrides = {}) {
+ const calls = [], gets = [], setups = [];
+ const sources = ['gutenberg','standard','archive','google','oapen','doab','wikisource','feedbooks'].map(id=>({id,label:id}));
+ const h=harness({runEffects:true,moduleMocks:{'../lib/catalog':{CATALOG_SOURCES:sources,
+  checkDiscoverySource:async(book,source,signal,access)=>{calls.push({book,source,signal,access});return checker?checker(book,source,signal,access):{source,state:'not-found',editions:[]};}}}});
+ const {EpubSources}=h.load('../src/components/EpubSources.tsx');
+ const props={book:{id:'openlibrary-OL1W',catalogKind:'work',title:'A Book',author:'An Author',coverUrl:'https://covers.openlibrary.org/b/id/1-L.jpg',subjects:[]},googleKey:null,keyLoading:false,disabled:false,errors:{},onGet:b=>gets.push(b),onSetupGoogle:()=>setups.push(true),...overrides};
+ return {h,props,calls,gets,setups,render:()=>h.render(EpubSources,props)};
+}
+test('EPUB checks run with bounded concurrency and failures stay distinct from no match while other sources finish', async()=>{
+ const pending=new Map();let concurrent=0,max=0;
+ const f=epubSourcesHarness(async(_book,source)=>{concurrent++;max=Math.max(max,concurrent);await new Promise(resolve=>pending.set(source,resolve));concurrent--;return {source,state:source==='standard'?'error':source==='google'?'key-required':'not-found',editions:[],message:source==='standard'?'Source offline':undefined};});
+ f.render();assert.equal(f.calls.length,3);assert.equal(max,3);
+ for(let turn=0;turn<4;turn++){for(const done of pending.values())done();pending.clear();await flushNative();}
+ const root=f.render();assert.equal(f.calls.length,8);assert.equal(max,3);assert.match(renderedText(root),/Could not check this source/);assert.match(renderedText(root),/No matching EPUB found in this check/);
+ assert.ok(labelled(root,'Retry EPUB check for standard'));labelled(root,'Google Books setup').onPress();assert.equal(f.setups.length,1);
+ assert.equal(elements(root).some(n=>n.props?.accessibilityLabel?.startsWith('Download A Book')),false);
+ f.h.unmount();for(const done of pending.values())done();
+});
+test('source download buttons emit the selected edition and Open Library cover, retain errors, and block during a transfer',async()=>{
+ const edition={id:'standard-a',source:'standard',title:'A Book',author:'An Author',coverUrl:'https://standardebooks.org/source.jpg',subjects:[],description:'Source description'};
+ const f=epubSourcesHarness(async(_book,source)=>({source,state:source==='standard'?'available':source==='google'?'key-required':'not-found',editions:source==='standard'?[edition]:[]}));
+ f.render();await flushNative();let root=f.render();labelled(root,'Download A Book from standard').onPress();assert.equal(f.gets.length,1);
+ assert.equal(f.gets[0].id,'standard-a');assert.equal(f.gets[0].discoveryWorkId,'openlibrary-OL1W');assert.equal(f.gets[0].coverUrl,f.props.book.coverUrl);assert.equal(f.gets[0].useDiscoveryCover,true);
+ f.props.errors={'standard-a':'Transfer failed'};root=f.render();assert.match(renderedText(root),/Transfer failed/);
+ f.props.disabled=true;root=f.render();const button=labelled(root,'Download A Book from standard');assert.equal(button.disabled,true);button.onPress();assert.equal(f.gets.length,1);
+ labelled(root,'Google Books setup').onPress();assert.equal(f.setups.length,0);
+ f.props.disabled=false;f.props.book={...f.props.book,coverUrl:''};root=f.render();labelled(root,'Download A Book from standard').onPress();assert.equal(f.gets[1].coverUrl,'');f.h.unmount();
+});
+test('retry checks one provider and a late result cannot update a different book or an unmounted detail screen',async()=>{
+ let late;
+ const f=epubSourcesHarness(async(_book,source)=>({source,state:'error',editions:[],message:'Offline'}));
+ f.render();await flushNative();let root=f.render();const count=f.calls.length;labelled(root,'Retry EPUB check for standard').onPress();await flushNative();root=f.render();assert.equal(f.calls.length,count+1);assert.equal(f.calls.at(-1).source,'standard');f.h.unmount();
+ const pending=epubSourcesHarness((_book,source)=>new Promise(resolve=>{if(!late)late=()=>resolve({source,state:'not-found',editions:[]});}));pending.render();const old=pending.calls[0];
+ pending.props.book={...pending.props.book,id:'openlibrary-OL2W'};pending.render();assert.equal(old.signal.aborted,true);
+ const before=pending.h.stateWrites();late();await flushNative();assert.equal(pending.h.stateWrites(),before);
+ pending.h.unmount();const writes=pending.h.stateWrites();assert.ok(pending.calls.every(call=>call.signal.aborted));await flushNative();assert.equal(pending.h.stateWrites(),writes);
+});
+test('changing Google access aborts older source checks and exposes key management for rejected credentials',async()=>{
+ let late;
+ const f=epubSourcesHarness(async(_book,source,_signal,access)=>{
+  if(source==='google'&&access.googleBooksKey==='reader-one-synthetic-key')await new Promise(resolve=>{late=resolve;});
+  return {source,state:source==='google'?'error':'not-found',editions:[],message:'Authorization could not be confirmed'};
+ },{googleKey:'reader-one-synthetic-key'});
+ f.render();await flushNative();let root=f.render();
+ const first=f.calls.find(call=>call.source==='google');f.props.googleKey='reader-two-synthetic-key';f.render();await flushNative();root=f.render();assert.equal(first.signal.aborted,true);assert.ok(labelled(root,'Google Books setup'));late();await flushNative();
+ assert.equal(f.calls.filter(call=>call.source==='google').at(-1).access.googleBooksKey,'reader-two-synthetic-key');assert.doesNotMatch(renderedText(root),/reader-one-synthetic|reader-two-synthetic/);f.h.unmount();
+});
+test('general book details expose source choices without offering a metadata record as a download',async()=>{
+ const f=catalogHarness({item:{id:'openlibrary-OL1W',source:'openlibrary',catalogKind:'work',openLibraryWorkId:'OL1W',coverUrl:'',downloads:0}});
+ f.render();await flushNative();let root=f.render();assert.equal(f.calls.searches[0].opts.source,'all');assert.equal(labelled(root,'All books').accessibilityState.selected,true);
+ freeBookRow(f,root).onDetails(f.item);f.render();await flushNative();root=f.render();
+ assert.equal(f.calls.downloads.length,0);assert.equal(elements(root).some(n=>n.props?.accessibilityLabel==='Add A Book to library'),false);
+ assert.ok(elements(root).find(n=>n.type?.name==='EpubSources'));assert.equal(elements(root).find(n=>n.type==='BookCover').props.fallback,'typographic');
+ labelled(root,'Back to books').onPress();root=f.render();assert.ok(labelled(root,'All books'));f.h.unmount();
+});
+test('downloading a chosen source links both the work and edition and applies Open Library artwork before embedded art',async()=>{
+ for(const coverUrl of ['https://covers.openlibrary.org/b/id/1-L.jpg','']){
+  const f=catalogHarness({item:{id:'openlibrary-OL1W',source:'openlibrary',catalogKind:'work',openLibraryWorkId:'OL1W',coverUrl,downloads:0}});
+  f.render();await flushNative();let root=f.render();freeBookRow(f,root).onDetails(f.item);f.render();await flushNative();root=f.render();
+  const sources=elements(root).find(n=>n.type?.name==='EpubSources').props;
+  sources.onGet({id:'standard-a',source:'standard',title:'A Book',author:'An Author',subjects:[],description:'A description',discoveryWorkId:f.item.id,useDiscoveryCover:true,coverUrl});
+  await flushNative();fireNativeTimer(f.h,60);await flushNative();root=f.render();
+  assert.equal(f.calls.downloads[0][0].source,'standard');assert.equal(f.calls.saved.length,1);assert.equal(f.calls.saved[0].book.coverStyle,coverUrl?'image':'typographic');
+  if(coverUrl)assert.equal(f.calls.saved[0].book.coverUrl,coverUrl);
+  assert.equal(freeBookRow(f,root).status,'added');labelled(root,'Read A Book').onPress();assert.deepEqual(f.calls.opened,['epub-new']);f.h.unmount();
+ }
+});
+test('catalog cover images fall back to typography on missing/failed art and recover when the Open Library URL changes',()=>{
+ const h=harness({runEffects:true,moduleMocks:{'expo-linear-gradient':{LinearGradient:'LinearGradient'}}});const {BookCover}=h.load('../src/components/BookCover.tsx');
+ let props={book:{title:'A Book',author:'An Author',coverUrl:'',coverAlt:'Cover'},style:'image',fallback:'typographic',inLibrary:true};
+ let root=h.render(BookCover,props);assert.equal(elements(root).some(n=>n.type==='Image'||n.type==='CoverIllustration'),false);assert.match(renderedText(root),/A Book/);
+ props={...props,book:{...props.book,coverUrl:'https://covers.openlibrary.org/b/id/1-L.jpg'}};root=h.render(BookCover,props);assert.ok(elements(root).find(n=>n.type==='Image'));
+ elements(root).find(n=>n.type==='Image').props.onError();root=h.render(BookCover,props);assert.equal(elements(root).some(n=>n.type==='Image'||n.type==='CoverIllustration'),false);assert.ok(labelled(root,'In your library'));
+ props={...props,book:{...props.book,coverUrl:'https://covers.openlibrary.org/b/id/2-L.jpg'}};root=h.render(BookCover,props);assert.ok(elements(root).find(n=>n.type==='Image'));h.unmount();
 });

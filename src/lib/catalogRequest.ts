@@ -17,8 +17,8 @@ export class CatalogError extends Error {
 }
 export function catalogCancelled(): Error { const error = new Error('Download cancelled.'); error.name = 'AbortError'; return error; }
 /** A deadline covers headers AND body, even if the transport ignores abort. */
-export async function catalogRequest(url: string, format: 'json' | 'text', signal?: AbortSignal): Promise<unknown> {
-  for (let attempt = 0; attempt < 2; attempt++) {
+export async function catalogRequest(url: string, format: 'json' | 'text', signal?: AbortSignal, attempts = 2): Promise<unknown> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     if (signal?.aborted) throw catalogCancelled();
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
@@ -40,7 +40,7 @@ export async function catalogRequest(url: string, format: 'json' | 'text', signa
     } catch (error) {
       if (signal?.aborted) throw catalogCancelled();
       const failure = error instanceof CatalogError ? error : new CatalogError('network');
-      if (attempt === 0 && (failure.kind === 'network' || (failure.kind === 'service' && (failure.status ?? 0) >= 500))) continue;
+      if (attempt + 1 < attempts && (failure.kind === 'network' || (failure.kind === 'service' && (failure.status ?? 0) >= 500))) continue;
       throw failure;
     } finally {
       clearTimeout(timer!);

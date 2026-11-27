@@ -199,3 +199,15 @@ helper scripts. Its package and signature are verified again. Changed/unknown
 inputs or an unavailable artifact fall back to compilation. Manual main builds
 always compile afresh to pick up current production environment values. Workflow
 summaries identify application-source and verification-source commits separately.
+
+## Unified discovery — 27 November 2026
+
+The development catalog now starts with general Open Library works, including
+books without EPUBs. EPUB-source chips filter provider listings within the same
+browse screen; a book's details separately check compatible editions from each
+source and offer source-specific downloads. Open Library images are preferred,
+with typographic fallback for missing/failed images. This supersedes the earlier
+separate-source discovery and illustrated catalog fallback described above.
+
+See [Unified book discovery](unified-catalog.md) for matching, privacy, pagination,
+source-filter semantics, recovery behavior and validation limits.

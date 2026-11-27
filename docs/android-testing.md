@@ -1077,3 +1077,33 @@ a fresh APK; it cannot be tested by reusing the previous signed APK.
 7. With TalkBack and large text enabled, enter selection using the Select book
    accessibility action, check/uncheck books, inspect the count and confirmation,
    cancel and exit. Verify focus order and readable, reachable toolbar actions.
+
+## Unified book catalog and EPUB choices
+
+1. Open Browse books. Confirm All books is selected and that contemporary titles
+   can appear without a download button or EPUB availability claim on their cards.
+2. Search by title and author, paginate, change columns/list view and return from
+   details. Confirm search text, source filter and grid choice remain intact.
+3. Open a familiar public-domain title. Read its description, wait for individual
+   EPUB sources, and select a named source/edition. Verify the chosen EPUB imports,
+   its Open Library cover takes precedence, and the work's Library badge and Read
+   action appear after the save. Try another provider for the same work.
+4. Open a recent copyrighted title. Confirm readable metadata remains available
+   even if no free EPUB is found. A source failure must say it could not be checked,
+   rather than asserting that no EPUB exists anywhere.
+5. Filter by Gutenberg, Standard Ebooks, Archive and the other providers. Verify
+   results belong to that source, carry Open Library metadata where matched, and
+   retain typography covers for unmatched records. Check pagination after an empty
+   provider page and retry recovery after a metadata lookup fails.
+6. Exercise Google key setup from details, including missing/unreadable/invalid
+   keys. Replace/remove the key while checks are pending. Older responses must not
+   update the current reader or offer an outdated download.
+7. Test a missing Open Library cover and a failed image URL. Both must show title
+   and author on typography, preserving the Library badge and details navigation.
+8. Close details or switch books during slow source checks; old rows must not
+   update the new view. During a download, the global progress panel remains
+   available when returning to results. Cancel it or leave Browse and verify no
+   late import. Preparing must wait for its save. Retry a failed edition, then
+   reopen after restart to verify saved text.
+9. With TalkBack and large text, inspect cover/title actions, filter states,
+   source-check announcements, source downloads, key setup, Cancel and Back.

@@ -19,6 +19,7 @@ export const CLOTH: Record<ClothTint, { bg: string; fg: string }> = {
 interface BookCoverProps {
   book: Pick<Book, 'title' | 'author' | 'coverUrl' | 'coverAlt' | 'coverTint'>;
   style: 'image' | 'typographic';
+  fallback?: 'illustration' | 'typographic';
   /** Overrides cover URL (used by the live preview in the cover editor). */
   uriOverride?: string;
   tint?: ClothTint;
@@ -45,6 +46,7 @@ export const SpineShadow: React.FC<{ width?: number }> = ({ width = 10 }) => (
 export const BookCover: React.FC<BookCoverProps> = ({
   book,
   style,
+  fallback = 'illustration',
   uriOverride,
   tint,
   size = 'regular',
@@ -59,8 +61,8 @@ export const BookCover: React.FC<BookCoverProps> = ({
 
   useEffect(() => setFailedUri(null), [uri]);
 
-  const showTypographic = style === 'typographic';
   const showIllustration = !uri || failedUri === uri;
+  const showTypographic = style === 'typographic' || fallback === 'typographic' && showIllustration;
   const compact = size === 'compact';
   const library = variant === 'library';
   const palette = CLOTH[normalizeCoverTint(tint ?? book.coverTint)];

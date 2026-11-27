@@ -676,17 +676,17 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         <View style={styles.emptyCard}>
           <Icon name="local_library" size={36} color={colors.secondaryFixedDim} />
           <Text accessibilityRole="header" style={styles.emptyTitle}>{books.length || recoveryBooks.length ? 'Choose your next read' : 'Your library is empty'}</Text>
-          <Text style={styles.emptyBody}>{books.length || recoveryBooks.length ? 'Open a book below to start reading, or re-import an EPUB whose text is missing.' : 'Browse free books or import an EPUB from your device to start reading.'}</Text>
+          <Text style={styles.emptyBody}>{books.length || recoveryBooks.length ? 'Open a book below to start reading, or re-import an EPUB whose text is missing.' : 'Browse books or import an EPUB from your device to start reading.'}</Text>
         </View>
       ))}
 
       {/* Get books: browse the free catalog, or import a file */}
       <View style={styles.bookSourceActions}>
-        <Pressable onPress={() => { if (libraryStatus === 'ready') setBrowseOpen(true); }} disabled={libraryStatus !== 'ready'} accessibilityRole="button" accessibilityLabel="Browse free books" accessibilityState={{ disabled: libraryStatus !== 'ready' }} style={styles.browseBtn}>
+        <Pressable onPress={() => { if (libraryStatus === 'ready') setBrowseOpen(true); }} disabled={libraryStatus !== 'ready'} accessibilityRole="button" accessibilityLabel="Browse books" accessibilityState={{ disabled: libraryStatus !== 'ready' }} style={styles.browseBtn}>
           <Icon name="explore" size={20} color="#fff" />
           <View style={{ flex: 1 }}>
-            <Text style={styles.browseTitle}>Browse free books</Text>
-            <Text style={styles.browseSub}>Explore classics</Text>
+            <Text style={styles.browseTitle}>Browse books</Text>
+            <Text style={styles.browseSub}>Explore the catalog</Text>
           </View>
           <Icon name="chevron_right" size={20} color="#fff" />
         </Pressable>
