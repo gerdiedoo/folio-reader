@@ -110,3 +110,30 @@ test('Open Library request slots are paced and cached without caching cancelled 
  assert.deepEqual(await request('third'),{key:'third'});assert.equal(calls.length,2);
  now+=120001;await request('first');assert.equal(calls.length,3);
 });
+
+test('blank browsing uses a small page and simple edition sort with spellchecking disabled',()=>{
+ const blank=new URL(discoverySearchUrl('','',1));assert.equal(blank.searchParams.get('limit'),'18');assert.equal(blank.searchParams.get('sort'),'editions');assert.equal(blank.searchParams.get('spellcheck_count'),'0');
+ const query=new URL(discoverySearchUrl('Frankenstein','',1));assert.equal(query.searchParams.has('sort'),false);assert.equal(query.searchParams.get('spellcheck_count'),'0');
+});
+test('cached Open Library results appear before refresh and survive a timeout with an explicit retry notice',async()=>{
+ let fail;const cached={books:[work()],hasMore:true,total:100};let preview,writes=0;
+ const f=fixture({metadata:async()=>new Promise((_resolve,reject)=>{fail=reject;})});
+ const promise=f.search({cache:{read:async()=>({page:cached,savedAt:Date.UTC(2026,10,26)}),write:async()=>{writes++;}},onCached:page=>{preview=page;}});await flush();assert.equal(preview.books[0].id,'openlibrary-OL1W');assert.match(preview.notice,/checking for updates/);
+ fail(new CatalogError('timeout'));const result=await promise;assert.equal(result.books[0].id,'openlibrary-OL1W');assert.equal(result.noticeKind,'recovery');assert.match(result.notice,/Showing saved books/);assert.equal(writes,0);
+});
+test('successful refresh replaces saved results and optional cache write failure cannot fail a live search',async()=>{
+ const f=fixture({metadata:async()=>metadata([doc(2)])});let preview,written;
+ const result=await f.search({cache:{read:async()=>({page:{books:[work()],hasMore:false,total:1},savedAt:1}),write:async(url,page)=>{written=page;throw Error('Disk full');}},onCached:page=>{preview=page;}});await flush();
+ assert.equal(preview.books[0].id,'openlibrary-OL1W');assert.equal(result.books[0].id,'openlibrary-OL2W');assert.equal(written.books[0].id,'openlibrary-OL2W');assert.equal(result.notice,undefined);
+});
+test('no cache means a live timeout stays an error, and cancellation cannot display stale saved data',async()=>{
+ const f=fixture({metadata:async()=>{throw new CatalogError('timeout');}});await assert.rejects(f.search({}),{kind:'timeout'});
+ let release,previews=0;const ctrl=new AbortController();const pending=f.search({cache:{read:async()=>new Promise(resolve=>{release=resolve;}),write:async()=>{}},onCached:()=>{previews++;}},ctrl.signal);
+ await flush();ctrl.abort();release({page:{books:[work()],hasMore:false,total:1},savedAt:1});await assert.rejects(pending,{name:'AbortError'});assert.equal(previews,0);
+});
+test('Open Library uses its own 25-second deadline and retries transient network failures in paced slots',async()=>{
+ let now=0,calls=0;const timers=[];
+ const request=createOpenLibraryRequest(async(...args)=>{calls++;assert.equal(args[3],1);assert.equal(args[4],25000);if(calls===1)throw new CatalogError('network');return 'ok';},()=>now,(fn,ms)=>{timers.push({fn,ms});return 1;});
+ const pending=request('network');await flush();assert.equal(calls,1);assert.equal(timers[0].ms,1100);now+=1100;timers.shift().fn();assert.equal(await pending,'ok');assert.equal(calls,2);
+ for(const kind of ['timeout','rate','invalid']){let attempts=0;const one=createOpenLibraryRequest(async()=>{attempts++;throw new CatalogError(kind);});await assert.rejects(one(kind),{kind});assert.equal(attempts,1);}
+});

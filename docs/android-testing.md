@@ -1107,3 +1107,25 @@ a fresh APK; it cannot be tested by reusing the previous signed APK.
    reopen after restart to verify saved text.
 9. With TalkBack and large text, inspect cover/title actions, filter states,
    source-check announcements, source downloads, key setup, Cancel and Back.
+
+
+## Open Library timeout recovery and compact header
+
+1. Open Browse books. Confirm the top area has a compact title/search, one source
+   row and a single row for subject, sort and view controls. Chip faces should have
+   small rounded corners, including the shared Library filters.
+2. Open and cancel Subjects and Sort with the keyboard up. Search text must stay
+   intact. Select a subject and sort option, return from details, and verify the
+   choices remain selected. Repeat with large system text and TalkBack.
+3. Load the All books page online, close Browse, then reopen it in airplane mode.
+   The previously saved page should appear while refresh is attempted. After a
+   failed refresh, it must remain visible with a saved-results date and Retry.
+   This optional cache needs a previously successful page and working storage.
+4. Search different titles quickly, switch providers, or change account during a
+   slow refresh. Saved results must match the current query/account; an old reply
+   must not replace the current view. No metadata-only card should claim its EPUB
+   is saved or readable on this device.
+5. Restore connectivity and retry. Verify live results replace the saved page.
+   If Open Library itself remains unavailable, the message should identify it and
+   offer retry, a specific-title search or an EPUB source. Compare the same
+   one-result search in the phone browser when diagnosing a continuing timeout.

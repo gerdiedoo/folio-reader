@@ -9,7 +9,8 @@ to its text. No API contains every published book.
 The All books filter queries Open Library's work search without public-scan or
 EPUB-only constraints. Results include title, authors, first publication year,
 edition count, languages and Archive identifiers where supplied. Metadata is
-paged in groups of 24. Newest published uses Open Library's `new` sort (first
+paged in groups of 18. Empty-query browsing uses an edition-count sort, with
+spellchecking disabled. Newest published uses Open Library's `new` sort (first
 publication year); title/author sort only the loaded results, as labeled.
 
 EPUB source chips query the selected provider's existing catalog, then batch-match
@@ -78,12 +79,22 @@ Duplicate-title confirmation, preparation guards and account isolation remain.
 ## Network behavior and validation
 
 Anonymous Open Library metadata requests are serialized, start at least 1.1 seconds
-apart, and use a bounded two-minute cache of public metadata. Each request has the
-existing transport deadline and one attempt per slot; explicit retries are also
-paced. Provider-filter enrichment batches eight titles per request instead of
-sending a lookup for every cover. No full catalog is downloaded or maintained.
+apart, and use a bounded two-minute in-memory cache. Open Library gets a 25-second
+request deadline; the other providers keep their ten-second default. Network/5xx
+failures retry once in a new paced slot. Timeouts, invalid responses and rate
+limits require an explicit retry. Provider-filter enrichment batches eight titles
+per request, with spelling suggestions disabled. No full catalog is downloaded.
 
-606 regression tests, TypeScript and Android/iOS Hermes exports pass. Automated
+Successfully loaded All books pages also use an optional account-scoped device
+cache: up to 12 pages, expiring after seven days. A saved page appears immediately
+while refreshing; an unsuccessful refresh retains those books with a dated saved
+results notice and Retry. Query, subject, page and server sort have distinct cache
+keys. Switching searches or accounts cannot display an older in-flight result.
+The cache stores only sanitized Open Library metadata, not provider EPUB links,
+Google keys, descriptions, availability results or Library ownership. Cache errors
+do not turn a live success into a failed catalog load.
+
+622 regression tests, TypeScript and Android/iOS Hermes exports pass. Automated
 coverage includes contemporary works without EPUBs, covers and failed images,
 provider-filter matching/deduplication, incorrect author/volume rejection,
 independent availability/error/retry states, cancellation and reader-key changes,
@@ -95,3 +106,20 @@ Open Library query fields and sorting were checked against its public work-searc
 implementation; fixture tests establish contracts, not service uptime or current
 catalog coverage. Live book search, source downloads, native layout and screen
 reader behavior still need the phone checklist. No Supabase migration is needed.
+
+
+## Compact browse controls and timeout recovery — 27 November 2026
+
+The reported timeout used the generic ten-second deadline on a broad, unsorted
+catalog request. The client now uses the smaller page, explicit browse sort,
+reduced projection, no spelling suggestions, separate deadline, paced transient
+retry and saved-page recovery described above. These changes reduce avoidable
+request work and preserve useful results; they cannot guarantee upstream uptime.
+
+The top area keeps one source-chip row. Subjects and sort choices open scrollable
+bottom sheets from compact controls beside the column/list toggle. The repeated
+subtitle/source heading and permanent subjects/sort strips are removed. Shared
+Library/catalog chips use 28-point rounded rectangular faces (radius 8) inside
+48-point touch targets. Large system text wraps the toolbar. Sort/subject sheets
+have explicit bounded heights, and closing them preserves the current query.
+The native journey also opens both menus and verifies retained search text.

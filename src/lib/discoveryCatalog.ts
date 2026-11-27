@@ -3,6 +3,7 @@ import type { CatalogAccess } from './extraCatalog';
 import { catalogCancelled, CatalogError } from './catalogRequest';
 import { discoveryMatchUrl, discoverySearchUrl, discoveryWorkDetails, matchingDiscoveryWork, mergeDiscoveryBooks, parseDiscoveryPage } from './openLibraryMetadata';
 import { requestOpenLibrary } from './openLibraryRequest';
+import type { DiscoveryPageCache } from './discoveryPageCache';
 
 export type DiscoveryFilter = 'all' | Exclude<CatalogSource, 'openlibrary'>;
 export interface SourceAvailability {
@@ -21,13 +22,25 @@ interface Dependencies {
 export function createDiscoveryCatalog(deps: Dependencies) {
   const metadata = deps.metadata ?? requestOpenLibrary;
   return {
-    async search(opts: { source?: DiscoveryFilter; query?: string; topic?: string; page?: number; sort?: CatalogSort; googleBooksKey?: string | null }, signal?: AbortSignal): Promise<CatalogPage> {
+    async search(opts: { source?: DiscoveryFilter; query?: string; topic?: string; page?: number; sort?: CatalogSort; googleBooksKey?: string | null; cache?: DiscoveryPageCache; onCached?: (page: CatalogPage) => void }, signal?: AbortSignal): Promise<CatalogPage> {
       if (signal?.aborted) throw catalogCancelled();
       const page = Number.isSafeInteger(opts.page) && opts.page! > 0 ? opts.page! : 1;
       if (!opts.source || opts.source === 'all') {
-        const value = await metadata(discoverySearchUrl(opts.query ?? '', opts.topic ?? '', page, opts.sort), signal);
+        const url = discoverySearchUrl(opts.query ?? '', opts.topic ?? '', page, opts.sort);
+        const saved = await opts.cache?.read(url).catch(() => undefined);
         if (signal?.aborted) throw catalogCancelled();
-        return parseDiscoveryPage(value, page);
+        if (saved) opts.onCached?.({ ...saved.page, noticeKind: 'info', notice: 'Showing saved Open Library results while checking for updates…' });
+        try {
+          const value = await metadata(url, signal);
+          if (signal?.aborted) throw catalogCancelled();
+          const result = parseDiscoveryPage(value, page);
+          void opts.cache?.write(url, result).catch(() => undefined);
+          return result;
+        } catch (error) {
+          if (signal?.aborted) throw catalogCancelled();
+          if (saved) return { ...saved.page, noticeKind: 'recovery', notice: `Open Library could not refresh these results. Showing saved books from ${new Date(saved.savedAt).toLocaleDateString()}. Retry to check for updates.` };
+          throw error;
+        }
       }
       const provider = await deps.search({ ...opts, source: opts.source, page }, signal);
       if (signal?.aborted) throw catalogCancelled();

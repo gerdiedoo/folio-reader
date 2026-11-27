@@ -2144,9 +2144,10 @@ function catalogHarness({ search, download, parse, save, remember, details, adde
   const calls = { searches: [], downloads: [], details: [], opened: [], saved: [], deleted: [], closed: 0, toasts: [] };
   const h = harness({ runEffects: true, moduleMocks: {
     '../lib/googleBooksKeyNative': { googleBooksKeyStore: () => ({ load: async () => null, save: async key => key, remove: async () => {} }) },
+    '../lib/catalogRequest': { CatalogError: require('./loadTypeScript.cjs').loadTypeScript('./src/lib/catalogRequest.ts').CatalogError },
     '../lib/catalog': {
       CATALOG_SOURCES: [{ id: 'gutenberg', label: 'Project Gutenberg' }, { id: 'standard', label: 'Standard Ebooks' }, { id: 'archive', label: 'Internet Archive' }, { id: 'google', label: 'Google Books' }],
-      TOPICS: [{ id: 'popular', label: 'Popular', topic: '' }],
+      TOPICS: [{ id: 'popular', label: 'Popular', topic: '' }, { id: 'fiction', label: 'Fiction', topic: 'fiction' }],
       searchDiscovery: (opts, signal) => { calls.searches.push({ opts, signal }); return search ? search(opts, signal) : Promise.resolve({ books: [item], total: 1, hasMore: false }); },
       loadDiscoveryDetails: (book, signal) => { calls.details.push({ book, signal }); return details ? details(book, signal) : Promise.resolve({ ...book, description: '<p>A classic.</p>', languages: ['en'] }); },
       downloadEpub: async (...args) => { calls.downloads.push(args); return download ? download(...args) : 'file:///cache/book.epub'; },
@@ -2193,7 +2194,9 @@ test('already-imported Library descriptions use the formatter without rewriting 
 
 test('free-book covers and titles open details without downloading; Back retains catalog search and sort', async () => {
   const f = catalogHarness(); f.render(); await flushNative(); let root = f.render();
+  labelled(root, 'Sort books').onPress(); root = f.render();
   labelled(root, 'Sort books by Title').onPress();
+  root = f.render();
   labelled(root, 'Search books by title or author').onChangeText('A Book');
   root = f.render(); fireNativeTimer(f.h, 450); f.render(); await flushNative(); root = f.render();
   const rowProps = freeBookRow(f, root), rowHarness = harness();
@@ -2208,7 +2211,7 @@ test('free-book covers and titles open details without downloading; Back retains
   assert.equal(f.calls.closed, 0); assert.equal(freeBookList(root).data, catalogList.data);
   assert.equal(f.calls.searches.length, 2); assert.ok(labelled(root, 'Back to library'));
   assert.equal(labelled(root, 'Search books by title or author').value, 'A Book');
-  assert.equal(labelled(root, 'Sort books by Title').accessibilityState.selected, true);
+  assert.equal(labelled(root, 'Sort books').accessibilityValue.text, 'Title');
   f.h.unmount(); rowHarness.unmount();
 });
 
@@ -3028,4 +3031,40 @@ test('catalog cover images fall back to typography on missing/failed art and rec
  props={...props,book:{...props.book,coverUrl:'https://covers.openlibrary.org/b/id/1-L.jpg'}};root=h.render(BookCover,props);assert.ok(elements(root).find(n=>n.type==='Image'));
  elements(root).find(n=>n.type==='Image').props.onError();root=h.render(BookCover,props);assert.equal(elements(root).some(n=>n.type==='Image'||n.type==='CoverIllustration'),false);assert.ok(labelled(root,'In your library'));
  props={...props,book:{...props.book,coverUrl:'https://covers.openlibrary.org/b/id/2-L.jpg'}};root=h.render(BookCover,props);assert.ok(elements(root).find(n=>n.type==='Image'));h.unmount();
+});
+
+test('compact book controls keep subjects and sorting in menus with selected values and retain search on cancel',async()=>{
+ const f=catalogHarness();f.render();await flushNative();let root=f.render();
+ assert.equal(elements(root).some(node=>node.props?.accessibilityLabel==='Sort books by Title'),false);
+ assert.equal(elements(root).some(node=>node.props?.accessibilityLabel==='Fiction'),false);
+ assert.equal(labelled(root,'Sort books').accessibilityValue.text,'Most editions');
+ assert.equal(labelled(root,'Choose book subjects').accessibilityValue.text,'All subjects');
+ labelled(root,'Search books by title or author').onChangeText('shelley');root=f.render();
+ labelled(root,'Sort books').onPress();root=f.render();assert.equal(labelled(root,'Sort books').accessibilityState.expanded,true);
+ assert.ok(labelled(root,'Sort books by Title'));labelled(root,'Close book filters').onPress();root=f.render();assert.equal(labelled(root,'Search books by title or author').value,'shelley');
+ labelled(root,'Choose book subjects').onPress();root=f.render();assert.ok(labelled(root,'Fiction'));root.props.onRequestClose();root=f.render();assert.equal(labelled(root,'Choose book subjects').accessibilityState.expanded,false);
+ assert.equal(labelled(root,'Search books by title or author').value,'shelley');f.h.unmount();
+});
+test('subject and sort selection expose full options and large text gives controls space to wrap',async()=>{
+ const f=catalogHarness();f.h.native.useWindowDimensions=()=>({width:320,height:640,fontScale:1.6});f.render();await flushNative();let root=f.render();
+ const sort=labelled(root,'Sort books');assert.equal(sort.style[0].minHeight,48);assert.equal(sort.style[1].flexBasis,'44%');
+ labelled(root,'Choose book subjects').onPress();root=f.render();const menu=elements(root).find(node=>node.type==='ModalShell');assert.ok(menu.props.cardStyle.height<=640*.75);
+ labelled(root,'Fiction').onPress();root=f.render();await flushNative();root=f.render();assert.equal(f.calls.searches.at(-1).opts.topic,'fiction');assert.equal(labelled(root,'Choose book subjects').accessibilityValue.text,'Fiction');
+ labelled(root,'Sort books').onPress();root=f.render();assert.ok(labelled(root,'Sort books by Title'));labelled(root,'Sort books by Title').onPress();root=f.render();assert.equal(labelled(root,'Sort books').accessibilityValue.text,'Title');f.h.unmount();
+});
+test('saved search results can render while a refresh is pending and stale callbacks cannot replace a newer query',async()=>{
+ const requests=[];const f=catalogHarness({search:(opts,signal)=>new Promise(resolve=>requests.push({opts,signal,resolve}))});f.render();let root=f.render();
+ requests[0].opts.onCached({books:[{...f.item,id:'openlibrary-OL1W'}],hasMore:false,total:1,notice:'Showing saved results while refreshing.',noticeKind:'info'});root=f.render();assert.equal(freeBookList(root).data[0].id,'openlibrary-OL1W');
+ labelled(root,'Search books by title or author').onChangeText('another');f.render();fireNativeTimer(f.h,450);f.render();assert.equal(requests[0].signal.aborted,true);
+ const before=f.h.stateWrites();requests[0].opts.onCached({books:[f.item],hasMore:false,total:1});assert.equal(f.h.stateWrites(),before);
+ requests[1].resolve({books:[{...f.item,id:'openlibrary-OL2W'}],hasMore:false,total:1});await flushNative();root=f.render();assert.equal(freeBookList(root).data[0].id,'openlibrary-OL2W');f.h.unmount();
+});
+test('Open Library timeout recovery stays actionable and saved results show a refresh action instead of a fatal empty state',async()=>{
+ const {CatalogError}=require('./loadTypeScript.cjs').loadTypeScript('./src/lib/catalogRequest.ts');const f=catalogHarness({search:async()=>{throw new CatalogError('timeout');}});f.render();await flushNative();let root=f.render();
+ assert.match(renderedText(freeBookList(root).ListEmptyComponent),/Open Library took too long/);assert.ok(labelled(freeBookList(root).ListEmptyComponent,'Retry catalog'));assert.ok(labelled(root,'Project Gutenberg'));f.h.unmount();
+ const saved=catalogHarness({search:async()=>({books:[{id:'openlibrary-OL1W',source:'openlibrary',catalogKind:'work',title:'Saved book',author:'Author',subjects:[],coverUrl:'',epubUrl:''}],hasMore:false,total:1,notice:'Open Library could not refresh. Showing saved books.',noticeKind:'recovery'})});saved.render();await flushNative();root=saved.render();assert.equal(freeBookList(root).data.length,1);assert.ok(labelled(root,'Retry live catalog'));saved.h.unmount();
+});
+test('shared shelf chips use compact rounded rectangles inside full touch targets',()=>{
+ const h=harness();const {renderShelfChip}=h.load('../src/components/ui/ShelfControls.tsx');const chip=renderShelfChip({primaryContainer:'#111',surfaceContainer:'#eee',onPrimaryContainer:'#fff',onSurface:'#111'},'Fiction',true,()=>{});
+ assert.equal(chip.props.style.minHeight,48);const face=elements(chip).find(node=>node.type==='View');assert.equal(face.props.style[0].borderRadius,8);assert.ok(face.props.style[0].minHeight<=30);assert.equal(chip.props.accessibilityState.selected,true);
 });

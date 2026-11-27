@@ -24,13 +24,16 @@ import { Book, BookContentPage } from '../types';
 import { BookCover } from './BookCover';
 import { BookDescription } from './BookDescription';
 import { Icon } from './ui/Icon';
-import { renderShelfChip, renderShelfSort, renderShelfViewOptions, shelfStyles } from './ui/ShelfControls';
+import { renderShelfChip, renderShelfViewOptions, shelfStyles } from './ui/ShelfControls';
 import { ProgressBar } from './ui/ProgressBar';
 import { GoogleBooksSetup } from './GoogleBooksSetup';
 import { googleBooksKeyStore } from '../lib/googleBooksKeyNative';
 import type { DiscoveryFilter } from '../lib/discoveryCatalog';
 import { mergeDiscoveryBooks } from '../lib/openLibraryMetadata';
 import { EpubSources, EPUB_SOURCES } from './EpubSources';
+import { createDiscoveryPageCache } from '../lib/discoveryPageCache';
+import { ModalShell } from './ui/ModalShell';
+import { CatalogError } from '../lib/catalogRequest';
 
 interface Props {
   storage: LocalStore;
@@ -171,7 +174,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   const palette = useAppTheme();
   const styles = useMemo(() => createStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
-  const { width, fontScale } = useWindowDimensions();
+  const { width, height, fontScale } = useWindowDimensions();
   const layout = bookShelfLayout(width, fontScale, gridColumns);
   const columns = viewMode === 'grid' ? layout.columns : 1;
   const cardWidth = layout.cardWidth;
@@ -194,6 +197,8 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   const [query, setQuery] = useState('');
   const [topicId, setTopicId] = useState('popular');
   const [sortBy, setSortBy] = useState<BrowseSort>('popularity');
+  const [choiceMenu, setChoiceMenu] = useState<'subject' | 'sort' | null>(null);
+  const discoveryCache = useMemo(() => createDiscoveryPageCache(storage), [storage]);
   const [items, setItems] = useState<CatalogBook[]>([]);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
@@ -280,7 +285,12 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       setLoading(sourceKeyLoading);
       return () => ctrl.abort();
     }
-    searchCatalog({ query, topic: effectiveTopic, page: 1, sort: catalogSort, source, googleBooksKey: sourceGoogleKey }, ctrl.signal)
+    searchCatalog({ query, topic: effectiveTopic, page: 1, sort: catalogSort, source, googleBooksKey: sourceGoogleKey, cache: discoveryCache,
+      onCached: cached => {
+        if (!alive.current || ctrl.signal.aborted || gen !== generation.current) return;
+        setItems(cached.books); setHasMore(cached.hasMore); setTotal(cached.total); setNotice(cached.notice ?? null); setNoticeKind(cached.noticeKind); setLoading(false);
+      },
+    }, ctrl.signal)
       .then((res) => {
         if (!alive.current || ctrl.signal.aborted || gen !== generation.current) return;
         setItems(res.books);
@@ -291,7 +301,9 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       })
       .catch((err: unknown) => {
         if (!alive.current || ctrl.signal.aborted || gen !== generation.current) return;
-        setError(err instanceof Error ? err.message : 'Could not reach the catalog.');
+        setError(source === 'all' && err instanceof CatalogError && err.kind === 'timeout'
+          ? 'Open Library took too long to respond. Try again, search for a specific title, or choose an EPUB source.'
+          : err instanceof Error ? err.message : 'Could not reach the catalog.');
         setLoading(false);
       });
     return () => {
@@ -300,7 +312,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       moreRequest.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, effectiveTopic, catalogSort, source, reloadNonce, sourceGoogleKey, sourceKeyLoading]);
+  }, [query, effectiveTopic, catalogSort, source, reloadNonce, sourceGoogleKey, sourceKeyLoading, discoveryCache]);
 
   // debounce the search box
   useEffect(() => {
@@ -321,13 +333,14 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     setLoadingMore(true);
     setLoadMoreError(false);
     try {
-      const res = await searchCatalog({ query, topic: effectiveTopic, page: page + 1, sort: catalogSort, source, googleBooksKey: sourceGoogleKey }, ctrl.signal);
+      const res = await searchCatalog({ query, topic: effectiveTopic, page: page + 1, sort: catalogSort, source, googleBooksKey: sourceGoogleKey, cache: discoveryCache }, ctrl.signal);
       if (!alive.current || ctrl.signal.aborted || gen !== generation.current) return;
       setItems((prev) => {
         return mergeDiscoveryBooks(prev, res.books);
       });
       setPage((p) => p + 1);
       setHasMore(res.hasMore);
+      if (res.notice) { setNotice(res.notice); setNoticeKind(res.noticeKind); }
     } catch {
       if (alive.current && gen === generation.current && !ctrl.signal.aborted) {
         setLoadMoreError(true);
@@ -339,7 +352,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
         setLoadingMore(false);
       }
     }
-  }, [loading, loadingMore, hasMore, error, query, effectiveTopic, catalogSort, source, sourceGoogleKey, page, showToast]);
+  }, [loading, loadingMore, hasMore, error, query, effectiveTopic, catalogSort, source, sourceGoogleKey, page, showToast, discoveryCache]);
 
   // ---- download + import ----
   const downloadAndImport = async (item: CatalogBook) => {
@@ -468,7 +481,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   ) : error ? (
     <View style={styles.state}>
       <Icon name="cloud_off" size={40} color={palette.secondaryFixedDim} />
-      <Text style={styles.stateTitle}>Can’t reach the catalog</Text>
+      <Text style={styles.stateTitle}>{source === 'all' ? 'Can’t load Open Library' : 'Can’t reach the catalog'}</Text>
       <Text style={styles.stateBody}>{error}</Text>
       <Pressable accessibilityRole="button" accessibilityLabel="Retry catalog" onPress={() => setReloadNonce((n) => n + 1)} style={[styles.btn, styles.btnFilled, { marginTop: 6 }]}>
         <Icon name="refresh" size={16} color="#fff" />
@@ -486,11 +499,13 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   );
 
   const newestSources = ['all', 'gutenberg', 'standard', 'archive', 'google'];
-  const sortOptions = SORT_OPTIONS.filter(option => option.id !== 'releaseDate' || newestSources.includes(source)).map(option => option.id === 'popularity' && !['gutenberg', 'standard', 'archive'].includes(source) ? { ...option, label: source === 'all' ? 'Relevance' : 'Source order' } : option.id === 'releaseDate' && source === 'all' ? { ...option, label: 'Newest published' } : option);
-  const browserHeader = <View style={{ gap: 6, paddingBottom: 8 }}>
+  const sortOptions = SORT_OPTIONS.filter(option => option.id !== 'releaseDate' || newestSources.includes(source)).map(option => option.id === 'popularity' && !['gutenberg', 'standard', 'archive'].includes(source) ? { ...option, label: source === 'all' ? query ? 'Relevance' : 'Most editions' : 'Source order' } : option.id === 'releaseDate' && source === 'all' ? { ...option, label: 'Newest published' } : option);
+  const currentSortLabel = sortOptions.find(option => option.id === sortBy)?.label ?? 'Relevance';
+  const shortSortLabel = sortBy === 'releaseDate' ? 'Newest' : sortBy === 'popularity' ? source === 'all' ? query ? 'Relevance' : 'Browse' : ['gutenberg', 'standard', 'archive'].includes(source) ? 'Popular' : 'Default' : currentSortLabel;
+  const currentSubjectLabel = query || topicId === 'popular' ? 'All subjects' : topicLabel;
+  const browserHeader = <View style={styles.browserControls}>
     <View>
-      <Text style={styles.rowMeta}>EPUB source</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow} keyboardShouldPersistTaps="handled">
+      <ScrollView horizontal accessibilityLabel="EPUB source filters" showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow} keyboardShouldPersistTaps="handled">
         {renderShelfChip(palette, 'All books', source === 'all', () => setSource('all'))}
         {EPUB_SOURCES.map(item => renderShelfChip(palette, item.label, source === item.id, () => { setSource(item.id); if (sortBy === 'releaseDate' && !newestSources.includes(item.id)) setSortBy('popularity'); }))}
       </ScrollView>
@@ -500,22 +515,13 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       </Pressable>}
 
     </View>
-    {/* Search lives outside the virtualized results so typing keeps focus. */}
-    {/* Topics */}
-    <View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow} keyboardShouldPersistTaps="handled">
-        {TOPICS.map(topic => renderShelfChip(palette, topic.id === 'popular' ? 'All subjects' : topic.label, !query && topicId === topic.id,
-          () => { setQueryInput(''); setQuery(''); setTopicId(topic.id); }))}
-      </ScrollView>
-    </View>
-
-    <View style={styles.sortRow}>
-      <View style={styles.sortGroup}>
-        <Icon name="sort" size={16} color={palette.muted} />
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sortOptions} keyboardShouldPersistTaps="handled">
-          {sortOptions.map(option => renderShelfSort(palette, option.label, `Sort books by ${option.label}`, sortBy === option.id, () => setSortBy(option.id)))}
-        </ScrollView>
-      </View>
+    <View style={[styles.controlRow, fontScale > 1.25 && styles.controlRowLarge]}>
+      <Pressable onPress={() => setChoiceMenu('subject')} accessibilityRole="button" accessibilityLabel="Choose book subjects" accessibilityValue={{ text: currentSubjectLabel }} accessibilityState={{ expanded: choiceMenu === 'subject' }} style={[styles.menuTarget, fontScale > 1.25 && styles.menuTargetLarge]}>
+        <View pointerEvents="none" style={styles.menuFace}><Text numberOfLines={1} style={styles.menuText}>{currentSubjectLabel}</Text><Icon name="expand_more" size={16} color={palette.muted} /></View>
+      </Pressable>
+      <Pressable onPress={() => setChoiceMenu('sort')} accessibilityRole="button" accessibilityLabel="Sort books" accessibilityValue={{ text: currentSortLabel }} accessibilityState={{ expanded: choiceMenu === 'sort' }} style={[styles.menuTarget, fontScale > 1.25 && styles.menuTargetLarge]}>
+        <View pointerEvents="none" style={styles.menuFace}><Icon name="sort" size={15} color={palette.primary} /><Text numberOfLines={1} style={styles.menuText}>{shortSortLabel}</Text></View>
+      </Pressable>
       {renderShelfViewOptions(palette, viewMode, gridColumns, onViewModeChange, onGridColumnsChange)}
     </View>
     {viewMode === 'grid' && columns !== gridColumns && <Text style={styles.sortNote}>Using {columns} {columns === 1 ? 'column' : 'columns'} to keep this layout readable.</Text>}
@@ -570,7 +576,9 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       visible
       animationType={reducedMotion ? 'none' : 'slide'}
       onRequestClose={() => {
-        if (duplicateBook) {
+        if (choiceMenu) {
+          setChoiceMenu(null);
+        } else if (duplicateBook) {
           setDuplicateBook(null);
           pendingGet.current = false;
         } else if (selectedBook) {
@@ -589,7 +597,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
           </Pressable>
           <View style={{ flex: 1 }}>
             <Text accessibilityRole="header" style={styles.title}>{selectedBook ? 'Book details' : 'Browse books'}</Text>
-            <Text style={styles.subtitle}>{selectedBook ? selectedBook.openLibraryWorkId ? 'Open Library' : 'Book information' : source === 'all' ? 'Open Library · EPUBs checked in details' : `EPUB listings · ${CATALOG_SOURCES.find(item => item.id === source)?.label}`}</Text>
+            {selectedBook && <Text style={styles.subtitle}>{selectedBook.openLibraryWorkId ? 'Open Library' : 'Book information'}</Text>}
           </View>
         </View>
 
@@ -689,6 +697,16 @@ export const BrowseBooksScreen: React.FC<Props> = ({
           {detailBook.downloads > 0 && <Text style={styles.rowMeta}>{detailBook.downloads.toLocaleString()} downloads from this source</Text>}
         </ScrollView>}
         </View>
+        {choiceMenu && <ModalShell onClose={() => setChoiceMenu(null)} align="bottom" cardStyle={{ height: Math.min(height * 0.75, 96 + (choiceMenu === 'subject' ? TOPICS.length : sortOptions.length) * 56 * fontScale) }}>
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.choiceBody}>
+            <View style={styles.choiceHeading}><Text accessibilityRole="header" style={styles.detailsSectionTitle}>{choiceMenu === 'subject' ? 'Book subjects' : 'Sort books'}</Text><Pressable onPress={() => setChoiceMenu(null)} accessibilityRole="button" accessibilityLabel="Close book filters" style={styles.smallAction}><Icon name="close" size={20} color={palette.onSurface} /></Pressable></View>
+            {choiceMenu === 'subject' ? TOPICS.map(topic => <Pressable key={topic.id} onPress={() => { setQueryInput(''); setQuery(''); setTopicId(topic.id); setChoiceMenu(null); }} accessibilityRole="button" accessibilityLabel={topic.id === 'popular' ? 'All subjects' : topic.label} accessibilityState={{ selected: !query && topicId === topic.id }} style={styles.choiceOption}>
+              <Text style={styles.choiceText}>{topic.id === 'popular' ? 'All subjects' : topic.label}</Text>{!query && topicId === topic.id && <Icon name="check" size={18} color={palette.primary} />}
+            </Pressable>) : sortOptions.map(option => <Pressable key={option.id} onPress={() => { setSortBy(option.id); setChoiceMenu(null); }} accessibilityRole="button" accessibilityLabel={`Sort books by ${option.label}`} accessibilityState={{ selected: sortBy === option.id }} style={styles.choiceOption}>
+              <Text style={styles.choiceText}>{option.label}</Text>{sortBy === option.id && <Icon name="check" size={18} color={palette.primary} />}
+            </Pressable>)}
+          </ScrollView>
+        </ModalShell>}
         {duplicateBook ? (
           <View style={styles.confirmationOverlay}>
             <Pressable
@@ -749,32 +767,40 @@ export const BrowseBooksScreen: React.FC<Props> = ({
 
 const createStyles = (p: AppPalette) =>
   StyleSheet.create({
-    screen: { flex: 1, backgroundColor: p.background, gap: 8 },
+    screen: { flex: 1, backgroundColor: p.background, gap: 4 },
     detailsContent: { padding: 20, gap: 12 },
     detailsCover: { alignItems: 'center', paddingVertical: 8 },
     detailsTitle: { ...type.headlineSm, color: p.onSurface, textAlign: 'center' },
     detailsAuthor: { ...type.bodyMd, color: p.muted, textAlign: 'center' },
     detailsSection: { gap: 10, padding: 16, borderRadius: 12, backgroundColor: p.surfaceLow },
     detailsSectionTitle: { ...type.labelLg, color: p.onSurface },
-    header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 8 },
+    header: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingTop: 4 },
     backBtn: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
-    title: { ...type.headlineSm, color: p.onSurface },
+    title: { ...type.headlineSm, fontSize: 22, lineHeight: 28, color: p.onSurface },
     subtitle: { ...type.bodySm, color: p.muted },
     searchBox: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 8,
       backgroundColor: p.surfaceContainer,
-      borderRadius: 12,
+      borderRadius: 10,
       borderWidth: 1, borderColor: p.border,
       paddingLeft: 12,
       marginHorizontal: 20,
     },
-    searchInput: { flex: 1, minWidth: 0, minHeight: 48, paddingVertical: 12, fontFamily: F.sans, fontSize: 14, color: p.onSurface },
+    searchInput: { flex: 1, minWidth: 0, minHeight: 48, paddingVertical: 6, fontFamily: F.sans, fontSize: 14, color: p.onSurface },
     chipRow: { ...shelfStyles.chipRow },
-    sortRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-    sortGroup: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
-    sortOptions: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: 6 },
+    browserControls: { gap: 0, paddingBottom: 4 },
+    controlRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    controlRowLarge: { flexWrap: 'wrap' },
+    menuTarget: { flex: 1, minWidth: 68, minHeight: 48, justifyContent: 'center' },
+    menuTargetLarge: { flexBasis: '44%', flexGrow: 1 },
+    menuFace: { minHeight: 28, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 8, backgroundColor: p.surfaceContainer },
+    menuText: { ...type.labelSm, fontSize: 12, lineHeight: 18, color: p.onSurface, flexShrink: 1 },
+    choiceBody: { padding: 16, gap: 4 },
+    choiceHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+    choiceOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, minHeight: 48, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8 },
+    choiceText: { ...type.bodyMd, color: p.onSurface, flexShrink: 1 },
     sortActive: { color: p.primary },
     sortNote: { ...type.bodySm, color: p.muted, marginTop: 0 },
     countRow: {
@@ -782,7 +808,7 @@ const createStyles = (p: AppPalette) =>
       alignItems: 'center',
     },
     count: { ...type.labelSm, color: p.muted, flex: 1 },
-    resultsContent: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 24, gap: 12 },
+    resultsContent: { paddingHorizontal: 20, paddingTop: 0, paddingBottom: 24, gap: 8 },
     resultsList: { gap: 12 },
     gridColumn: { gap: 16 },
 

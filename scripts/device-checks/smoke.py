@@ -155,6 +155,10 @@ def check_free_books_controls():
     field='Search books by title or author'
     tap(field);focused_field(field);adb('shell','input','text','shelley');time.sleep(.4)
     field_text(field,'shelley')
+    tap('Sort books',contains=True);tap('Sort books by Title')
+    field_text(field,'shelley')
+    tap('Choose book subjects',contains=True);find('All subjects');tap('Close book filters')
+    field_text(field,'shelley')
     tap('3-column grid')
     assert find(field).get('text')=='shelley', 'Changing free-book columns reset the search'
     screenshot('02c-free-books-layout')
