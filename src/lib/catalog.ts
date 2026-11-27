@@ -86,6 +86,7 @@ export interface LibraryRestoreResult {
 }
 
 export interface CatalogPage {
+  collection?: 'trending';
   books: CatalogBook[];
   hasMore: boolean;
   total: number | null;

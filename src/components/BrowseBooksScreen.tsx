@@ -34,6 +34,7 @@ import { EpubSources, EPUB_SOURCES } from './EpubSources';
 import { createDiscoveryPageCache } from '../lib/discoveryPageCache';
 import { ModalShell } from './ui/ModalShell';
 import { CatalogError } from '../lib/catalogRequest';
+import { BookShelfLoading } from './BookShelfLoading';
 
 interface Props {
   storage: LocalStore;
@@ -203,6 +204,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState<number | null>(0);
+  const [collection, setCollection] = useState<'trending' | undefined>();
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState(false);
@@ -278,6 +280,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     setError(null);
     setNotice(null);
     setTotal(0);
+    setCollection(undefined);
     setItems([]);
     setPage(1);
     setHasMore(false);
@@ -288,7 +291,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     searchCatalog({ query, topic: effectiveTopic, page: 1, sort: catalogSort, source, googleBooksKey: sourceGoogleKey, cache: discoveryCache,
       onCached: cached => {
         if (!alive.current || ctrl.signal.aborted || gen !== generation.current) return;
-        setItems(cached.books); setHasMore(cached.hasMore); setTotal(cached.total); setNotice(cached.notice ?? null); setNoticeKind(cached.noticeKind); setLoading(false);
+        setItems(cached.books); setHasMore(cached.hasMore); setTotal(cached.total); setCollection(cached.collection); setNotice(cached.notice ?? null); setNoticeKind(cached.noticeKind); setLoading(false);
       },
     }, ctrl.signal)
       .then((res) => {
@@ -296,6 +299,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
         setItems(res.books);
         setHasMore(res.hasMore);
         setTotal(res.total);
+        setCollection(res.collection);
         setNotice(res.notice ?? null); setNoticeKind(res.noticeKind);
         setLoading(false);
       })
@@ -459,18 +463,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   const detailBusy = detailStatus === 'downloading' || detailStatus === 'preparing';
 
   const empty = loading ? (
-    <View style={{ gap: 14 }}>
-      {[0, 1, 2, 3, 4].map((i) => (
-        <View key={i} style={styles.row}>
-          <View style={[styles.skel, { width: 64, height: 96, borderRadius: 6 }]} />
-          <View style={{ flex: 1, gap: 8, paddingTop: 4 }}>
-            <View style={[styles.skel, { height: 16, width: '75%' }]} />
-            <View style={[styles.skel, { height: 12, width: '45%' }]} />
-            <View style={[styles.skel, { height: 12, width: '30%' }]} />
-          </View>
-        </View>
-      ))}
-    </View>
+    <BookShelfLoading viewMode={viewMode} columns={columns} cardWidth={cardWidth} />
   ) : source === 'google' && !googleKey ? (
     <View style={styles.state}>
       <Icon name="menu_book" size={40} color={palette.secondaryFixedDim} />
@@ -499,9 +492,9 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   );
 
   const newestSources = ['all', 'gutenberg', 'standard', 'archive', 'google'];
-  const sortOptions = SORT_OPTIONS.filter(option => option.id !== 'releaseDate' || newestSources.includes(source)).map(option => option.id === 'popularity' && !['gutenberg', 'standard', 'archive'].includes(source) ? { ...option, label: source === 'all' ? query ? 'Relevance' : 'Most editions' : 'Source order' } : option.id === 'releaseDate' && source === 'all' ? { ...option, label: 'Newest published' } : option);
+  const sortOptions = SORT_OPTIONS.filter(option => option.id !== 'releaseDate' || newestSources.includes(source)).map(option => option.id === 'popularity' && !['gutenberg', 'standard', 'archive'].includes(source) ? { ...option, label: source === 'all' ? query ? 'Relevance' : effectiveTopic ? 'Most editions' : 'Trending now' : 'Source order' } : option.id === 'releaseDate' && source === 'all' ? { ...option, label: 'Newest published' } : option);
   const currentSortLabel = sortOptions.find(option => option.id === sortBy)?.label ?? 'Relevance';
-  const shortSortLabel = sortBy === 'releaseDate' ? 'Newest' : sortBy === 'popularity' ? source === 'all' ? query ? 'Relevance' : 'Browse' : ['gutenberg', 'standard', 'archive'].includes(source) ? 'Popular' : 'Default' : currentSortLabel;
+  const shortSortLabel = sortBy === 'releaseDate' ? 'Newest' : sortBy === 'popularity' ? source === 'all' ? query ? 'Relevance' : effectiveTopic ? 'Browse' : 'Trending' : ['gutenberg', 'standard', 'archive'].includes(source) ? 'Popular' : 'Default' : currentSortLabel;
   const currentSubjectLabel = query || topicId === 'popular' ? 'All subjects' : topicLabel;
   const browserHeader = <View style={styles.browserControls}>
     <View>
@@ -537,7 +530,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     <View style={styles.countRow}>
       {!loading && !error && items.length > 0 ? (
         <Text style={styles.count}>
-          {query ? `Results for “${query}”` : topicId === 'popular' ? 'All subjects' : topicLabel} · {total === null ? `${items.length} books loaded` : `${total.toLocaleString()} books`}
+          {query ? `Results for “${query}”` : collection === 'trending' ? 'Trending books' : topicId === 'popular' ? 'All subjects' : topicLabel} · {total === null ? `${items.length} ${items.length === 1 ? 'book' : 'books'} loaded` : `${total.toLocaleString()} books`}
         </Text>
       ) : <View style={{ flex: 1 }} />}
     </View>
@@ -623,9 +616,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
           ListEmptyComponent={empty}
           ListFooterComponent={
             loadingMore ? (
-              <View style={{ paddingVertical: 18, alignItems: 'center' }}>
-                <Icon name="sync" size={20} color={palette.muted} spin />
-              </View>
+              <BookShelfLoading viewMode={viewMode} columns={columns} cardWidth={cardWidth} rows={1} more />
             ) : loadMoreError ? (
               <Pressable accessibilityRole="button" accessibilityLabel="Retry loading more books" onPress={loadMore} style={[styles.btn, styles.btnOutline, { alignSelf: 'center', marginTop: 8 }]}>
                 <Icon name="refresh" size={16} color={palette.primary} />
@@ -907,7 +898,6 @@ const createStyles = (p: AppPalette) =>
       paddingHorizontal: 10,
     },
 
-    skel: { backgroundColor: p.surfaceHigh, borderRadius: 4 },
     state: { alignItems: 'center', gap: 8, paddingVertical: 48, paddingHorizontal: 24 },
     stateTitle: { ...type.headlineSm, fontSize: 20, color: p.onSurface },
     stateBody: { ...type.bodyMd, color: p.muted, textAlign: 'center' },

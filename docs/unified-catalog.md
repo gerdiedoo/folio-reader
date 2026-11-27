@@ -6,11 +6,13 @@ to its text. No API contains every published book.
 
 ## Find a book
 
-The All books filter queries Open Library's work search without public-scan or
-EPUB-only constraints. Results include title, authors, first publication year,
+The All books opening page uses Open Library's recent-trending feed. Title and
+author searches use its full work-search API without public-scan or EPUB-only
+constraints. Results include title, authors, first publication year,
 edition count, languages and Archive identifiers where supplied. Metadata is
-paged in groups of 18. Empty-query browsing uses an edition-count sort, with
-spellchecking disabled. Newest published uses Open Library's `new` sort (first
+paged in groups of 18. The default opening path does not execute a match-all
+search. Explicit subject searches can use an edition-count sort, with spelling
+suggestions disabled. Newest published uses Open Library's `new` sort (first
 publication year); title/author sort only the loaded results, as labeled.
 
 EPUB source chips query the selected provider's existing catalog, then batch-match
@@ -94,7 +96,7 @@ The cache stores only sanitized Open Library metadata, not provider EPUB links,
 Google keys, descriptions, availability results or Library ownership. Cache errors
 do not turn a live success into a failed catalog load.
 
-623 regression tests, TypeScript and Android/iOS Hermes exports pass. Automated
+633 regression tests, TypeScript and Android/iOS Hermes exports pass. Automated
 coverage includes contemporary works without EPUBs, covers and failed images,
 provider-filter matching/deduplication, incorrect author/volume rejection,
 independent availability/error/retry states, cancellation and reader-key changes,
@@ -127,3 +129,28 @@ The native journey also opens both menus and verifies retained search text.
 The successful phone-browser Frankenstein response also has a regression fixture,
 including its work ID, subtitle, cover ID, author and a representative Archive
 identifier list. It confirms response parsing independently of request latency.
+
+
+## Startup feed and grid loading
+
+Phone testing established that title searches worked while the empty match-all
+request still failed. The default opening page now requests
+`/trending/now.json?limit=18&page=1` with a compact metadata projection. The user
+confirmed this feed loads in the phone browser. Open Library's public source and
+endpoint tests establish its work-document schema, fields and pagination. It uses
+recent reading-log IDs rather than a whole-index search. A missing/incompatible
+now route can fall back to the daily feed; startup never falls back to `q=*:*`.
+Explicit title/author queries, subjects and newest publication still use search.
+
+The feed is labeled Trending books, with a loaded count and no claimed
+whole-catalog total. Pagination uses the real page parameter and stops on a short
+or empty page. The existing account-scoped cache accepts the feed's URL and
+collection label separately from search pages. EPUB availability and covers retain
+the existing behavior.
+
+Initial and pagination placeholders use the current shelf layout: two or three
+cover columns, actual calculated card widths, 2:3 cover proportions and matching
+spacing. Large-text column fallback is respected. List mode retains list rows.
+The placeholders are noninteractive and expose one indeterminate loading state,
+rather than announcing fake book cards. Their shape updates immediately when the
+view/column control changes during a request.

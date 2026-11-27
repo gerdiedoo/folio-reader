@@ -1129,3 +1129,20 @@ a fresh APK; it cannot be tested by reusing the previous signed APK.
    If Open Library itself remains unavailable, the message should identify it and
    offer retry, a specific-title search or an EPUB source. Compare the same
    one-result search in the phone browser when diagnosing a continuing timeout.
+
+
+## Trending startup and layout-aware loading
+
+1. Open Browse books with no search text. Verify trending books load from Open
+   Library and are labeled Trending books, rather than showing a catalog-wide
+   count. No EPUB availability is implied by the feed.
+2. With a slow connection and an uncached query, select two columns, then three.
+   Loading covers must align with that grid and the same cover proportions as
+   results. Switch to list mode and verify list placeholders. Repeat while loading
+   another page; the footer placeholders should match the selected layout too.
+3. Search a title such as Harry Potter or Frankenstein. Verify the full search
+   results still appear. Clear the query and return to the trending feed; inspect
+   cached startup, refresh failure, pagination, and Back from details.
+4. Check large text: if the preferred three columns fall back to fewer columns,
+   loading must follow the actual displayed columns. With TalkBack, loading should
+   be announced as one busy state, without fake selectable books.

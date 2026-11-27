@@ -44,3 +44,10 @@ test('unreadable optional cache does not claim saved results and writes surface 
  const full=fixture();full.writeFail();await assert.rejects(full.cache.write(discoverySearchUrl('first','',1),page()));assert.equal(full.shared.size,0);
  assert.equal(createDiscoveryPageCache({}),undefined);
 });
+
+test('the trending landing page has its own durable cache key and retains its collection label',async()=>{
+ const f=fixture(),url='https://openlibrary.org/trending/now.json?limit=18&page=1';const p={...page(),collection:'trending',total:null};
+ await f.cache.write(url,p);const reopened=createDiscoveryPageCache(f.io,()=>1000000);const saved=await reopened.read(url);
+ assert.equal(saved.page.collection,'trending');assert.equal(saved.page.total,null);assert.equal(saved.page.books[0].id,'openlibrary-OL1W');
+ assert.equal(await reopened.read(discoverySearchUrl('','',1)),undefined);assert.equal(await reopened.read('https://openlibrary.org/trending/now.json?limit=18&page=2'),undefined);
+});

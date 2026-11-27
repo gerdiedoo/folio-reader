@@ -4,7 +4,7 @@ const { loadTypeScript } = require('./loadTypeScript.cjs');
 const { createDiscoveryCatalog } = loadTypeScript('./src/lib/discoveryCatalog.ts');
 const { createOpenLibraryRequest } = loadTypeScript('./src/lib/openLibraryRequest.ts');
 const { CatalogError } = loadTypeScript('./src/lib/catalogRequest.ts');
-const { parseDiscoveryPage, discoverySearchUrl, matchingDiscoveryWork, mergeDiscoveryBooks, discoveryWorkDetails, openLibraryCover } = loadTypeScript('./src/lib/openLibraryMetadata.ts');
+const { parseDiscoveryPage, discoverySearchUrl, discoveryLandingUrl, parseDiscoveryLanding, matchingDiscoveryWork, mergeDiscoveryBooks, discoveryWorkDetails, openLibraryCover } = loadTypeScript('./src/lib/openLibraryMetadata.ts');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const doc = (id = 1, patch = {}) => ({ key: `/works/OL${id}W`, title: 'Frankenstein', author_name: ['Mary Shelley'], cover_i: 42, first_publish_year: 1818, edition_count: 120, ...patch });
 const metadata = docs => ({ numFound: docs.length, docs });
@@ -13,16 +13,16 @@ const edition = (source = 'gutenberg', patch = {}) => ({ id: `${source}-1`, sour
 function fixture(overrides = {}) {
  const events = [];
  const deps = {
-  metadata: async (url, signal) => { events.push(['metadata',url,signal]); return metadata([doc()]); },
+  metadata: async (url, signal) => { events.push(['metadata',url,signal]); return new URL(url).pathname.startsWith('/trending/') ? {works:[doc()]} : metadata([doc()]); },
   search: async (opts, signal) => { events.push(['search',opts,signal]); return { books: [edition(opts.source)], hasMore: false, total: 1 }; },
   details: async (book, signal) => { events.push(['details',book,signal]); return book; },
   links: async (book, signal) => { events.push(['links',book,signal]); return ['https://provider.example/book.epub']; }, ...overrides,
  };
  return { events, deps, ...createDiscoveryCatalog(deps) };
 }
-test('the default catalog contains contemporary metadata-only works without requiring public scans or an EPUB', async () => {
+test('catalog search contains contemporary metadata-only works without requiring public scans or an EPUB', async () => {
  const f = fixture({ metadata: async () => ({ docs: [doc(1,{title:'A contemporary book',first_publish_year:2024,ebook_access:'no_ebook',ia:[]})], numFound:1000000 }) });
- const page = await f.search({}); assert.equal(page.books.length,1); assert.equal(page.total,1000000); assert.equal(page.hasMore,true);
+ const page = await f.search({query:'A contemporary book'}); assert.equal(page.books.length,1); assert.equal(page.total,1000000); assert.equal(page.hasMore,true);
  assert.equal(page.books[0].publicationYear,2024); assert.equal(page.books[0].epubUrl,''); assert.deepEqual(page.books[0].epubEditions,[]);
  const url = new URL(discoverySearchUrl('', '', 1)); assert.equal(url.searchParams.get('q'),'*:*'); assert.doesNotMatch(url.search,/public_scan|ebook_access/);
  assert.equal(new URL(discoverySearchUrl('作者 OR *:*', '', 2,'descending')).searchParams.get('sort'),'new');
@@ -111,7 +111,7 @@ test('Open Library request slots are paced and cached without caching cancelled 
  now+=120001;await request('first');assert.equal(calls.length,3);
 });
 
-test('blank browsing uses a small page and simple edition sort with spellchecking disabled',()=>{
+test('explicit catalog queries retain small pages and disable spelling suggestions',()=>{
  const blank=new URL(discoverySearchUrl('','',1));assert.equal(blank.searchParams.get('limit'),'18');assert.equal(blank.searchParams.get('sort'),'editions');assert.equal(blank.searchParams.get('spellcheck_count'),'0');
  const query=new URL(discoverySearchUrl('Frankenstein','',1));assert.equal(query.searchParams.has('sort'),false);assert.equal(query.searchParams.get('spellcheck_count'),'0');
 });
@@ -122,7 +122,7 @@ test('cached Open Library results appear before refresh and survive a timeout wi
  fail(new CatalogError('timeout'));const result=await promise;assert.equal(result.books[0].id,'openlibrary-OL1W');assert.equal(result.noticeKind,'recovery');assert.match(result.notice,/Showing saved books/);assert.equal(writes,0);
 });
 test('successful refresh replaces saved results and optional cache write failure cannot fail a live search',async()=>{
- const f=fixture({metadata:async()=>metadata([doc(2)])});let preview,written;
+ const f=fixture({metadata:async()=>({works:[doc(2)]})});let preview,written;
  const result=await f.search({cache:{read:async()=>({page:{books:[work()],hasMore:false,total:1},savedAt:1}),write:async(url,page)=>{written=page;throw Error('Disk full');}},onCached:page=>{preview=page;}});await flush();
  assert.equal(preview.books[0].id,'openlibrary-OL1W');assert.equal(result.books[0].id,'openlibrary-OL2W');assert.equal(written.books[0].id,'openlibrary-OL2W');assert.equal(result.notice,undefined);
 });
@@ -152,4 +152,37 @@ test('the real phone-browser Open Library response parses correctly and matches 
  const parsed=parseDiscoveryPage(live).books[0];assert.equal(parsed.id,'openlibrary-OL450063W');assert.equal(parsed.author,'Mary Shelley');
  assert.equal(parsed.title,'Frankenstein; or, The Modern Prometheus');assert.match(parsed.coverUrl,/12356249-L\.jpg\?default=false$/);
  assert.equal(parsed.archiveIds.length,3);assert.equal(parsed.editionCount,2187);assert.equal(matchingDiscoveryWork(parsed,edition('standard')),true);
+});
+
+test('opening All books uses the recent trending endpoint instead of a match-all search',async()=>{
+ const f=fixture();const result=await f.search({});const request=new URL(f.events[0][1]);
+ assert.equal(request.pathname,'/trending/now.json');assert.equal(request.searchParams.has('q'),false);assert.equal(request.searchParams.get('limit'),'18');
+ assert.equal(result.books.length,1);assert.equal(result.collection,'trending');assert.equal(result.total,null);
+ assert.equal(new URL(discoveryLandingUrl(2)).searchParams.get('page'),'2');
+});
+test('trending pagination uses real page parameters and distinguishes a full page from the end',async()=>{
+ const calls=[];const f=fixture({metadata:async url=>{calls.push(new URL(url));return {query:'/trending/now',works:calls.length===1?Array.from({length:18},(_,i)=>doc(i+1)):[doc(19)]};}});
+ const first=await f.search({page:1});const next=await f.search({page:2});assert.equal(first.hasMore,true);assert.equal(next.hasMore,false);
+ assert.equal(calls[0].searchParams.get('page'),'1');assert.equal(calls[1].searchParams.get('page'),'2');assert.equal(next.books[0].id,'openlibrary-OL19W');
+ const empty=parseDiscoveryLanding({query:'/trending/now',works:[]});assert.equal(empty.hasMore,false);assert.deepEqual(empty.books,[]);
+});
+test('trending accepts compatible author/cover fields and rejects invalid responses without inventing works',()=>{
+ const page=parseDiscoveryLanding({works:[{key:'/works/OL1W',title:'A book',authors:[{name:'An Author'}],cover_id:123}]});
+ assert.equal(page.books[0].author,'An Author');assert.match(page.books[0].coverUrl,/123-L/);assert.equal(page.total,null);
+ for(const value of [null,{docs:[]},{works:[{key:'/books/OL1M',title:'Wrong type'}]},{works:[{}]}])assert.throws(()=>parseDiscoveryLanding(value));
+});
+test('an unavailable recent feed can use the daily feed, never a whole-catalog search',async()=>{
+ const calls=[];const f=fixture({metadata:async url=>{calls.push(url);if(calls.length===1)throw new CatalogError('unavailable',404);return {query:'/trending/daily',works:[doc()]};}});
+ assert.equal((await f.search({})).books.length,1);assert.equal(new URL(calls[0]).pathname,'/trending/now.json');assert.equal(new URL(calls[1]).pathname,'/trending/daily.json');
+ assert.equal(calls.some(url=>new URL(url).pathname==='/search.json'),false);
+});
+test('typing a search or selecting a subject/newest still queries the full Open Library search API',async()=>{
+ for(const opts of [{query:'Harry Potter'},{topic:'poetry'},{sort:'descending'}]){
+  const f=fixture();await f.search(opts);const url=new URL(f.events[0][1]);assert.equal(url.pathname,'/search.json');
+ }
+});
+test('cancelled trending results cannot populate the catalog or its persistent cache',async()=>{
+ let finish,writes=0;const ctrl=new AbortController();const f=fixture({metadata:async()=>new Promise(resolve=>{finish=resolve;})});
+ const pending=f.search({cache:{read:async()=>undefined,write:async()=>{writes++;}}},ctrl.signal);await flush();ctrl.abort();finish({works:[doc()]});
+ await assert.rejects(pending,{name:'AbortError'});assert.equal(writes,0);
 });

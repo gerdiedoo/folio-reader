@@ -19,7 +19,7 @@ function validUrl(value: unknown): value is string {
   if (typeof value !== 'string' || value.length > 3000) return false;
   try {
     const url = new URL(value);
-    return url.origin === 'https://openlibrary.org' && url.pathname === '/search.json' && !url.username && !url.password &&
+    return url.origin === 'https://openlibrary.org' && ['/search.json', '/trending/now.json', '/trending/daily.json'].includes(url.pathname) && !url.username && !url.password &&
       [...url.searchParams.keys()].every(key => ['q', 'fields', 'limit', 'page', 'sort', 'spellcheck_count'].includes(key));
   } catch { return false; }
 }
@@ -41,7 +41,7 @@ function publicPage(value: unknown): CatalogPage | undefined {
       detailUrl: `https://openlibrary.org/works/${book.openLibraryWorkId}.json` });
   }
   if (new Set(books.map(book => book.id)).size !== books.length) return;
-  return { books, hasMore: value.hasMore, total: value.total as number | null };
+  return { books, hasMore: value.hasMore, total: value.total as number | null, ...(value.collection === 'trending' ? { collection: 'trending' as const } : {}) };
 }
 export function createDiscoveryPageCache(storage: Partial<CacheStorage>, clock = Date.now): DiscoveryPageCache | undefined {
   if (!storage.storageKey || !storage.loadJSON || !storage.saveJSONStrict) return;

@@ -3037,7 +3037,7 @@ test('compact book controls keep subjects and sorting in menus with selected val
  const f=catalogHarness();f.render();await flushNative();let root=f.render();
  assert.equal(elements(root).some(node=>node.props?.accessibilityLabel==='Sort books by Title'),false);
  assert.equal(elements(root).some(node=>node.props?.accessibilityLabel==='Fiction'),false);
- assert.equal(labelled(root,'Sort books').accessibilityValue.text,'Most editions');
+ assert.equal(labelled(root,'Sort books').accessibilityValue.text,'Trending now');
  assert.equal(labelled(root,'Choose book subjects').accessibilityValue.text,'All subjects');
  labelled(root,'Search books by title or author').onChangeText('shelley');root=f.render();
  labelled(root,'Sort books').onPress();root=f.render();assert.equal(labelled(root,'Sort books').accessibilityState.expanded,true);
@@ -3067,4 +3067,30 @@ test('Open Library timeout recovery stays actionable and saved results show a re
 test('shared shelf chips use compact rounded rectangles inside full touch targets',()=>{
  const h=harness();const {renderShelfChip}=h.load('../src/components/ui/ShelfControls.tsx');const chip=renderShelfChip({primaryContainer:'#111',surfaceContainer:'#eee',onPrimaryContainer:'#fff',onSurface:'#111'},'Fiction',true,()=>{});
  assert.equal(chip.props.style.minHeight,48);const face=elements(chip).find(node=>node.type==='View');assert.equal(face.props.style[0].borderRadius,8);assert.ok(face.props.style[0].minHeight<=30);assert.equal(chip.props.accessibilityState.selected,true);
+});
+
+test('loading placeholders follow two/three columns and list mode while the catalog request is pending',()=>{
+ const f=catalogHarness({search:()=>new Promise(()=>{})});let root=f.render();
+ let loading=freeBookList(root).ListEmptyComponent;assert.equal(loading.type.name,'BookShelfLoading');assert.equal(loading.props.viewMode,'grid');assert.equal(loading.props.columns,2);
+ const wide=loading.props.cardWidth;labelled(root,'3-column grid').onPress();root=f.render();loading=freeBookList(root).ListEmptyComponent;
+ assert.equal(loading.props.columns,3);assert.ok(loading.props.cardWidth<wide);
+ labelled(root,'List view').onPress();root=f.render();loading=freeBookList(root).ListEmptyComponent;assert.equal(loading.props.viewMode,'list');f.h.unmount();
+});
+test('shelf placeholders use real cover proportions, correct grid widths and one accessible busy state',()=>{
+ const h=harness();const {BookShelfLoading}=h.load('../src/components/BookShelfLoading.tsx');
+ for(const columns of [2,3]){
+  const root=h.render(BookShelfLoading,{viewMode:'grid',columns,cardWidth:columns===2?172:109});
+  const cards=elements(root).filter(node=>node.props?.testID==='book-loading-grid-card');assert.equal(cards.length,columns*3);assert.ok(cards.every(card=>card.props.style.width===(columns===2?172:109)));
+  const covers=elements(root).filter(node=>node.props?.testID==='book-loading-cover');assert.ok(covers.every(cover=>cover.props.style[1].aspectRatio===2/3));
+  assert.equal(elements(root).some(node=>node.props?.testID==='book-loading-list-row'),false);assert.equal(root.props.accessibilityState.busy,true);assert.equal(root.props.accessibilityValue.text,`${columns}-column grid`);
+  assert.equal(elements(root).filter(node=>node.props?.accessibilityLabel==='Loading books').length,1);
+ }
+ const list=h.render(BookShelfLoading,{viewMode:'list',columns:1,cardWidth:360});assert.equal(elements(list).filter(node=>node.props?.testID==='book-loading-list-row').length,5);
+ const more=h.render(BookShelfLoading,{viewMode:'grid',columns:3,cardWidth:109,rows:1,more:true});assert.equal(elements(more).filter(node=>node.props?.testID==='book-loading-grid-card').length,3);assert.equal(more.props.accessibilityLabel,'Loading more books');
+});
+test('pagination loading uses the same selected shelf layout and trending counts do not claim a full-catalog total',async()=>{
+ let next;const f=catalogHarness({search:async opts=>opts.page===1?{books:[{id:'openlibrary-OL1W',catalogKind:'work',source:'openlibrary',title:'A Book',author:'An Author',subjects:[],coverUrl:'',epubUrl:''}],hasMore:true,total:null,collection:'trending'}:new Promise(resolve=>{next=resolve;})});
+ f.render();await flushNative();let root=f.render();assert.match(renderedText(freeBookList(root).ListHeaderComponent),/Trending books/);assert.match(renderedText(freeBookList(root).ListHeaderComponent),/1 book loaded/);
+ freeBookList(root).onEndReached();root=f.render();let loading=freeBookList(root).ListFooterComponent;assert.equal(loading.type.name,'BookShelfLoading');assert.equal(loading.props.columns,2);assert.equal(loading.props.rows,1);assert.equal(loading.props.more,true);
+ labelled(root,'3-column grid').onPress();root=f.render();loading=freeBookList(root).ListFooterComponent;assert.equal(loading.props.columns,3);next({books:[],hasMore:false,total:null,collection:'trending'});await flushNative();f.h.unmount();
 });

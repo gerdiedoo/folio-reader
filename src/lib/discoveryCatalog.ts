@@ -1,7 +1,7 @@
 import type { CatalogBook, CatalogPage, CatalogSource, CatalogSort } from './catalog';
 import type { CatalogAccess } from './extraCatalog';
 import { catalogCancelled, CatalogError } from './catalogRequest';
-import { discoveryMatchUrl, discoverySearchUrl, discoveryWorkDetails, matchingDiscoveryWork, mergeDiscoveryBooks, parseDiscoveryPage } from './openLibraryMetadata';
+import { discoveryLandingUrl, discoveryMatchUrl, discoverySearchUrl, discoveryWorkDetails, isDiscoveryLanding, matchingDiscoveryWork, mergeDiscoveryBooks, parseDiscoveryLanding, parseDiscoveryPage } from './openLibraryMetadata';
 import { requestOpenLibrary } from './openLibraryRequest';
 import type { DiscoveryPageCache } from './discoveryPageCache';
 
@@ -26,14 +26,23 @@ export function createDiscoveryCatalog(deps: Dependencies) {
       if (signal?.aborted) throw catalogCancelled();
       const page = Number.isSafeInteger(opts.page) && opts.page! > 0 ? opts.page! : 1;
       if (!opts.source || opts.source === 'all') {
-        const url = discoverySearchUrl(opts.query ?? '', opts.topic ?? '', page, opts.sort);
+        const landing = isDiscoveryLanding(opts.query ?? '', opts.topic ?? '', opts.sort);
+        const url = landing ? discoveryLandingUrl(page) : discoverySearchUrl(opts.query ?? '', opts.topic ?? '', page, opts.sort);
         const saved = await opts.cache?.read(url).catch(() => undefined);
         if (signal?.aborted) throw catalogCancelled();
         if (saved) opts.onCached?.({ ...saved.page, noticeKind: 'info', notice: 'Showing saved Open Library results while checking for updates…' });
         try {
-          const value = await metadata(url, signal);
+          let value: unknown;
+          try { value = await metadata(url, signal); }
+          catch (error) {
+            if (signal?.aborted) throw catalogCancelled();
+            // Older deployments may expose the daily feed without the now route.
+            // Never fall back to an expensive match-all search on startup.
+            if (!landing || !(error instanceof CatalogError) || !['unavailable', 'invalid'].includes(error.kind) && error.status !== 422) throw error;
+            value = await metadata(discoveryLandingUrl(page, 'daily'), signal);
+          }
           if (signal?.aborted) throw catalogCancelled();
-          const result = parseDiscoveryPage(value, page);
+          const result = landing ? parseDiscoveryLanding(value) : parseDiscoveryPage(value, page);
           void opts.cache?.write(url, result).catch(() => undefined);
           return result;
         } catch (error) {

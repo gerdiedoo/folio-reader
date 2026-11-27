@@ -10,6 +10,10 @@ export function openLibraryCover(id: unknown): string {
   return Number.isSafeInteger(id) && Number(id) > 0 ? `https://covers.openlibrary.org/b/id/${id}-L.jpg?default=false` : '';
 }
 const fields = 'key,title,author_name,cover_i,first_publish_year,edition_count,ia';
+export const isDiscoveryLanding = (query: string, topic: string, sort: CatalogSort = 'popular') => !literal(query) && !topic.trim() && sort !== 'descending';
+export function discoveryLandingUrl(page: number, period: 'now' | 'daily' = 'now'): string {
+  return `https://openlibrary.org/trending/${period}.json?${new URLSearchParams({ limit: String(DISCOVERY_PAGE_SIZE), page: String(page), fields })}`;
+}
 export function discoverySearchUrl(query: string, topic: string, page: number, sort: CatalogSort = 'popular'): string {
   const params = new URLSearchParams({ q: literal(query) || (topic ? `subject:"${literal(topic)}"` : '*:*'), fields, limit: String(DISCOVERY_PAGE_SIZE), page: String(page) });
   if (sort === 'descending') params.set('sort', 'new');
@@ -40,6 +44,17 @@ export function parseDiscoveryPage(value: unknown, page = 1): CatalogPage {
   }
   if (value.docs.length && !books.length) throw new CatalogError('invalid');
   return { books: mergeDiscoveryBooks([], books), hasMore: page * DISCOVERY_PAGE_SIZE < Number(value.numFound), total: Number(value.numFound) };
+}
+/** Trending returns work documents, with no whole-catalog count. */
+export function parseDiscoveryLanding(value: unknown): CatalogPage {
+  if (!record(value) || !Array.isArray(value.works) || value.works.length > 1000) throw new CatalogError('invalid');
+  const works = value.works.slice(0, DISCOVERY_PAGE_SIZE).map(work => {
+    if (!record(work)) return work;
+    const authors = Array.isArray(work.authors) ? work.authors.filter(record).map(author => author.name) : [];
+    return { ...work, author_name: Array.isArray(work.author_name) ? work.author_name : authors, cover_i: work.cover_i ?? work.cover_id };
+  });
+  const parsed = parseDiscoveryPage({ docs: works, numFound: works.length });
+  return { ...parsed, collection: 'trending', total: null, hasMore: value.works.length >= DISCOVERY_PAGE_SIZE };
 }
 function sameAuthor(a: string, b: string): boolean {
   const tokens = (name: string) => discoveryText(name.replace(/\b\d{4}\b/g, '')).split(' ').filter(part => part.length > 1);
