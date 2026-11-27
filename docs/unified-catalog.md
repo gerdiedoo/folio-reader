@@ -94,7 +94,7 @@ The cache stores only sanitized Open Library metadata, not provider EPUB links,
 Google keys, descriptions, availability results or Library ownership. Cache errors
 do not turn a live success into a failed catalog load.
 
-622 regression tests, TypeScript and Android/iOS Hermes exports pass. Automated
+623 regression tests, TypeScript and Android/iOS Hermes exports pass. Automated
 coverage includes contemporary works without EPUBs, covers and failed images,
 provider-filter matching/deduplication, incorrect author/volume rejection,
 independent availability/error/retry states, cancellation and reader-key changes,
@@ -123,3 +123,7 @@ Library/catalog chips use 28-point rounded rectangular faces (radius 8) inside
 48-point touch targets. Large system text wraps the toolbar. Sort/subject sheets
 have explicit bounded heights, and closing them preserves the current query.
 The native journey also opens both menus and verifies retained search text.
+
+The successful phone-browser Frankenstein response also has a regression fixture,
+including its work ID, subtitle, cover ID, author and a representative Archive
+identifier list. It confirms response parsing independently of request latency.

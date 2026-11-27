@@ -137,3 +137,19 @@ test('Open Library uses its own 25-second deadline and retries transient network
  const pending=request('network');await flush();assert.equal(calls,1);assert.equal(timers[0].ms,1100);now+=1100;timers.shift().fn();assert.equal(await pending,'ok');assert.equal(calls,2);
  for(const kind of ['timeout','rate','invalid']){let attempts=0;const one=createOpenLibraryRequest(async()=>{attempts++;throw new CatalogError(kind);});await assert.rejects(one(kind),{kind});assert.equal(attempts,1);}
 });
+
+test('the real phone-browser Open Library response parses correctly and matches its shorter source title',()=>{
+ // Fields copied from the user's successful one-result response; the long Archive
+ // list is shortened because parsing retains at most three identifiers.
+ const live={numFound:3384,start:0,numFoundExact:true,num_found:3384,q:'frankenstein',offset:null,docs:[{
+  author_key:['OL25342A'],author_name:['Mary Shelley'],cover_edition_key:'OL35649409M',cover_height:500,cover_i:12356249,cover_width:343,
+  ebook_access:'public',edition_count:2187,first_publish_year:1818,has_fulltext:true,
+  ia:['frankensteinormo00shel_8','cu31924105428902','ghostseer01schiuoft','frankensteinormo00shel_9'],
+  key:'/works/OL450063W',language:['spa','ger','por','fre','rus','ita','dut','eng','chi'],lending_edition_s:'OL26683337M',
+  lending_identifier_s:'frankensteinormo00shel_8',public_scan_b:true,title:'Frankenstein; or, The Modern Prometheus',
+  id_standard_ebooks:['mary-shelley/frankenstein','mary-shelley/frankenstein'],
+ }]};
+ const parsed=parseDiscoveryPage(live).books[0];assert.equal(parsed.id,'openlibrary-OL450063W');assert.equal(parsed.author,'Mary Shelley');
+ assert.equal(parsed.title,'Frankenstein; or, The Modern Prometheus');assert.match(parsed.coverUrl,/12356249-L\.jpg\?default=false$/);
+ assert.equal(parsed.archiveIds.length,3);assert.equal(parsed.editionCount,2187);assert.equal(matchingDiscoveryWork(parsed,edition('standard')),true);
+});
