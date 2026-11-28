@@ -151,9 +151,13 @@ def check_library_search():
     tap('2-column grid');tap('Hide Library search')
 
 def check_free_books_controls():
-    tap('Browse free books')
-    field='Search free books by title or author'
+    tap('Browse books')
+    field='Search books by title or author'
     tap(field);focused_field(field);adb('shell','input','text','shelley');time.sleep(.4)
+    field_text(field,'shelley')
+    tap('Sort books',contains=True);tap('Sort books by Title')
+    field_text(field,'shelley')
+    tap('Choose book subjects',contains=True);find('All subjects');tap('Close book filters')
     field_text(field,'shelley')
     tap('3-column grid')
     assert find(field).get('text')=='shelley', 'Changing free-book columns reset the search'
@@ -178,13 +182,13 @@ def tap_google_books_source():
 def check_google_books_key():
     # This is a synthetic, nonfunctional key. The test does not authenticate
     # with Google or claim successful provider search/download behavior.
-    tap('Browse free books');tap_google_books_source();tap('Google Books setup')
+    tap('Browse books');tap_google_books_source();tap('Google Books setup')
     field='Google Books API key';tap(field);focused_field(field)
     adb('shell','input','text','folio-test-key-01234567890123456789')
     adb('shell','input','keyevent','KEYCODE_BACK');tap('Save Google Books key')
     find('Google Books key saved',contains=True);tap('Back to library')
     adb('shell','am','force-stop',PACKAGE);launch();find('Folio Library')
-    tap('Browse free books');tap_google_books_source();tap('Google Books setup')
+    tap('Browse books');tap_google_books_source();tap('Google Books setup')
     find('A key is saved on this device.',contains=True)
     screenshot('02d-google-books-key-after-restart')
     tap('Remove Google Books key');find('Connect Google Books')

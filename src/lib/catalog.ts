@@ -8,6 +8,7 @@ import { archiveEpubLinks, archiveSearchUrl, gutenbergBook, parseArchivePage, pa
 import { CatalogError, catalogCancelled, catalogRequest } from './catalogRequest';
 import { archiveBookDetails, standardBookDetails } from './catalogDetails';
 import { extraBookDetails, extraEpubLinks, extraSource, searchExtraCatalog, type CatalogAccess } from './extraCatalog';
+import { createDiscoveryCatalog } from './discoveryCatalog';
 export { CATALOG_SOURCES } from './catalogProviders';
 
 const API = 'https://gutendex.com/books/';
@@ -18,6 +19,14 @@ const pageCache = new Map<string, { page: CatalogPage; cachedAt: number }>();
 export type CatalogSource = 'gutenberg' | 'standard' | 'archive' | 'openlibrary' | 'google' | 'oapen' | 'doab' | 'wikisource' | 'feedbooks';
 
 export interface CatalogBook {
+  catalogKind?: 'work';
+  openLibraryWorkId?: string;
+  authors?: string[];
+  publicationYear?: number;
+  editionCount?: number;
+  epubEditions?: CatalogBook[];
+  discoveryWorkId?: string;
+  useDiscoveryCover?: boolean;
   sourceRecordId?: string;
   archiveIds?: string[];
   exportTitle?: string;
@@ -77,6 +86,7 @@ export interface LibraryRestoreResult {
 }
 
 export interface CatalogPage {
+  collection?: 'trending';
   books: CatalogBook[];
   hasMore: boolean;
   total: number | null;
@@ -239,6 +249,11 @@ async function epubLinks(book: CatalogBook, signal?: AbortSignal, access: Catalo
   const supplied = sourceUrl(book.epubUrl, ['www.gutenberg.org', 'gutenberg.org']);
   return [...new Set([...(id ? [`https://www.gutenberg.org/ebooks/${id}.epub3.images`] : []), supplied, ...(id ? [`https://www.gutenberg.org/ebooks/${id}.epub.images`] : [])].filter(Boolean))].slice(0, 3);
 }
+
+const discovery = createDiscoveryCatalog({ search: searchCatalog, details: loadCatalogBookDetails, links: epubLinks });
+export const searchDiscovery = discovery.search;
+export const loadDiscoveryDetails = discovery.details;
+export const checkDiscoverySource = discovery.checkSource;
 
 /** Bounded, cancellable transfers. Reject HTML error pages before EPUB parsing. */
 export async function downloadEpub(book: CatalogBook, onProgress?: (percent: number) => void, signal?: AbortSignal, access: CatalogAccess = {}): Promise<string> {

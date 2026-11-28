@@ -1077,3 +1077,88 @@ a fresh APK; it cannot be tested by reusing the previous signed APK.
 7. With TalkBack and large text enabled, enter selection using the Select book
    accessibility action, check/uncheck books, inspect the count and confirmation,
    cancel and exit. Verify focus order and readable, reachable toolbar actions.
+
+## Unified book catalog and EPUB choices
+
+1. Open Browse books. Confirm All books is selected and that contemporary titles
+   can appear without a download button or EPUB availability claim on their cards.
+2. Search by title and author, paginate, change columns/list view and return from
+   details. Confirm search text, source filter and grid choice remain intact.
+3. Open a familiar public-domain title. Read its description, wait for individual
+   EPUB sources, and select a named source/edition. Verify the chosen EPUB imports,
+   its Open Library cover takes precedence, and the work's Library badge and Read
+   action appear after the save. Try another provider for the same work.
+4. Open a recent copyrighted title. Confirm readable metadata remains available
+   even if no free EPUB is found. A source failure must say it could not be checked,
+   rather than asserting that no EPUB exists anywhere.
+5. Filter by Gutenberg, Standard Ebooks, Archive and the other providers. Verify
+   results belong to that source, carry Open Library metadata where matched, and
+   retain typography covers for unmatched records. Check pagination after an empty
+   provider page and retry recovery after a metadata lookup fails.
+6. Exercise Google key setup from details, including missing/unreadable/invalid
+   keys. Replace/remove the key while checks are pending. Older responses must not
+   update the current reader or offer an outdated download.
+7. Test a missing Open Library cover and a failed image URL. Both must show title
+   and author on typography, preserving the Library badge and details navigation.
+8. Close details or switch books during slow source checks; old rows must not
+   update the new view. During a download, the global progress panel remains
+   available when returning to results. Cancel it or leave Browse and verify no
+   late import. Preparing must wait for its save. Retry a failed edition, then
+   reopen after restart to verify saved text.
+9. With TalkBack and large text, inspect cover/title actions, filter states,
+   source-check announcements, source downloads, key setup, Cancel and Back.
+
+
+## Open Library timeout recovery and compact header
+
+1. Open Browse books. Confirm the top area has a compact title/search, one source
+   row and a single row for subject, sort and view controls. Chip faces should have
+   small rounded corners, including the shared Library filters.
+2. Open and cancel Subjects and Sort with the keyboard up. Search text must stay
+   intact. Select a subject and sort option, return from details, and verify the
+   choices remain selected. Repeat with large system text and TalkBack.
+3. Load the All books page online, close Browse, then reopen it in airplane mode.
+   The previously saved page should appear while refresh is attempted. After a
+   failed refresh, it must remain visible with a saved-results date and Retry.
+   This optional cache needs a previously successful page and working storage.
+4. Search different titles quickly, switch providers, or change account during a
+   slow refresh. Saved results must match the current query/account; an old reply
+   must not replace the current view. No metadata-only card should claim its EPUB
+   is saved or readable on this device.
+5. Restore connectivity and retry. Verify live results replace the saved page.
+   If Open Library itself remains unavailable, the message should identify it and
+   offer retry, a specific-title search or an EPUB source. Compare the same
+   one-result search in the phone browser when diagnosing a continuing timeout.
+
+
+## Trending startup and layout-aware loading
+
+1. Open Browse books with no search text. Verify trending books load from Open
+   Library and are labeled Trending books, rather than showing a catalog-wide
+   count. No EPUB availability is implied by the feed.
+2. With a slow connection and an uncached query, select two columns, then three.
+   Loading covers must align with that grid and the same cover proportions as
+   results. Switch to list mode and verify list placeholders. Repeat while loading
+   another page; the footer placeholders should match the selected layout too.
+3. Search a title such as Harry Potter or Frankenstein. Verify the full search
+   results still appear. Clear the query and return to the trending feed; inspect
+   cached startup, refresh failure, pagination, and Back from details.
+4. Check large text: if the preferred three columns fall back to fewer columns,
+   loading must follow the actual displayed columns. With TalkBack, loading should
+   be announced as one busy state, without fake selectable books.
+
+## Compact source options and import visibility
+
+- Open a work's details. Source options should be compact divider rows with inline
+  download/retry actions. Expand a provider with multiple editions and confirm the
+  desired language/edition still downloads. Check large text and TalkBack labels.
+- Download an EPUB and move back to results. The slim transfer bar should remain
+  visible, show measured percentages when supplied, and offer cancellation. It
+  should show preparation until the saved Library entry is acknowledged, then
+  disappear. Unknown-length transfers must not invent percentage progress.
+- Set Library to Finished or Want to read, then import an unread EPUB. Only after
+  a successful save, All Books/Recent should show the new book first, preserving
+  two/three columns. Return from Browse after a download and verify the same.
+- Cancel a picker, use an invalid EPUB, or simulate a failed save: Library filters
+  must stay as they were and no falsely completed book should appear. Restart
+  after a successful import and confirm its saved text is still readable.

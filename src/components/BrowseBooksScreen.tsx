@@ -6,14 +6,13 @@ import { useReducedMotion } from '../MotionPreferences';
 import {
   CatalogBook,
   CatalogSort,
-  CatalogSource,
   CATALOG_SOURCES,
   deleteDownloaded,
   downloadEpub,
   loadAdded,
-  loadCatalogBookDetails,
+  loadDiscoveryDetails as loadCatalogBookDetails,
   rememberAdded,
-  searchCatalog,
+  searchDiscovery as searchCatalog,
   TOPICS,
 } from '../lib/catalog';
 import { ImportStorageError } from '../lib/bookImport';
@@ -25,10 +24,18 @@ import { Book, BookContentPage } from '../types';
 import { BookCover } from './BookCover';
 import { BookDescription } from './BookDescription';
 import { Icon } from './ui/Icon';
-import { renderShelfChip, renderShelfSort, renderShelfViewOptions, shelfStyles } from './ui/ShelfControls';
+import { renderShelfChip, renderShelfViewOptions, shelfStyles } from './ui/ShelfControls';
 import { ProgressBar } from './ui/ProgressBar';
 import { GoogleBooksSetup } from './GoogleBooksSetup';
 import { googleBooksKeyStore } from '../lib/googleBooksKeyNative';
+import type { DiscoveryFilter } from '../lib/discoveryCatalog';
+import { mergeDiscoveryBooks } from '../lib/openLibraryMetadata';
+import { EpubSources, EPUB_SOURCES } from './EpubSources';
+import { createDiscoveryPageCache } from '../lib/discoveryPageCache';
+import { ModalShell } from './ui/ModalShell';
+import { CatalogError } from '../lib/catalogRequest';
+import { BookShelfLoading } from './BookShelfLoading';
+import { BookDownloadProgress } from './BookDownloadProgress';
 
 interface Props {
   storage: LocalStore;
@@ -102,6 +109,7 @@ export const BookRow = React.memo<RowProps>(({ item, status, disabled, progressP
       <BookCover
         book={{ title: item.title, author: item.author, coverUrl: item.coverUrl, coverAlt: `Cover for ${item.title}` }}
         style="image"
+        fallback="typographic"
         inLibrary={inLibrary}
         variant={viewMode === 'grid' ? 'library' : 'default'}
         size={viewMode === 'list' ? 'compact' : 'regular'}
@@ -116,7 +124,7 @@ export const BookRow = React.memo<RowProps>(({ item, status, disabled, progressP
           <Text style={[viewMode === 'grid' ? styles.shelfAuthor : styles.rowAuthor, dense && shelfStyles.denseAuthor]} numberOfLines={viewMode === 'grid' ? 2 : 1}>
             {item.author}
           </Text>
-          {viewMode === 'list' && <Text style={styles.rowMeta}>EPUB{item.downloads > 0 ? ` · ${compact(item.downloads)} downloads` : ''}</Text>}
+          {viewMode === 'list' && <Text style={styles.rowMeta}>{item.catalogKind === 'work' ? item.publicationYear ? `First published ${item.publicationYear}` : 'Book information' : `EPUB${item.downloads > 0 ? ` · ${compact(item.downloads)} downloads` : ''}`}</Text>}
         </Pressable>
         {error && !busy && status !== 'added' && <View style={styles.rowAction}>
           <Pressable onPress={() => onGet(item)} disabled={disabled}
@@ -168,7 +176,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   const palette = useAppTheme();
   const styles = useMemo(() => createStyles(palette), [palette]);
   const insets = useSafeAreaInsets();
-  const { width, fontScale } = useWindowDimensions();
+  const { width, height, fontScale } = useWindowDimensions();
   const layout = bookShelfLayout(width, fontScale, gridColumns);
   const columns = viewMode === 'grid' ? layout.columns : 1;
   const cardWidth = layout.cardWidth;
@@ -183,7 +191,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       .catch(() => { if (current) { setKeyLoadError(true); setKeyLoading(false); } });
     return () => { current = false; };
   }, [keyStore, keyRetry]);
-  const [source, setSource] = useState<CatalogSource>('gutenberg');
+  const [source, setSource] = useState<DiscoveryFilter>('all');
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeKind, setNoticeKind] = useState<'info' | 'recovery' | undefined>();
   const [downloadErrors, setDownloadErrors] = useState<Record<string, string>>({});
@@ -191,10 +199,13 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   const [query, setQuery] = useState('');
   const [topicId, setTopicId] = useState('popular');
   const [sortBy, setSortBy] = useState<BrowseSort>('popularity');
+  const [choiceMenu, setChoiceMenu] = useState<'subject' | 'sort' | null>(null);
+  const discoveryCache = useMemo(() => createDiscoveryPageCache(storage), [storage]);
   const [items, setItems] = useState<CatalogBook[]>([]);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState<number | null>(0);
+  const [collection, setCollection] = useState<'trending' | undefined>();
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState(false);
@@ -203,6 +214,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   const [added, setAdded] = useState<Record<string, string>>({});
   const [active, setActive] = useState<{
     id: string;
+    workId?: string;
     phase: 'downloading' | 'preparing';
     progressPercent: number | null;
   } | null>(null);
@@ -269,6 +281,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     setError(null);
     setNotice(null);
     setTotal(0);
+    setCollection(undefined);
     setItems([]);
     setPage(1);
     setHasMore(false);
@@ -276,18 +289,26 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       setLoading(sourceKeyLoading);
       return () => ctrl.abort();
     }
-    searchCatalog({ query, topic: effectiveTopic, page: 1, sort: catalogSort, source, googleBooksKey: sourceGoogleKey }, ctrl.signal)
+    searchCatalog({ query, topic: effectiveTopic, page: 1, sort: catalogSort, source, googleBooksKey: sourceGoogleKey, cache: discoveryCache,
+      onCached: cached => {
+        if (!alive.current || ctrl.signal.aborted || gen !== generation.current) return;
+        setItems(cached.books); setHasMore(cached.hasMore); setTotal(cached.total); setCollection(cached.collection); setNotice(cached.notice ?? null); setNoticeKind(cached.noticeKind); setLoading(false);
+      },
+    }, ctrl.signal)
       .then((res) => {
         if (!alive.current || ctrl.signal.aborted || gen !== generation.current) return;
         setItems(res.books);
         setHasMore(res.hasMore);
         setTotal(res.total);
+        setCollection(res.collection);
         setNotice(res.notice ?? null); setNoticeKind(res.noticeKind);
         setLoading(false);
       })
       .catch((err: unknown) => {
         if (!alive.current || ctrl.signal.aborted || gen !== generation.current) return;
-        setError(err instanceof Error ? err.message : 'Could not reach the catalog.');
+        setError(source === 'all' && err instanceof CatalogError && err.kind === 'timeout'
+          ? 'Open Library took too long to respond. Try again, search for a specific title, or choose an EPUB source.'
+          : err instanceof Error ? err.message : 'Could not reach the catalog.');
         setLoading(false);
       });
     return () => {
@@ -296,7 +317,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       moreRequest.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, effectiveTopic, catalogSort, source, reloadNonce, sourceGoogleKey, sourceKeyLoading]);
+  }, [query, effectiveTopic, catalogSort, source, reloadNonce, sourceGoogleKey, sourceKeyLoading, discoveryCache]);
 
   // debounce the search box
   useEffect(() => {
@@ -317,14 +338,14 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     setLoadingMore(true);
     setLoadMoreError(false);
     try {
-      const res = await searchCatalog({ query, topic: effectiveTopic, page: page + 1, sort: catalogSort, source, googleBooksKey: sourceGoogleKey }, ctrl.signal);
+      const res = await searchCatalog({ query, topic: effectiveTopic, page: page + 1, sort: catalogSort, source, googleBooksKey: sourceGoogleKey, cache: discoveryCache }, ctrl.signal);
       if (!alive.current || ctrl.signal.aborted || gen !== generation.current) return;
       setItems((prev) => {
-        const seen = new Set(prev.map((b) => b.id));
-        return [...prev, ...res.books.filter((b) => !seen.has(b.id))];
+        return mergeDiscoveryBooks(prev, res.books);
       });
       setPage((p) => p + 1);
       setHasMore(res.hasMore);
+      if (res.notice) { setNotice(res.notice); setNoticeKind(res.noticeKind); }
     } catch {
       if (alive.current && gen === generation.current && !ctrl.signal.aborted) {
         setLoadMoreError(true);
@@ -336,7 +357,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
         setLoadingMore(false);
       }
     }
-  }, [loading, loadingMore, hasMore, error, query, effectiveTopic, catalogSort, source, sourceGoogleKey, page, showToast]);
+  }, [loading, loadingMore, hasMore, error, query, effectiveTopic, catalogSort, source, sourceGoogleKey, page, showToast, discoveryCache]);
 
   // ---- download + import ----
   const downloadAndImport = async (item: CatalogBook) => {
@@ -344,15 +365,15 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     const ctrl = new AbortController();
     transfer.current = ctrl;
     phase.current = 'downloading';
-    setDownloadErrors(current => { const next = { ...current }; delete next[item.id]; return next; });
-    setActive({ id: item.id, phase: 'downloading', progressPercent: 0 });
+    setDownloadErrors(current => { const next = { ...current }; delete next[item.id]; if (item.discoveryWorkId) delete next[item.discoveryWorkId]; return next; });
+    setActive({ id: item.id, workId: item.discoveryWorkId, phase: 'downloading', progressPercent: 0 });
     try {
       uri = await downloadEpub(item, (progressPercent) => {
         if (alive.current && !ctrl.signal.aborted) setActive(current => current?.id === item.id ? { ...current, progressPercent } : current);
       }, ctrl.signal, { googleBooksKey: googleKey });
       if (!alive.current || ctrl.signal.aborted) return;
       phase.current = 'preparing';
-      setActive({ id: item.id, phase: 'preparing', progressPercent: 100 });
+      setActive({ id: item.id, workId: item.discoveryWorkId, phase: 'preparing', progressPercent: 100 });
       await new Promise(resolve => setTimeout(resolve, 60));
       if (!alive.current || ctrl.signal.aborted) return;
       const { book, pages } = await parseEpubFile(uri, `${item.title}.epub`, storage);
@@ -360,13 +381,13 @@ export const BrowseBooksScreen: React.FC<Props> = ({
         storage.removeBookFiles(book.id, book.coverUrl);
         return;
       }
-      // Prefer the EPUB's permanent embedded art; the catalog is a remote fallback.
-      if (!book.coverUrl && item.coverUrl) book.coverUrl = item.coverUrl;
+      // Discovery artwork takes precedence; existing source-only imports keep embedded art.
+      if (item.coverUrl && (item.useDiscoveryCover || !book.coverUrl)) book.coverUrl = item.coverUrl;
       if (!book.annotation && item.description) book.annotation = item.description;
-      book.coverStyle = 'image';
+      book.coverStyle = item.useDiscoveryCover && !item.coverUrl ? 'typographic' : 'image';
       await onAddEpubBook(book, pages);
       if (!alive.current) return;
-      const next = { ...added, [item.id]: book.id };
+      const next = { ...added, [item.id]: book.id, ...(item.discoveryWorkId ? { [item.discoveryWorkId]: book.id } : {}) };
       setAdded(next); // The library save is confirmed even if bookkeeping fails.
       try { await rememberAdded(next, item.id, book.id, storage); }
       catch { if (alive.current) showToast('Book saved in Library. Its catalog shortcut could not be saved; open it from Library.'); }
@@ -376,7 +397,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       const message = err instanceof ImportStorageError ? msg
         : /Invalid EPUB|zip|central directory/i.test(msg) ? 'This source did not send a readable EPUB. Retry or try another edition or source.'
         : msg || 'Download failed. Check your connection and try again.';
-      setDownloadErrors(current => ({ ...current, [item.id]: message }));
+      setDownloadErrors(current => ({ ...current, [item.id]: message, ...(item.discoveryWorkId ? { [item.discoveryWorkId]: message } : {}) }));
       showToast(message);
     } finally {
       if (uri) deleteDownloaded(uri);
@@ -408,10 +429,10 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   // stable callbacks so memoised rows don't re-render on every state change
   const latest = useRef({ handleGet });
   latest.current = { handleGet };
-  const onGet = useCallback((i: CatalogBook) => latest.current.handleGet(i), []);
+  const onGet = useCallback((i: CatalogBook) => i.catalogKind === 'work' ? setSelectedBook(i) : latest.current.handleGet(i), []);
 
   const statusOf = (item: CatalogBook): RowStatus => {
-    if (active?.id === item.id) return active.phase;
+    if (active?.id === item.id || active?.workId === item.id) return active.phase;
     const bookId = added[item.id];
     return bookId && libraryIds.has(bookId) ? 'added' : 'get';
   };
@@ -425,7 +446,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       item={item}
       status={statusOf(item)}
       disabled={!!active}
-      progressPercent={active?.id === item.id ? active.progressPercent : null}
+      progressPercent={active?.id === item.id || active?.workId === item.id ? active?.progressPercent ?? null : null}
       onGet={onGet}
       inLibrary={inLibrary(item)}
       onDetails={setSelectedBook}
@@ -443,18 +464,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   const detailBusy = detailStatus === 'downloading' || detailStatus === 'preparing';
 
   const empty = loading ? (
-    <View style={{ gap: 14 }}>
-      {[0, 1, 2, 3, 4].map((i) => (
-        <View key={i} style={styles.row}>
-          <View style={[styles.skel, { width: 64, height: 96, borderRadius: 6 }]} />
-          <View style={{ flex: 1, gap: 8, paddingTop: 4 }}>
-            <View style={[styles.skel, { height: 16, width: '75%' }]} />
-            <View style={[styles.skel, { height: 12, width: '45%' }]} />
-            <View style={[styles.skel, { height: 12, width: '30%' }]} />
-          </View>
-        </View>
-      ))}
-    </View>
+    <BookShelfLoading viewMode={viewMode} columns={columns} cardWidth={cardWidth} />
   ) : source === 'google' && !googleKey ? (
     <View style={styles.state}>
       <Icon name="menu_book" size={40} color={palette.secondaryFixedDim} />
@@ -465,7 +475,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
   ) : error ? (
     <View style={styles.state}>
       <Icon name="cloud_off" size={40} color={palette.secondaryFixedDim} />
-      <Text style={styles.stateTitle}>Can’t reach the catalog</Text>
+      <Text style={styles.stateTitle}>{source === 'all' ? 'Can’t load Open Library' : 'Can’t reach the catalog'}</Text>
       <Text style={styles.stateBody}>{error}</Text>
       <Pressable accessibilityRole="button" accessibilityLabel="Retry catalog" onPress={() => setReloadNonce((n) => n + 1)} style={[styles.btn, styles.btnFilled, { marginTop: 6 }]}>
         <Icon name="refresh" size={16} color="#fff" />
@@ -477,17 +487,21 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       <Icon name="search" size={40} color={palette.secondaryFixedDim} />
       <Text style={styles.stateTitle}>No books found</Text>
       <Text style={styles.stateBody}>
-        {hasMore ? 'No eligible EPUBs on this page. Load more to check the next results, or try another search.' : `${query ? `Nothing matched “${query}”. ` : ''}Try an author’s name or a word from the title.`}
+        {hasMore && source !== 'all' ? 'No EPUB listings on this page. Load more to check the next results, or try another search.' : `${query ? `Nothing matched “${query}”. ` : ''}Try an author’s name or a word from the title.`}
       </Text>
     </View>
   );
 
-  const newestSources = ['gutenberg', 'standard', 'archive', 'openlibrary', 'google'];
-  const sortOptions = SORT_OPTIONS.filter(option => option.id !== 'releaseDate' || newestSources.includes(source)).map(option => option.id === 'popularity' && !['gutenberg', 'standard', 'archive'].includes(source) ? { ...option, label: 'Source order' } : option);
-  const browserHeader = <View style={{ gap: 6, paddingBottom: 8 }}>
+  const newestSources = ['all', 'gutenberg', 'standard', 'archive', 'google'];
+  const sortOptions = SORT_OPTIONS.filter(option => option.id !== 'releaseDate' || newestSources.includes(source)).map(option => option.id === 'popularity' && !['gutenberg', 'standard', 'archive'].includes(source) ? { ...option, label: source === 'all' ? query ? 'Relevance' : effectiveTopic ? 'Most editions' : 'Trending now' : 'Source order' } : option.id === 'releaseDate' && source === 'all' ? { ...option, label: 'Newest published' } : option);
+  const currentSortLabel = sortOptions.find(option => option.id === sortBy)?.label ?? 'Relevance';
+  const shortSortLabel = sortBy === 'releaseDate' ? 'Newest' : sortBy === 'popularity' ? source === 'all' ? query ? 'Relevance' : effectiveTopic ? 'Browse' : 'Trending' : ['gutenberg', 'standard', 'archive'].includes(source) ? 'Popular' : 'Default' : currentSortLabel;
+  const currentSubjectLabel = query || topicId === 'popular' ? 'All subjects' : topicLabel;
+  const browserHeader = <View style={styles.browserControls}>
     <View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow} keyboardShouldPersistTaps="handled">
-        {CATALOG_SOURCES.map(item => renderShelfChip(palette, item.label, source === item.id, () => { setSource(item.id); if (sortBy === 'releaseDate' && !newestSources.includes(item.id)) setSortBy('popularity'); }))}
+      <ScrollView horizontal accessibilityLabel="EPUB source filters" showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow} keyboardShouldPersistTaps="handled">
+        {renderShelfChip(palette, 'All books', source === 'all', () => setSource('all'))}
+        {EPUB_SOURCES.map(item => renderShelfChip(palette, item.label, source === item.id, () => { setSource(item.id); if (sortBy === 'releaseDate' && !newestSources.includes(item.id)) setSortBy('popularity'); }))}
       </ScrollView>
       {source === 'google' && <Pressable onPress={() => setKeySetupOpen(true)} disabled={!!active}
         accessibilityRole="button" accessibilityLabel="Google Books setup" accessibilityState={{ disabled: !!active }} style={styles.smallAction}>
@@ -495,25 +509,17 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       </Pressable>}
 
     </View>
-    {/* Search lives outside the virtualized results so typing keeps focus. */}
-    {/* Topics */}
-    <View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow} keyboardShouldPersistTaps="handled">
-        {TOPICS.map(topic => renderShelfChip(palette, topic.label, !query && topicId === topic.id,
-          () => { setQueryInput(''); setQuery(''); setTopicId(topic.id); }))}
-      </ScrollView>
-    </View>
-
-    <View style={styles.sortRow}>
-      <View style={styles.sortGroup}>
-        <Icon name="sort" size={16} color={palette.muted} />
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sortOptions} keyboardShouldPersistTaps="handled">
-          {sortOptions.map(option => renderShelfSort(palette, option.label, `Sort free books by ${option.label}`, sortBy === option.id, () => setSortBy(option.id)))}
-        </ScrollView>
-      </View>
+    <View style={[styles.controlRow, fontScale > 1.25 && styles.controlRowLarge]}>
+      <Pressable onPress={() => setChoiceMenu('subject')} accessibilityRole="button" accessibilityLabel="Choose book subjects" accessibilityValue={{ text: currentSubjectLabel }} accessibilityState={{ expanded: choiceMenu === 'subject' }} style={[styles.menuTarget, fontScale > 1.25 && styles.menuTargetLarge]}>
+        <View pointerEvents="none" style={styles.menuFace}><Text numberOfLines={1} style={styles.menuText}>{currentSubjectLabel}</Text><Icon name="expand_more" size={16} color={palette.muted} /></View>
+      </Pressable>
+      <Pressable onPress={() => setChoiceMenu('sort')} accessibilityRole="button" accessibilityLabel="Sort books" accessibilityValue={{ text: currentSortLabel }} accessibilityState={{ expanded: choiceMenu === 'sort' }} style={[styles.menuTarget, fontScale > 1.25 && styles.menuTargetLarge]}>
+        <View pointerEvents="none" style={styles.menuFace}><Icon name="sort" size={15} color={palette.primary} /><Text numberOfLines={1} style={styles.menuText}>{shortSortLabel}</Text></View>
+      </Pressable>
       {renderShelfViewOptions(palette, viewMode, gridColumns, onViewModeChange, onGridColumnsChange)}
     </View>
     {viewMode === 'grid' && columns !== gridColumns && <Text style={styles.sortNote}>Using {columns} {columns === 1 ? 'column' : 'columns'} to keep this layout readable.</Text>}
+    {(sortBy === 'title' || sortBy === 'author') && <Text style={styles.sortNote}>Sorting the loaded books.</Text>}
     {sortBy === 'releaseDate' && source === 'gutenberg' ? (
       <Text style={styles.sortNote}>Approximate order of addition, based on Gutenberg ID.</Text>
     ) : null}
@@ -525,7 +531,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
     <View style={styles.countRow}>
       {!loading && !error && items.length > 0 ? (
         <Text style={styles.count}>
-          {query ? `Results for “${query}”` : topicLabel} · {total === null ? `${items.length} books loaded` : `${total.toLocaleString()} books`}
+          {query ? `Results for “${query}”` : collection === 'trending' ? 'Trending books' : topicId === 'popular' ? 'All subjects' : topicLabel} · {total === null ? `${items.length} ${items.length === 1 ? 'book' : 'books'} loaded` : `${total.toLocaleString()} books`}
         </Text>
       ) : <View style={{ flex: 1 }} />}
     </View>
@@ -537,7 +543,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
         value={queryInput}
         onChangeText={value => setQueryInput(value.slice(0, 200))}
         maxLength={200}
-        accessibilityLabel="Search free books by title or author"
+        accessibilityLabel="Search books by title or author"
         onSubmitEditing={() => setQuery(queryInput.trim())}
         placeholder="Search titles or authors…"
         placeholderTextColor={palette.muted}
@@ -552,7 +558,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
             setQueryInput('');
             setQuery('');
           }}
-          accessibilityRole="button" accessibilityLabel="Clear free book search" style={styles.smallAction}
+          accessibilityRole="button" accessibilityLabel="Clear book search" style={styles.smallAction}
         >
           <Icon name="close" size={18} color={palette.muted} />
         </Pressable>
@@ -564,7 +570,9 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       visible
       animationType={reducedMotion ? 'none' : 'slide'}
       onRequestClose={() => {
-        if (duplicateBook) {
+        if (choiceMenu) {
+          setChoiceMenu(null);
+        } else if (duplicateBook) {
           setDuplicateBook(null);
           pendingGet.current = false;
         } else if (selectedBook) {
@@ -578,19 +586,16 @@ export const BrowseBooksScreen: React.FC<Props> = ({
       <View style={[styles.screen, { paddingTop: insets.top }]}>
         {/* Header */}
         <View style={styles.header}>
-          <Pressable onPress={() => selectedBook ? setSelectedBook(null) : close()} disabled={!selectedBook && active?.phase === 'preparing'} accessibilityState={{ disabled: !selectedBook && active?.phase === 'preparing' }} accessibilityRole="button" style={styles.backBtn} accessibilityLabel={selectedBook ? 'Back to free books' : 'Back to library'}>
+          <Pressable onPress={() => selectedBook ? setSelectedBook(null) : close()} disabled={!selectedBook && active?.phase === 'preparing'} accessibilityState={{ disabled: !selectedBook && active?.phase === 'preparing' }} accessibilityRole="button" style={styles.backBtn} accessibilityLabel={selectedBook ? 'Back to books' : 'Back to library'}>
             <Icon name="arrow_back" size={22} color={palette.onSurface} />
           </Pressable>
           <View style={{ flex: 1 }}>
-            <Text accessibilityRole="header" style={styles.title}>{selectedBook ? 'Book details' : 'Free books'}</Text>
-            <Text style={styles.subtitle}>{CATALOG_SOURCES.find(item => item.id === (selectedBook?.source ?? source))?.[selectedBook ? 'label' : 'description']}</Text>
+            <Text accessibilityRole="header" style={styles.title}>{selectedBook ? 'Book details' : 'Browse books'}</Text>
+            {selectedBook && <Text style={styles.subtitle}>{selectedBook.openLibraryWorkId ? 'Open Library' : 'Book information'}</Text>}
           </View>
         </View>
 
-        {active && <View style={styles.notice}>
-          <Text accessibilityLiveRegion="polite" style={styles.noticeText}>{active.phase === 'preparing' ? 'Saving your book. Please wait…' : 'Downloading your book…'}</Text>
-          {active.phase === 'downloading' && <Pressable accessibilityRole="button" accessibilityLabel="Cancel book download" onPress={() => transfer.current?.abort()} style={styles.smallAction}><Text style={styles.sortActive}>Cancel download</Text></Pressable>}
-        </View>}
+        {active && <BookDownloadProgress phase={active.phase} percent={active.progressPercent} onCancel={() => transfer.current?.abort()} />}
         {/* Results */}
         <View style={{ flex: 1, width: '100%', maxWidth: 768, alignSelf: 'center' }}>
         <View style={{ flex: 1 }} pointerEvents={selectedBook ? 'none' : 'auto'}
@@ -598,7 +603,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
         {searchBar}
         <FlatList
           key={`${viewMode}-${columns}`}
-          accessibilityLabel={`${CATALOG_SOURCES.find(item => item.id === source)?.label} books`}
+          accessibilityLabel={source === 'all' ? 'Open Library books' : `${CATALOG_SOURCES.find(item => item.id === source)?.label} books`}
           data={sortedItems}
           extraData={[active, added, libraryIds, ownedLibraryIds, ownedWorks, downloadErrors]}
           numColumns={columns}
@@ -609,15 +614,13 @@ export const BrowseBooksScreen: React.FC<Props> = ({
           ListEmptyComponent={empty}
           ListFooterComponent={
             loadingMore ? (
-              <View style={{ paddingVertical: 18, alignItems: 'center' }}>
-                <Icon name="sync" size={20} color={palette.muted} spin />
-              </View>
+              <BookShelfLoading viewMode={viewMode} columns={columns} cardWidth={cardWidth} rows={1} more />
             ) : loadMoreError ? (
               <Pressable accessibilityRole="button" accessibilityLabel="Retry loading more books" onPress={loadMore} style={[styles.btn, styles.btnOutline, { alignSelf: 'center', marginTop: 8 }]}>
                 <Icon name="refresh" size={16} color={palette.primary} />
                 <Text style={[styles.btnText, { color: palette.primary }]}>Retry loading more</Text>
               </Pressable>
-            ) : null
+            ) : hasMore && !loading && !error ? <Pressable onPress={loadMore} accessibilityRole="button" accessibilityLabel="Load more books" style={[styles.btn, styles.btnOutline]}><Text style={[styles.btnText, { color: palette.primary }]}>Load more books</Text></Pressable> : null
           }
           onEndReached={items.length ? loadMore : undefined}
           onEndReachedThreshold={0.6}
@@ -638,17 +641,17 @@ export const BrowseBooksScreen: React.FC<Props> = ({
         {detailBook && <ScrollView key={detailBook.id} style={[StyleSheet.absoluteFill, { backgroundColor: palette.background }]}
           contentContainerStyle={[styles.detailsContent, { paddingBottom: insets.bottom + 28 }]}>
           <View style={styles.detailsCover}>
-            <BookCover book={{ title: detailBook.title, author: detailBook.author, coverUrl: detailBook.coverUrl, coverAlt: `Cover for ${detailBook.title}` }} style="image"
+            <BookCover book={{ title: detailBook.title, author: detailBook.author, coverUrl: detailBook.coverUrl, coverAlt: `Cover for ${detailBook.title}` }} style="image" fallback="typographic"
               inLibrary={inLibrary(detailBook)} containerStyle={{ width: 144, aspectRatio: 2 / 3 }} />
           </View>
           <Text accessibilityRole="header" selectable style={styles.detailsTitle}>{detailBook.title}</Text>
           <Text selectable style={styles.detailsAuthor}>{detailBook.author}</Text>
-          <Text style={styles.rowMeta}>{CATALOG_SOURCES.find(item => item.id === (detailBook.source ?? 'gutenberg'))?.label} · EPUB</Text>
+          <Text style={styles.rowMeta}>{detailBook.catalogKind === 'work' ? `${detailBook.publicationYear ? `First published ${detailBook.publicationYear} · ` : ''}${detailBook.editionCount ? `${detailBook.editionCount} editions · ` : ''}${detailBook.openLibraryWorkId ? 'Open Library metadata' : 'Source metadata'}` : `${CATALOG_SOURCES.find(item => item.id === (detailBook.source ?? 'gutenberg'))?.label} · EPUB`}</Text>
           {detailStatus === 'added' ? (
             <Pressable onPress={() => handleRead(detailBook)} accessibilityRole="button" accessibilityLabel={`Read ${detailBook.title}`} style={[styles.btn, styles.btnFilled]}>
               <Text style={[styles.btnText, { color: palette.white }]}>Read book</Text>
             </Pressable>
-          ) : (
+          ) : detailBook.catalogKind === 'work' ? null : (
             <Pressable onPress={() => handleGet(detailBook)} disabled={!!active || detailBusy} accessibilityRole="button"
               accessibilityLabel={`${downloadErrors[detailBook.id] ? 'Retry downloading' : 'Add'} ${detailBook.title}${downloadErrors[detailBook.id] ? '' : ' to library'}`}
               accessibilityState={{ disabled: !!active || detailBusy, busy: detailBusy }} style={[styles.btn, styles.btnFilled, !!active && { opacity: 0.6 }]}>
@@ -656,14 +659,10 @@ export const BrowseBooksScreen: React.FC<Props> = ({
               <Text style={[styles.btnText, { color: palette.white }]}>{detailStatus === 'preparing' ? 'Preparing…' : detailStatus === 'downloading' ? 'Downloading…' : downloadErrors[detailBook.id] ? 'Retry download' : 'Add to Library'}</Text>
             </Pressable>
           )}
-          {detailBusy && <View style={styles.downloadProgress}>
-            <ProgressBar percent={active?.progressPercent ?? 0} height={3} />
-            <Text accessibilityLiveRegion="polite" style={styles.rowMeta}>{detailStatus === 'preparing' ? 'Preparing book…' : `${active?.progressPercent ?? 0}% downloaded`}</Text>
-          </View>}
           {downloadErrors[detailBook.id] && <Text accessibilityRole="alert" style={styles.rowError}>{downloadErrors[detailBook.id]}</Text>}
           <View style={styles.detailsSection}>
             <Text accessibilityRole="header" style={styles.detailsSectionTitle}>About this book</Text>
-            <BookDescription value={detailBook.description} emptyText={detail?.loading !== false ? 'Loading description…' : detail.error ? 'Description could not be loaded.' : 'This source has not provided a description for this edition.'} />
+            <BookDescription value={detailBook.description} emptyText={detail?.loading !== false ? 'Loading description…' : detail.error ? 'Description could not be loaded.' : detailBook.catalogKind === 'work' ? 'No description is available for this book.' : 'This source has not provided a description for this edition.'} />
             {(!detail || detail.loading) && !!detailBook.description && <Text accessibilityLiveRegion="polite" style={styles.rowMeta}>Loading edition details…</Text>}
             {detail?.error && <View style={{ gap: 8 }}>
               <Text accessibilityRole="alert" style={styles.rowMeta}>{detail.error}</Text>
@@ -672,6 +671,8 @@ export const BrowseBooksScreen: React.FC<Props> = ({
               </Pressable>
             </View>}
           </View>
+          {detailBook.catalogKind === 'work' && <EpubSources book={detailBook} googleKey={googleKey} keyLoading={keyLoading} onSetupGoogle={() => setKeySetupOpen(true)} onGet={handleGet}
+            disabled={!!active} activeId={active?.id} errors={downloadErrors} />}
           {!!detailBook.languages?.length && <View style={styles.detailsSection}>
             <Text style={styles.detailsSectionTitle}>Language</Text><Text selectable style={styles.subtitle}>{detailBook.languages.join(', ')}</Text>
           </View>}
@@ -681,6 +682,16 @@ export const BrowseBooksScreen: React.FC<Props> = ({
           {detailBook.downloads > 0 && <Text style={styles.rowMeta}>{detailBook.downloads.toLocaleString()} downloads from this source</Text>}
         </ScrollView>}
         </View>
+        {choiceMenu && <ModalShell onClose={() => setChoiceMenu(null)} align="bottom" cardStyle={{ height: Math.min(height * 0.75, 96 + (choiceMenu === 'subject' ? TOPICS.length : sortOptions.length) * 56 * fontScale) }}>
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.choiceBody}>
+            <View style={styles.choiceHeading}><Text accessibilityRole="header" style={styles.detailsSectionTitle}>{choiceMenu === 'subject' ? 'Book subjects' : 'Sort books'}</Text><Pressable onPress={() => setChoiceMenu(null)} accessibilityRole="button" accessibilityLabel="Close book filters" style={styles.smallAction}><Icon name="close" size={20} color={palette.onSurface} /></Pressable></View>
+            {choiceMenu === 'subject' ? TOPICS.map(topic => <Pressable key={topic.id} onPress={() => { setQueryInput(''); setQuery(''); setTopicId(topic.id); setChoiceMenu(null); }} accessibilityRole="button" accessibilityLabel={topic.id === 'popular' ? 'All subjects' : topic.label} accessibilityState={{ selected: !query && topicId === topic.id }} style={styles.choiceOption}>
+              <Text style={styles.choiceText}>{topic.id === 'popular' ? 'All subjects' : topic.label}</Text>{!query && topicId === topic.id && <Icon name="check" size={18} color={palette.primary} />}
+            </Pressable>) : sortOptions.map(option => <Pressable key={option.id} onPress={() => { setSortBy(option.id); setChoiceMenu(null); }} accessibilityRole="button" accessibilityLabel={`Sort books by ${option.label}`} accessibilityState={{ selected: sortBy === option.id }} style={styles.choiceOption}>
+              <Text style={styles.choiceText}>{option.label}</Text>{sortBy === option.id && <Icon name="check" size={18} color={palette.primary} />}
+            </Pressable>)}
+          </ScrollView>
+        </ModalShell>}
         {duplicateBook ? (
           <View style={styles.confirmationOverlay}>
             <Pressable
@@ -741,32 +752,40 @@ export const BrowseBooksScreen: React.FC<Props> = ({
 
 const createStyles = (p: AppPalette) =>
   StyleSheet.create({
-    screen: { flex: 1, backgroundColor: p.background, gap: 8 },
+    screen: { flex: 1, backgroundColor: p.background, gap: 4 },
     detailsContent: { padding: 20, gap: 12 },
     detailsCover: { alignItems: 'center', paddingVertical: 8 },
     detailsTitle: { ...type.headlineSm, color: p.onSurface, textAlign: 'center' },
     detailsAuthor: { ...type.bodyMd, color: p.muted, textAlign: 'center' },
     detailsSection: { gap: 10, padding: 16, borderRadius: 12, backgroundColor: p.surfaceLow },
     detailsSectionTitle: { ...type.labelLg, color: p.onSurface },
-    header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 8 },
+    header: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingTop: 4 },
     backBtn: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
-    title: { ...type.headlineSm, color: p.onSurface },
+    title: { ...type.headlineSm, fontSize: 22, lineHeight: 28, color: p.onSurface },
     subtitle: { ...type.bodySm, color: p.muted },
     searchBox: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 8,
       backgroundColor: p.surfaceContainer,
-      borderRadius: 12,
+      borderRadius: 10,
       borderWidth: 1, borderColor: p.border,
       paddingLeft: 12,
       marginHorizontal: 20,
     },
-    searchInput: { flex: 1, minWidth: 0, minHeight: 48, paddingVertical: 12, fontFamily: F.sans, fontSize: 14, color: p.onSurface },
+    searchInput: { flex: 1, minWidth: 0, minHeight: 48, paddingVertical: 6, fontFamily: F.sans, fontSize: 14, color: p.onSurface },
     chipRow: { ...shelfStyles.chipRow },
-    sortRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-    sortGroup: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
-    sortOptions: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: 6 },
+    browserControls: { gap: 0, paddingBottom: 4 },
+    controlRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    controlRowLarge: { flexWrap: 'wrap' },
+    menuTarget: { flex: 1, minWidth: 68, minHeight: 48, justifyContent: 'center' },
+    menuTargetLarge: { flexBasis: '44%', flexGrow: 1 },
+    menuFace: { minHeight: 28, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 8, backgroundColor: p.surfaceContainer },
+    menuText: { ...type.labelSm, fontSize: 12, lineHeight: 18, color: p.onSurface, flexShrink: 1 },
+    choiceBody: { padding: 16, gap: 4 },
+    choiceHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+    choiceOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, minHeight: 48, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8 },
+    choiceText: { ...type.bodyMd, color: p.onSurface, flexShrink: 1 },
     sortActive: { color: p.primary },
     sortNote: { ...type.bodySm, color: p.muted, marginTop: 0 },
     countRow: {
@@ -774,7 +793,7 @@ const createStyles = (p: AppPalette) =>
       alignItems: 'center',
     },
     count: { ...type.labelSm, color: p.muted, flex: 1 },
-    resultsContent: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 24, gap: 12 },
+    resultsContent: { paddingHorizontal: 20, paddingTop: 0, paddingBottom: 24, gap: 8 },
     resultsList: { gap: 12 },
     gridColumn: { gap: 16 },
 
@@ -873,7 +892,6 @@ const createStyles = (p: AppPalette) =>
       paddingHorizontal: 10,
     },
 
-    skel: { backgroundColor: p.surfaceHigh, borderRadius: 4 },
     state: { alignItems: 'center', gap: 8, paddingVertical: 48, paddingHorizontal: 24 },
     stateTitle: { ...type.headlineSm, fontSize: 20, color: p.onSurface },
     stateBody: { ...type.bodyMd, color: p.muted, textAlign: 'center' },

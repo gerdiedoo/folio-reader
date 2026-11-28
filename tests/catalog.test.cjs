@@ -125,6 +125,14 @@ test('catalog request deadlines cover transport and response body even when abor
   }
 });
 
+test('Open Library can use a separate deadline without changing other providers', async () => {
+  const f = fixture({ fetcher: async () => new Promise(() => {}) });
+  const pending = f.request('https://openlibrary.org/search.json?q=books', 'json', undefined, 1, 25000);
+  await flush(); assert.equal([...f.timers.values()].some(timer => timer.ms === 10000), false);
+  f.fire(25000); await assert.rejects(pending, error => error.kind === 'timeout');
+  assert.equal(f.timers.size, 0);
+});
+
 test('cancellation finishes promptly and never returns starter results for an aborted request', async () => {
   const f = fixture({ fetcher: async () => new Promise(() => {}) }), ctrl = new AbortController();
   const pending = f.searchCatalog({}, ctrl.signal); await flush(); ctrl.abort();

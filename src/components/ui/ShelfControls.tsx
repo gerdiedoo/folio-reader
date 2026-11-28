@@ -9,7 +9,7 @@ import { Icon } from './Icon';
 export const shelfStyles = StyleSheet.create({
   chipRow: { gap: 6 },
   chipTarget: { minHeight: 48, minWidth: 48, justifyContent: 'center' },
-  chipFace: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20 },
+  chipFace: { paddingHorizontal: 10, paddingVertical: 3, minHeight: 28, justifyContent: 'center', borderRadius: 8 },
   chipText: { ...type.labelMd, fontSize: 12, lineHeight: 18 },
   sortTarget: { minHeight: 48, minWidth: 48, paddingHorizontal: 4, justifyContent: 'center', alignItems: 'center' },
   sortText: { fontFamily: F.sans, fontSize: 13, lineHeight: 18 },
