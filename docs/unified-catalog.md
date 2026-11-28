@@ -35,6 +35,18 @@ Details load independently of EPUB checks, so a description can be read even if
 all providers are offline or no downloadable edition is found. The existing
 native description formatter displays paragraphs and HTML emphasis safely.
 
+Download choices use compact divider rows with inline actions. Additional editions
+stay collapsed until requested, with language and edition labels retained. One
+slim transfer bar remains visible above both details and results; it shows actual
+percentages when available, a reduced-motion-aware waiting indicator otherwise,
+and a separate preparation state until the Library save is confirmed. Cancellation
+remains available during transfer.
+
+Successful local imports and catalog downloads reset the Library to All Books,
+clear search/selection and reveal the just-saved book first in Recent for that
+viewing session. They preserve grid density and do not fabricate a last-read date.
+Cancelled or failed saves retain the previous Library filters.
+
 The EPUB sources section checks Gutenberg, Standard Ebooks, Internet Archive,
 Google Books, OAPEN, DOAB, Wikisource and Feedbooks. Three provider checks can run
 at once. Every provider independently reports checking, matching editions,
@@ -96,7 +108,7 @@ The cache stores only sanitized Open Library metadata, not provider EPUB links,
 Google keys, descriptions, availability results or Library ownership. Cache errors
 do not turn a live success into a failed catalog load.
 
-633 regression tests, TypeScript and Android/iOS Hermes exports pass. Automated
+639 regression tests, TypeScript and Android/iOS Hermes exports pass. Automated
 coverage includes contemporary works without EPUBs, covers and failed images,
 provider-filter matching/deduplication, incorrect author/volume rejection,
 independent availability/error/retry states, cancellation and reader-key changes,

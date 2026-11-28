@@ -1884,12 +1884,12 @@ test('an unexpected cover callback error keeps the draft open without claiming a
   f.h.unmount();
 });
 
-function libraryHarness(overrides = {}) {
+function libraryHarness(overrides = {}, { picker, parse } = {}) {
   const selected = [], opened = [], removed = [], hapticCalls = [];
   let pickerCalls = 0, failFeedback = false;
   const h = harness({ runEffects: true, moduleMocks: {
-    'expo-document-picker': { getDocumentAsync: async () => { pickerCalls++; return { canceled: true }; } },
-    'expo-image-picker': {}, '../lib/epubParser': {},
+    'expo-document-picker': { getDocumentAsync: async () => { pickerCalls++; return picker ? picker() : { canceled: true }; } },
+    'expo-image-picker': {}, '../lib/epubParser': { parseEpubFile: parse },
     'expo-haptics': { AndroidHaptics: { Long_Press: 'long-press' }, ImpactFeedbackStyle: { Light: 'light' },
       performAndroidHapticsAsync: async value => { hapticCalls.push(value); if (failFeedback) throw Error('Haptics unavailable'); }, impactAsync: async value => { hapticCalls.push(value); } },
     './BrowseBooksScreen': { BrowseBooksScreen: 'BrowseBooksScreen' },
@@ -2287,7 +2287,9 @@ test('closing or cancelling a download prevents a late transfer from importing',
     let finish;
     const f = catalogHarness({ download: () => new Promise(done => { finish = done; }) });
     f.render(); await flushNative(); let root = f.render(); freeBookRow(f, root).onGet(f.item); root = f.render();
-    labelled(root, close ? 'Back to library' : 'Cancel book download').onPress(); assert.equal(f.calls.downloads[0][2].aborted, true);
+    if (close) labelled(root, 'Back to library').onPress();
+    else elements(root).find(node => node.type?.name === 'BookDownloadProgress').props.onCancel();
+    assert.equal(f.calls.downloads[0][2].aborted, true);
     if (close) f.h.unmount();
     const writes = f.h.stateWrites(); finish('file:///cache/book.epub'); await flushNative();
     assert.equal(f.calls.saved.length, 0); assert.deepEqual(f.calls.deleted, ['file:///cache/book.epub']);
@@ -3093,4 +3095,98 @@ test('pagination loading uses the same selected shelf layout and trending counts
  f.render();await flushNative();let root=f.render();assert.match(renderedText(freeBookList(root).ListHeaderComponent),/Trending books/);assert.match(renderedText(freeBookList(root).ListHeaderComponent),/1 book loaded/);
  freeBookList(root).onEndReached();root=f.render();let loading=freeBookList(root).ListFooterComponent;assert.equal(loading.type.name,'BookShelfLoading');assert.equal(loading.props.columns,2);assert.equal(loading.props.rows,1);assert.equal(loading.props.more,true);
  labelled(root,'3-column grid').onPress();root=f.render();loading=freeBookList(root).ListFooterComponent;assert.equal(loading.props.columns,3);next({books:[],hasMore:false,total:null,collection:'trending'});await flushNative();f.h.unmount();
+});
+
+test('a confirmed local EPUB import clears hidden filters and reveals the unread book first without inventing reading history', async () => {
+  let confirm, f;
+  const book = { id: 'new-import', title: 'Newly imported', author: 'A Writer', lastOpened: 'Not yet read', progressPercent: 0, currentPage: 1 };
+  const pages = [{ pageNumber: 1 }];
+  f = libraryHarness({ onAddEpubBook: async (saved, text) => {
+    assert.equal(saved, book); assert.equal(text, pages);
+    await new Promise(done => { confirm = done; });
+    f.props.books = [saved, ...f.props.books]; f.props.availableBookIds.push(saved.id);
+  } }, { picker: async () => ({ assets: [{ uri: 'file:///picked.epub', name: 'picked.epub' }] }), parse: async () => ({ book, pages }) });
+  let root = f.render(); await flushNative();
+  pressLibraryFilter(root, 'Finished'); labelled(root, 'Sort Library by Title').onPress(); root = f.render();
+  const importing = labelled(root, 'Import EPUB').onPress(); await flushNative(); root = f.render();
+  assert.equal(labelled(root, 'Finished').accessibilityState.selected, true);
+  assert.equal(libraryRows(root).length, 0);
+  confirm(); await importing; root = f.render();
+  assert.equal(labelled(root, 'All Books').accessibilityState.selected, true);
+  assert.equal(labelled(root, 'Sort Library by Recent').accessibilityState.selected, true);
+  assert.match(libraryRows(root)[0].props.accessibilityLabel, /^Newly imported by A Writer/);
+  assert.equal(book.lastOpened, 'Not yet read'); assert.equal(book.progressPercent, 0);
+  assert.equal(elements(root).some(node => node.props?.accessibilityLabel === 'Search Library by title or author'), false);
+  labelled(root, '3-column grid').onPress(); root = f.render(); assert.match(libraryRows(root)[0].props.accessibilityLabel, /^Newly imported/);
+  f.h.unmount();
+});
+
+test('cancelled or failed local imports preserve the current library filter', async () => {
+  for (const failure of ['picker', 'parse', 'commit']) {
+    const f = libraryHarness({ onAddEpubBook: async () => { throw Error('Disk full'); } }, {
+      picker: async () => failure === 'picker' ? { canceled: true } : { assets: [{ uri: 'file:///picked.epub', name: 'picked.epub' }] },
+      parse: async () => { if (failure === 'parse') throw Error('Invalid EPUB'); return { book: { id: 'new' }, pages: [] }; },
+    });
+    let root = f.render(); pressLibraryFilter(root, 'Reading'); root = f.render();
+    await labelled(root, 'Import EPUB').onPress(); root = f.render();
+    assert.equal(labelled(root, 'Reading').accessibilityState.selected, true);
+    assert.equal(f.props.books.length, 4); f.h.unmount();
+  }
+});
+
+test('catalog imports reveal the saved book in the library after returning from Browse', async () => {
+  let f;
+  const book = { id: 'catalog-new', title: 'Downloaded book', author: 'A Writer', lastOpened: 'Not yet read', progressPercent: 0, currentPage: 1 };
+  f = libraryHarness({ onAddEpubBook: async saved => { f.props.books = [...f.props.books, saved]; f.props.availableBookIds.push(saved.id); } });
+  let root = f.render(); pressLibraryFilter(root, 'Finished'); root = f.render(); labelled(root, 'Browse books').onPress(); root = f.render();
+  const browse = elements(root).find(node => node.type === 'BrowseBooksScreen').props;
+  await browse.onAddEpubBook(book, [{ pageNumber: 1 }]); browse.onClose(); root = f.render();
+  assert.equal(labelled(root, 'All Books').accessibilityState.selected, true);
+  assert.match(libraryRows(root)[0].props.accessibilityLabel, /^Downloaded book/); f.h.unmount();
+});
+
+test('source rows keep alternative editions collapsed and download the chosen language without repeating the main title', async () => {
+  const editions = ['en', 'fr', 'es'].map((language, i) => ({ id: `edition-${i}`, source: 'standard', title: i ? `Edition ${language}` : 'A Book', languages: [language], subjects: [] }));
+  const f = epubSourcesHarness(async (_book, source) => ({ source, state: source === 'standard' ? 'available' : 'not-found', editions: source === 'standard' ? editions : [] }));
+  f.render(); await flushNative(); let root = f.render();
+  assert.doesNotMatch(renderedText(root), /Edition fr|Edition es|A Book/);
+  assert.equal(elements(root).filter(node => node.props?.accessibilityLabel?.startsWith('Download A Book')).length, 1);
+  assert.equal(labelled(root, 'Show editions from standard').accessibilityState.expanded, false);
+  labelled(root, 'Show editions from standard').onPress(); root = f.render();
+  assert.match(renderedText(root), /Edition fr/);
+  labelled(root, 'Download A Book from standard, edition 2').onPress(); assert.equal(f.gets[0].id, 'edition-1'); assert.deepEqual(f.gets[0].languages, ['fr']);
+  labelled(root, 'Hide editions from standard').onPress(); root = f.render(); assert.doesNotMatch(renderedText(root), /Edition fr/);
+  f.h.unmount();
+});
+
+test('slim download progress exposes real percentages, unknown sizes, preparation and cancellation; reduced motion stops animation', () => {
+  const h = harness({ runEffects: true, reducedMotion: false, moduleMocks: { './ui/ProgressBar': { ProgressBar: 'ProgressBar' } } });
+  const { BookDownloadProgress } = h.load('../src/components/BookDownloadProgress.tsx');
+  let cancelled = 0;
+  const props = { phase: 'downloading', percent: 0, onCancel: () => cancelled++ };
+  let root = h.render(BookDownloadProgress, props);
+  assert.equal(labelled(root, 'Downloading book').accessibilityValue.now, undefined);
+  assert.equal(h.animations.find(animation => animation.kind === 'loop').started, true);
+  labelled(root, 'Cancel book download').onPress(); assert.equal(cancelled, 1);
+  props.percent = 37; root = h.render(BookDownloadProgress, props);
+  assert.equal(labelled(root, 'Downloading book').accessibilityValue.now, 37); assert.match(renderedText(root), /37%/);
+  assert.equal(h.animations.find(animation => animation.kind === 'loop').stopped, true);
+  props.percent = null; h.reduceMotion(true); root = h.render(BookDownloadProgress, props);
+  assert.equal(labelled(root, 'Downloading book').accessibilityValue.now, undefined);
+  assert.equal(h.animations.filter(animation => animation.kind === 'loop').length, 1);
+  props.phase = 'preparing'; props.percent = 100; root = h.render(BookDownloadProgress, props);
+  assert.match(labelled(root, 'Preparing book').accessibilityValue.text, /Preparing/);
+  assert.equal(elements(root).some(node => node.props?.accessibilityLabel === 'Cancel book download'), false); h.unmount();
+});
+
+test('download progress stays visible across book details, results and preparation, and disappears after confirmed save', async () => {
+  let finish, report, confirm;
+  const f = catalogHarness({ download: (_book, progress) => { report = progress; return new Promise(done => { finish = done; }); }, save: () => new Promise(done => { confirm = done; }) });
+  const progress = root => elements(root).find(node => node.type?.name === 'BookDownloadProgress')?.props;
+  f.render(); await flushNative(); let root = f.render(); freeBookRow(f, root).onDetails(f.item); f.render(); await flushNative(); root = f.render();
+  labelled(root, 'Add A Book to library').onPress(); root = f.render(); assert.equal(progress(root).percent, 0);
+  report(62); root = f.render(); assert.equal(progress(root).percent, 62);
+  labelled(root, 'Back to books').onPress(); root = f.render(); assert.equal(progress(root).percent, 62);
+  finish('file:///cache/book.epub'); await flushNative(); fireNativeTimer(f.h, 60); await flushNative(); root = f.render();
+  assert.equal(progress(root).phase, 'preparing'); confirm(); await flushNative(); root = f.render(); assert.equal(progress(root), undefined); f.h.unmount();
 });

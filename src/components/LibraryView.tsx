@@ -126,8 +126,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [viewPreferences, setViewPreferences] = useState(() => libraryViewPreferences(null));
   const [preferencesReady, setPreferencesReady] = useState(false);
   const preferencesTouched = useRef(false);
+  const [recentImportId, setRecentImportId] = useState<string | null>(null);
   const { query, filter, sort, viewMode, gridColumns } = viewPreferences;
-  const changeView = (change: Partial<LibraryViewPreferences>) => { preferencesTouched.current = true; setPreferencesReady(true); setViewPreferences(previous => ({ ...previous, ...change })); };
+  const changeView = (change: Partial<LibraryViewPreferences>) => {
+    preferencesTouched.current = true; setPreferencesReady(true);
+    if ('query' in change || 'filter' in change || 'sort' in change) setRecentImportId(null);
+    setViewPreferences(previous => ({ ...previous, ...change }));
+  };
   const setQuery = (query: string) => changeView({ query });
   const setFilter = (filter: Filter) => changeView({ filter });
   const setSort = (sort: Sort) => changeView({ sort });
@@ -218,7 +223,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const { columns, cardWidth } = bookShelfLayout(width, fontScale, gridColumns);
   const available = useMemo(() => new Set(availableBookIds), [availableBookIds]);
   const featured = libraryStatus === 'ready' ? continueReadingBook(books, available) : undefined;
-  const results = useMemo(() => browseLibrary(books, recoveryBooks, query, filter, sort, available), [books, recoveryBooks, query, filter, sort, available]);
+  const results = useMemo(() => {
+    const result = browseLibrary(books, recoveryBooks, query, filter, sort, available);
+    // Reveal a just-saved book without giving an unread import a fake last-read date.
+    if (sort === 'recent' && recentImportId) result.books.sort((a, b) => Number(b.id === recentImportId) - Number(a.id === recentImportId));
+    return result;
+  }, [books, recoveryBooks, query, filter, sort, available, recentImportId]);
   const visible = results.books;
   const visibleRecoveryBooks = results.recovery;
   const allShownSelected = visible.length > 0 && visible.every(book => selectedIds.has(book.id));
@@ -227,6 +237,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const resetFilters = () => { setQuery(''); setFilter('all'); };
   const textStatus = (id: string) => libraryStatus === 'loading' ? 'Checking saved text.' : libraryStatus === 'error' ? 'Saved text could not be checked.' : available.has(id) ? 'Text saved on this device.' : 'EPUB needed on this device.';
   const canImport = libraryStatus === 'ready' && !importing && !reimportingId;
+  const addToLibrary = async (book: Book, pages: BookContentPage[]) => {
+    await onAddEpubBook(book, pages);
+    if (!libraryMounted.current) return;
+    changeView({ query: '', filter: 'all', sort: 'recent' });
+    setRecentImportId(book.id);
+    setSearchOpen(false);
+    setSelection(null);
+  };
   const readingTime = readingGoal.minutesReadToday;
   const readingTimeLabel =
     readingTime >= 60
@@ -250,7 +268,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       setImporting(true);
       const { book, pages } = await parseEpubFile(asset.uri, asset.name, storage);
       const bookWithProgress = await onRestoreImportedProgress(book, pages);
-      await onAddEpubBook(bookWithProgress, pages);
+      await addToLibrary(bookWithProgress, pages);
     } catch (err: unknown) {
       console.warn('EPUB import failed:', err);
       showToast(err instanceof Error ? err.message : 'Failed to read EPUB file');
@@ -751,7 +769,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           onViewModeChange={setBrowseViewMode}
           gridColumns={gridColumns}
           onGridColumnsChange={gridColumns => changeView({ gridColumns })}
-          onAddEpubBook={onAddEpubBook}
+          onAddEpubBook={addToLibrary}
           onOpenBook={onOpenBook}
           showToast={showToast}
           onClose={() => setBrowseOpen(false)}

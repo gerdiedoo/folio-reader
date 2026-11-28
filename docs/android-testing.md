@@ -1146,3 +1146,19 @@ a fresh APK; it cannot be tested by reusing the previous signed APK.
 4. Check large text: if the preferred three columns fall back to fewer columns,
    loading must follow the actual displayed columns. With TalkBack, loading should
    be announced as one busy state, without fake selectable books.
+
+## Compact source options and import visibility
+
+- Open a work's details. Source options should be compact divider rows with inline
+  download/retry actions. Expand a provider with multiple editions and confirm the
+  desired language/edition still downloads. Check large text and TalkBack labels.
+- Download an EPUB and move back to results. The slim transfer bar should remain
+  visible, show measured percentages when supplied, and offer cancellation. It
+  should show preparation until the saved Library entry is acknowledged, then
+  disappear. Unknown-length transfers must not invent percentage progress.
+- Set Library to Finished or Want to read, then import an unread EPUB. Only after
+  a successful save, All Books/Recent should show the new book first, preserving
+  two/three columns. Return from Browse after a download and verify the same.
+- Cancel a picker, use an invalid EPUB, or simulate a failed save: Library filters
+  must stay as they were and no falsely completed book should appear. Restart
+  after a successful import and confirm its saved text is still readable.

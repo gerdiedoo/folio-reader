@@ -35,6 +35,7 @@ import { createDiscoveryPageCache } from '../lib/discoveryPageCache';
 import { ModalShell } from './ui/ModalShell';
 import { CatalogError } from '../lib/catalogRequest';
 import { BookShelfLoading } from './BookShelfLoading';
+import { BookDownloadProgress } from './BookDownloadProgress';
 
 interface Props {
   storage: LocalStore;
@@ -594,10 +595,7 @@ export const BrowseBooksScreen: React.FC<Props> = ({
           </View>
         </View>
 
-        {active && <View style={styles.notice}>
-          <Text accessibilityLiveRegion="polite" style={styles.noticeText}>{active.phase === 'preparing' ? 'Saving your book. Please wait…' : 'Downloading your book…'}</Text>
-          {active.phase === 'downloading' && <Pressable accessibilityRole="button" accessibilityLabel="Cancel book download" onPress={() => transfer.current?.abort()} style={styles.smallAction}><Text style={styles.sortActive}>Cancel download</Text></Pressable>}
-        </View>}
+        {active && <BookDownloadProgress phase={active.phase} percent={active.progressPercent} onCancel={() => transfer.current?.abort()} />}
         {/* Results */}
         <View style={{ flex: 1, width: '100%', maxWidth: 768, alignSelf: 'center' }}>
         <View style={{ flex: 1 }} pointerEvents={selectedBook ? 'none' : 'auto'}
@@ -661,10 +659,6 @@ export const BrowseBooksScreen: React.FC<Props> = ({
               <Text style={[styles.btnText, { color: palette.white }]}>{detailStatus === 'preparing' ? 'Preparing…' : detailStatus === 'downloading' ? 'Downloading…' : downloadErrors[detailBook.id] ? 'Retry download' : 'Add to Library'}</Text>
             </Pressable>
           )}
-          {detailBusy && <View style={styles.downloadProgress}>
-            <ProgressBar percent={active?.progressPercent ?? 0} height={3} />
-            <Text accessibilityLiveRegion="polite" style={styles.rowMeta}>{detailStatus === 'preparing' ? 'Preparing book…' : `${active?.progressPercent ?? 0}% downloaded`}</Text>
-          </View>}
           {downloadErrors[detailBook.id] && <Text accessibilityRole="alert" style={styles.rowError}>{downloadErrors[detailBook.id]}</Text>}
           <View style={styles.detailsSection}>
             <Text accessibilityRole="header" style={styles.detailsSectionTitle}>About this book</Text>

@@ -45,6 +45,7 @@ const MI: Record<string, MIName> = {
   title: 'title',
   sort: 'sort',
   expand_more: 'expand-more',
+  expand_less: 'expand-less',
   unfold_more: 'unfold-more',
   add: 'add',
   mic: 'mic',
